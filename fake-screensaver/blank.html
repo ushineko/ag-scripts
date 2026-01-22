@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A simple black screen to act as a poor man's screensaver. Click or press Space to toggle fullscreen.">
+    <title>Black Screen Screensaver</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000000;
+            overflow: hidden; /* Prevent scrollbars */
+            cursor: none; /* Hide default cursor */
+        }
+        
+        /* Optional: Show cursor when moving so user can find it to exit, then hide again? 
+           For a strict screensaver, hiding is better. 
+        */
+    </style>
+</head>
+<body>
+    <script>
+        // Feature: Toggle fullscreen on interaction to make it a "real" screensaver experience
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+                });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        document.addEventListener('click', toggleFullScreen);
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'Enter') {
+                toggleFullScreen();
+            }
+        });
+    </script>
+</body>
+</html>

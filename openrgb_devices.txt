@@ -1,0 +1,39 @@
+Connection attempt failed
+<h2>Some internal devices may not be detected:</h2><p>One or more I2C or SMBus interfaces failed to initialize.</p><p><b>RGB DRAM modules, some motherboards' onboard RGB lighting, and RGB Graphics Cards, will not be available in OpenRGB</b> without I2C or SMBus.</p><h4>How to fix this:</h4><p>On Linux, this is usually because the i2c-dev module is not loaded.</p><p>You must load the i2c-dev module along with the correct i2c driver for your motherboard. This is usually i2c-piix4 for AMD systems and i2c-i801 for Intel systems.</p><p>See <a href='https://help.openrgb.org/'>help.openrgb.org</a> for additional troubleshooting steps if you keep seeing this message.<br></p><h3>If you are not using internal RGB on a desktop this message is not important to you.</h3>
+0: MSI GeForce RTX 4090 Suprim Liquid X
+  Type:           GPU
+  Description:    MSI GPU V2 Device
+  Location:       I2C: /dev/i2c-3, address 0x68
+  Modes: [Off] Direct 'Rainbow Wave' Magic 'Color Cycle' Patrolling Streaming Lightning Wave Meteor Stack Rhythm Flowing Whirling 'Fade In' Breathing Flashing 'Double Flashing'
+  Zones: GPU
+  LEDs: Color
+
+1: Corsair Commander Core
+  Type:           Cooler
+  Description:    Corsair Commander Core Device
+  Version:        HID: /dev/hidraw15
+  Location:       HID: /dev/hidraw15
+  Modes: [Direct]
+  Zones: Pump 'RGB Port 1' 'RGB Port 2' 'RGB Port 3' 'RGB Port 4' 'RGB Port 5' 'RGB Port 6'
+  LEDs: 'Pump LED 1' 'Pump LED 2' 'Pump LED 3' 'Pump LED 4' 'Pump LED 5' 'Pump LED 6' 'Pump LED 7' 'Pump LED 8' 'Pump LED 9' 'Pump LED 10' 'Pump LED 11' 'Pump LED 12' 'Pump LED 13' 'Pump LED 14' 'Pump LED 15' 'Pump LED 16' 'Pump LED 17' 'Pump LED 18' 'Pump LED 19' 'Pump LED 20' 'Pump LED 21' 'Pump LED 22' 'Pump LED 23' 'Pump LED 24' 'RGB Port 1 LED 1' 'RGB Port 1 LED 2' 'RGB Port 1 LED 3' 'RGB Port 1 LED 4' 'RGB Port 1 LED 5' 'RGB Port 1 LED 6' 'RGB Port 1 LED 7' 'RGB Port 1 LED 8' 'RGB Port 2 LED 1' 'RGB Port 2 LED 2' 'RGB Port 2 LED 3' 'RGB Port 2 LED 4' 'RGB Port 2 LED 5' 'RGB Port 2 LED 6' 'RGB Port 2 LED 7' 'RGB Port 2 LED 8' 'RGB Port 3 LED 1' 'RGB Port 3 LED 2' 'RGB Port 3 LED 3' 'RGB Port 3 LED 4' 'RGB Port 3 LED 5' 'RGB Port 3 LED 6' 'RGB Port 3 LED 7' 'RGB Port 3 LED 8' 'RGB Port 4 LED 1' 'RGB Port 4 LED 2' 'RGB Port 4 LED 3' 'RGB Port 4 LED 4' 'RGB Port 4 LED 5' 'RGB Port 4 LED 6' 'RGB Port 4 LED 7' 'RGB Port 4 LED 8' 'RGB Port 5 LED 1' 'RGB Port 5 LED 2' 'RGB Port 5 LED 3' 'RGB Port 5 LED 4' 'RGB Port 5 LED 5' 'RGB Port 5 LED 6' 'RGB Port 5 LED 7' 'RGB Port 5 LED 8' 'RGB Port 6 LED 1' 'RGB Port 6 LED 2' 'RGB Port 6 LED 3' 'RGB Port 6 LED 4' 'RGB Port 6 LED 5' 'RGB Port 6 LED 6' 'RGB Port 6 LED 7' 'RGB Port 6 LED 8' 'RGB Port 6 LED 9' 'RGB Port 6 LED 10' 'RGB Port 6 LED 11' 'RGB Port 6 LED 12' 'RGB Port 6 LED 13' 'RGB Port 6 LED 14' 'RGB Port 6 LED 15' 'RGB Port 6 LED 16' 'RGB Port 6 LED 17' 'RGB Port 6 LED 18' 'RGB Port 6 LED 19' 'RGB Port 6 LED 20' 'RGB Port 6 LED 21' 'RGB Port 6 LED 22' 'RGB Port 6 LED 23' 'RGB Port 6 LED 24' 'RGB Port 6 LED 25' 'RGB Port 6 LED 26' 'RGB Port 6 LED 27' 'RGB Port 6 LED 28' 'RGB Port 6 LED 29' 'RGB Port 6 LED 30' 'RGB Port 6 LED 31' 'RGB Port 6 LED 32' 'RGB Port 6 LED 33' 'RGB Port 6 LED 34'
+
+2: ASUS ROG MAXIMUS Z790 HERO
+  Type:           Motherboard
+  Description:    ASUS Aura USB Mainboard Device
+  Version:        HID: /dev/hidraw10
+  Location:       HID: /dev/hidraw10
+  Serial:         9876543210
+  Modes: [Direct] Off Static Breathing Flashing 'Spectrum Cycle' Rainbow 'Chase Fade' Chase
+  Zones: 'Aura Mainboard' 'Aura Addressable 1' 'Aura Addressable 2' 'Aura Addressable 3' 'Aura Addressable 4'
+  LEDs: 'Aura Mainboard, LED 1'
+
+3: Razer Mouse Dock Pro
+  Type:           Light
+  Description:    Razer Device, Black
+  Version:        HID: /dev/hidraw12
+  Location:       HID: /dev/hidraw12
+  Serial:         PM2448U28101914       
+  Modes: [Direct] Off Static Breathing 'Spectrum Cycle' Wave
+  Zones: Base
+  LEDs: 'Base LED 1' 'Base LED 2' 'Base LED 3' 'Base LED 4' 'Base LED 5' 'Base LED 6' 'Base LED 7' 'Base LED 8' 'Base LED 9'
+
