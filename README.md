@@ -11,6 +11,8 @@ This repository contains various utility scripts for system management and autom
 | `generate_data_mounts.py` | Generates `/etc/fstab` entries for block devices with labels matching "DataN" or "System", setting up mounts with appropriate permissions (uid/gid) for the current user. |
 | `set-rgb/change_color.py` | Controls RGB lighting on various hardware devices (via OpenRGB, liquidctl, and ckb-next). Supports basic colors (red, green, blue, white, off). |
 | `fake-screensaver/blank.html` | A simple black HTML page that acts as a screensaver. Hides the cursor and supports toggling full-screen mode by clicking or pressing Space. |
+| `fake-screensaver/fake_screensaver.py` | A PyQt-based fake screensaver that keeps the mouse cursor visible. Includes a desktop entry. |
+| `select-audio-source/select_audio.py` | A feature-rich audio switcher with priority auto-switching, Bluetooth device management (auto-connect), Arctis Nova battery status, system tray integration, and Wayland-compatible global hotkeys. |
 
 ## Usage
 
