@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Fake Screensaver
+Comment=A simple black screen that keeps the mouse visible
+Exec=/home/nverenin/git/ag-scripts/fake-screensaver/fake_screensaver.py
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;
