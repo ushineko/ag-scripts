@@ -19,6 +19,59 @@ A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to ma
     - Minimizes to tray on close.
     - Notifications on auto-switch (via `notify-send`).
 
+## Audio Routing & JamesDSP Integration
+
+This tool includes smart integration for **JamesDSP**. Instead of simply changing the system default sink (which would bypass effects), it intelligently rewires the PipeWire graph.
+
+### How it Works
+
+When JamesDSP is running, the app treats it as a **Virtual Output Filter**.
+1.  **Apps** send audio to `jamesdsp_sink` (System Default).
+2.  **JamesDSP** processes the audio.
+3.  **The Switcher** automatically connects JamesDSP's *Output* to your chosen physical device (Speakers, Headphones).
+
+```mermaid
+graph TD
+    subgraph "Sources (Apps)"
+        Firefox
+        Spotify
+        Games
+    end
+
+    subgraph "System Default Sink"
+        JDSP[JamesDSP Sink]
+    end
+
+    subgraph "Processing"
+        Effect[JamesDSP Effects Engine]
+    end
+
+    subgraph "Physical Hardware"
+        Speakers[Speakers (USB Audio)]
+        Headphones[Arctis Nova Pro]
+        AirPods[Bluetooth Headphones]
+    end
+
+    Firefox --> JDSP
+    Spotify --> JDSP
+    Games --> JDSP
+    
+    JDSP --> Effect
+    
+    %% The critical switching point
+    Effect -.->|Switched by App| Speakers
+    Effect -.->|Switched by App| Headphones
+    Effect -.->|Switched by App| AirPods
+
+    classDef active fill:#4CAF50,stroke:#333,stroke-width:2px,color:white;
+    class JDSP,Effect active
+```
+
+**Benefits:**
+- **No Effect Dropouts**: You never lose your EQ/Bass Boost when switching devices.
+- **Auto-Switching**: If your Headphones disconnect, the app detects the "Floating" JamesDSP output and immediately rewires it to your Speakers.
+
+
 ## CLI & Global Hotkeys
 
 Since version 8, you can control the app from the command line, which is perfect for setting up global hotkeys (especially on Wayland).

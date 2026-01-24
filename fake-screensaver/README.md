@@ -47,5 +47,14 @@ To activate, you can bind this script to a global hotkey (e.g., `Meta+L` or `Met
     ```bash
     /home/nverenin/git/ag-scripts/fake-screensaver/fake_screensaver.py
     ```
-    *(Note: Adjust the path if you saved the script elsewhere).*
+    If it opens on the wrong screen, or you want to blank specific screens, you can use `--screen`:
+    ```bash
+    # Blank specific screens (e.g. index 0 and 2)
+    /home/nverenin/git/ag-scripts/fake-screensaver/fake_screensaver.py --screen 0 2
+    
+    # Blank ALL screens (default if no argument provided)
+    /home/nverenin/git/ag-scripts/fake-screensaver/fake_screensaver.py
+    ```
+    *(Run `./fake_screensaver.py` in a terminal to see available screen indices).*
+
 

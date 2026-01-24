@@ -291,6 +291,136 @@ class BluetoothController:
         self.run_command(['disconnect', mac])
 
 
+class PipeWireController:
+    """Handles interaction with pw-link for managing PipeWire graph."""
+    
+    @staticmethod
+    def run_command(args):
+        try:
+            result = subprocess.run(
+                args, capture_output=True, text=True, check=True
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return None
+
+    def get_links(self):
+        """Returns list of lines from pw-link -l"""
+        output = self.run_command(['pw-link', '-l'])
+        if not output: return []
+        return output.split('\n')
+
+    def link(self, port_out, port_in):
+        self.run_command(['pw-link', port_out, port_in])
+
+    def unlink(self, port_out, port_in):
+        self.run_command(['pw-link', '-d', port_out, port_in])
+
+    def get_jamesdsp_outputs(self):
+        """
+        Finds the output ports for JamesDSP.
+        Usually: jdsp_@PwJamesDspPlugin_JamesDsp:output_FL / FR
+        """
+        # We need the node name. Often it's 'jdsp_@PwJamesDspPlugin_JamesDsp'
+        # But we can find it by looking for links FROM it.
+        # Or better, just regex for typical JamesDSP output pattern.
+        links = self.get_links()
+        outputs = set()
+        for line in links:
+            # Lines are "Output -> Input" or "Input <- Output" ? 
+            # pw-link -l output is:
+            # output_port
+            #   |-> input_port
+            
+            # We want to identify the ports that BELONG to JamesDSP.
+            # Based on user `pw-link` output:
+            # jdsp_@PwJamesDspPlugin_JamesDsp:output_FL
+            #   |-> alsa_output...:playback_FL
+            
+            # So we look for ports starting with 'jdsp_' containing 'output_'
+            if "jdsp_" in line and ":output_" in line:
+                # This line is the header port?
+                # pw-link -l format:
+                # PORT_NAME
+                #   |-> LINKED_PORT
+                #   |-> LINKED_PORT
+                pass
+
+        # Actually, pw-link -o might be easier to just list outputs?
+        # Let's use `pw-link -o` in get_outputs if needed.
+        # But sticking to `pw-link -l` logic from what we saw in user terminal:
+        output_ports = []
+        raw_out = self.run_command(['pw-link', '-o']) # List output ports
+        if raw_out:
+            for line in raw_out.split('\n'):
+                if "jdsp_" in line and "JamesDsp" in line and ":output_" in line:
+                    output_ports.append(line.strip())
+        return output_ports
+
+    def get_sink_playback_ports(self, sink_name):
+        """
+        Finds the playback ports for a given sink name.
+        e.g. alsa_output.usb-Generic...:playback_FL
+        """
+        # We can search `pw-link -i` (input ports)
+        input_ports = []
+        raw_in = self.run_command(['pw-link', '-i'])
+        if raw_in:
+             for line in raw_in.split('\n'):
+                 if sink_name in line and ":playback_" in line:
+                     input_ports.append(line.strip())
+        return input_ports
+
+    def relink_jamesdsp(self, target_sink_name):
+        """
+        Disconnects JamesDSP from current HW and connects to target_sink_name.
+        """
+        jdsp_outs = self.get_jamesdsp_outputs()
+        if not jdsp_outs:
+            print("JamesDSP outputs not found.")
+            return False
+
+        target_ins = self.get_sink_playback_ports(target_sink_name)
+        if not target_ins:
+             print(f"Target sink inputs not found for {target_sink_name}")
+             return False
+        
+        # Sort to match FL to FL, FR to FR usually
+        jdsp_outs.sort()
+        target_ins.sort()
+        
+        # 1. Unlink JDSP from EVERYTHING it is currently connected to
+        links = self.get_links()
+        
+        # Parse links to find what JDSP is connected to
+        # Format is tricky to parse robustly without a graph library, but `pw-link -d out in` works.
+        # We can iterate all known links via `pw-link -l -I` (lines with ID) or just careful parsing.
+        
+        # Easier strategy:
+        # For each JDSP output, grep `pw-link -l` to see what it links to.
+        # The output of `pw-link -l` is:
+        # PortName
+        #   |-> TargetPort
+        
+        current_port = None
+        for line in links:
+            if not line.startswith("  "):
+                current_port = line.strip()
+            else:
+                if current_port in jdsp_outs:
+                    # This is a link FROM jdsp
+                    target = line.replace("|->", "").strip()
+                    self.unlink(current_port, target)
+
+        # 2. Link JDSP to New Target
+        # Simple channel mapping: 0->0, 1->1
+        # This assumes stereo mostly.
+        for i in range(min(len(jdsp_outs), len(target_ins))):
+            self.link(jdsp_outs[i], target_ins[i])
+            
+        return True
+
+
 class MainWindow(QMainWindow):
     def __init__(self, target_device=None):
         super().__init__()
@@ -350,6 +480,13 @@ class MainWindow(QMainWindow):
         audio_group = QGroupBox("Audio Outputs (Drag to Reorder Priority)")
         audio_layout = QVBoxLayout()
         audio_group.setLayout(audio_layout)
+        
+        # JamesDSP Status Banner
+        self.jdsp_label = QLabel("✨ Effects Active (JamesDSP)")
+        self.jdsp_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11pt;")
+        self.jdsp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.jdsp_label.hide() # Hidden by default
+        audio_layout.addWidget(self.jdsp_label)
         
         self.sink_list = QListWidget()
         self.sink_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
@@ -532,6 +669,14 @@ class MainWindow(QMainWindow):
         
         for pid in priority_list:
             if pid in sink_map:
+                # JamesDSP Integration: 
+                # Use regular logic, but we must NOT auto-switch TO JamesDSP sink directly if we want to use rewiring.
+                # Actually, we want to find the best PHYSICAL sink.
+                # So if pid == "jamesdsp_sink" (or whatever ID it has), skip it?
+                # Usually JamesDSP has a specific name "jamesdsp_sink".
+                if "jamesdsp_sink" in pid:
+                    continue
+
                 s = sink_map[pid]
                 if s.get('connected', True):
                     target_sink_obj = s
@@ -543,14 +688,95 @@ class MainWindow(QMainWindow):
         # 3. OR the current default is "Disconnected" (invalid) -> Force switch to best available
         
         should_switch = False
+        
+        # Helper: function to get underlying sink of JamesDSP if it's default
+        current_physical_sink = default_sink_name
+        is_jdsp_active = False
+        
+        if default_sink_name == "jamesdsp_sink":
+            is_jdsp_active = True
+            # We need to find what JDSP is connected to, to know if we need to switch.
+            # But that's expensive to query every 5s.
+            # Maybe we just check if target_sink_obj is what we *think* it should be?
+            # Or simpler: The notification/status label tells us what we switched to. 
+            pass
+
         if target_sink_obj:
-            if target_sink_obj['name'] != default_sink_name:
-                should_switch = True
-            elif not current_is_valid:
-                 # We are on the target, but it's disconnected? 
-                 # Wait, if target_sink_obj is found via loop, it IS connected.
-                 # So if we are on it, and it's connected, we are good.
-                 pass
+            # If we are using valid physical device, check against default
+            if not is_jdsp_active:
+                if target_sink_obj['name'] != default_sink_name:
+                    should_switch = True
+            else:
+                # JamesDSP is active. We need to check if it's routed correctly.
+                # This is hard to know without querying pw-link.
+                # BUT, if the user manually switched or we auto-switched before, 
+                # we might accept the current state unless a HIGHER priority device just appeared.
+                # Let's assume if we found a higher priority device than what we *remember* setting, or just do it?
+                # To avoid looping (switch -> switch again), we need to know if we are ALREADY on target.
+                
+                # We can check `pw-link` periodically? 
+                # Or just rely on: If a NEW device appeared (higher priority), we switch.
+                pass
+                
+                # Logic: If high priority device is available, we want to be using it.
+                # If we can't easily check current JDSP routing, we might loop if we blindly switch.
+                # Solution: Check if target sink is same as "last switched"? 
+                # Or check `pw-link` here. It's affordable every 5s.
+                
+                try:
+                    pw = PipeWireController()
+                    jdsp_outs = pw.get_jamesdsp_outputs()
+                    # Just check one channel
+                    links = pw.get_links()
+                    
+                    current_targ = None
+                    if jdsp_outs:
+                        src = jdsp_outs[0]
+                        # Find what src connects to
+                        for line in links:
+                            if src in line or (f"|-> {src}" in line): 
+                                # Wait, get_links format: "Port |-> Target"
+                                # We need more robust parsing in Controller, but we can do a quick check
+                                pass
+                        
+                        # Re-implement simple check:
+                        # Scan links for lines starting with src
+                        # line: "jdsp...:output_FL"
+                        # next line: "  |-> alsa_output...:playback_FL"
+                        
+                        found_target_name = None
+                        capture_next = False
+                        for line in links:
+                            if line.strip() == src:
+                                capture_next = True
+                            elif capture_next and line.startswith("  |->"):
+                                # "  |-> alsa_output.pci...:playback_FL"
+                                target_port = line.replace("  |->", "").strip()
+                                # Extract sink name from port (remove :playback_...)
+                                if ":playback_" in target_port:
+                                    found_target_name = target_port.split(":playback_")[0]
+                                break
+                            elif capture_next and not line.startswith("  "):
+                                capture_next = False
+                        
+                        if found_target_name:
+                            print(f"DEBUG: JDSP routed to {found_target_name}")
+                            if found_target_name != target_sink_obj['name']:
+                                should_switch = True
+                        else:
+                            # If no target found, JamesDSP is floating (disconnected).
+                            # We MUST switch to re-establish connection.
+                            print("DEBUG: JDSP floating (no links). Ordering switch/rewire.")
+                            should_switch = True
+
+                except Exception as e:
+                    print(f"Error checking JDSP routing: {e}")
+
+            if not current_is_valid:
+                 # Current default is broken/disconnected
+                 pass # should_switch might need to be forced if not already handled
+        
+        
         
         # Fallback: If current is invalid, and no priority target found?
         # Try to switch to ANY connected device?
@@ -635,93 +861,107 @@ class MainWindow(QMainWindow):
                 list_widget.takeItem(i)
 
     def refresh_sinks_ui(self):
-        # Create BT Map for naming
         bt_map = {d['mac']: d['name'] for d in self.cache_bt_devices}
+        sinks = self.audio.get_sinks(bt_map)
         
-    def refresh_sinks_ui(self):
-        # Create BT Map for naming
-        bt_map = {d['mac']: d['name'] for d in self.cache_bt_devices}
+        # Identify default sink
+        default_sink_name = next((s['name'] for s in sinks if s['is_default']), None)
         
-        current_sinks = self.audio.get_sinks(bt_map)
-        # Map priority_id -> sink object
-        sink_map = {s['priority_id']: s for s in current_sinks}
+        # Check if JamesDSP is active
+        # Simple check: Is "jamesdsp_sink" the default sink?
+        is_jdsp_default = (default_sink_name == "jamesdsp_sink")
         
-        # Also map MAC -> BT device for offline items
-        bt_obj_map = {d['mac']: d for d in self.cache_bt_devices}
-        
-        # Load priority list
+        if is_jdsp_default:
+            self.jdsp_label.show()
+        else:
+            self.jdsp_label.hide()
+
+        # Merge offline devices from config priority list
         priority_list = self.config.get("device_priority", [])
+        
+        # Map existing online sinks by ID
+        online_map = {s['priority_id']: s for s in sinks}
         
         final_list = []
         seen_ids = set()
         
-        # Helper to create an offline item
-        def make_offline_item(pid):
-            display = pid
-            # specific logic for bt:MAC
-            if pid.startswith("bt:"):
-                mac = pid[3:]
-                if mac in bt_map:
-                    display = f"{bt_map[mac]} [Offline]"
-                else:
-                    display = f"{mac} [Offline]"
-            else:
-                 display = f"{pid} [Offline]"
-                 
-            return {
-                'priority_id': pid,
-                'display_name': display,
-                'is_default': False,
-                'connected': False,
-                'name': None # Cannot switch to it
-            }
-
-        # 1. Add Configured Items (in order)
+        # 1. Add devices in priority order
         for pid in priority_list:
-            if pid in sink_map:
-                # Online Sink
-                final_list.append(sink_map[pid])
-            else:
-                # Offline
-                final_list.append(make_offline_item(pid))
-            seen_ids.add(pid)
+            if pid in seen_ids: continue
             
-        # 2. Add Active Sinks not in config
-        for sink in current_sinks:
-            pid = sink['priority_id']
-            if pid not in seen_ids:
-                final_list.append(sink)
+            # JamesDSP UI Polish: Hide JamesDSP from the list
+            if "jamesdsp_sink" in pid:
+                continue
+
+            if pid in online_map:
+                final_list.append(online_map[pid])
                 seen_ids.add(pid)
-                
-        # 3. Add Known Bluetooth Devices (Paired) not in config AND not active
-        # This allows prioritizing devices that are paired but currently offline/not sinks
-        for mac, dev in bt_obj_map.items():
-            pid = f"bt:{mac}"
-            if pid not in seen_ids:
-                # add as offline item
-                # Check if it *was* in sink_map? Already handled in step 2 if active.
-                final_list.append(make_offline_item(pid))
+            else:
+                # Add offline placeholder
+                display = pid
+                # Try to get nicer name from BT cache if possible
+                if pid.startswith("bt:"):
+                    mac = pid[3:]
+                    # Check cache for name
+                    for d in self.cache_bt_devices:
+                        if d['mac'] == mac:
+                            display = d['name']
+                            break
+                final_list.append({
+                    'name': None,
+                    'priority_id': pid,
+                    'display_name': f"{display} [Disconnected]",
+                    'is_default': False,
+                    'connected': False
+                })
                 seen_ids.add(pid)
         
-        data_list = []
-        for sink in final_list:
-            text = sink['display_name']
-            if sink.get('is_default'):
-                text += " (Active)"
+        # 2. Add remaining online devices (not in config)
+        for s in sinks:
+            if s['priority_id'] not in seen_ids:
+                # JamesDSP UI Polish: Hide JamesDSP from the list
+                if "jamesdsp_sink" in s['priority_id'] or s['name'] == "jamesdsp_sink":
+                    continue
+                    
+                final_list.append(s)
+                seen_ids.add(s['priority_id'])
+                
+        # Update UI List
+        item_data_list = []
+        for s in final_list:
+            text = s['display_name']
+            is_active_visual = False
             
-            # Use priority_id as the list item ID
+            # If JDSP is active, we want to show the "Target" as active, not JDSP (which is hidden)
+            # However, we don't easily know the content of the target without deeper query.
+            # But the "Effects Active" banner is a strong signal.
+            
+            if s['is_default']:
+                text += " (Active)"
+                is_active_visual = True
+            
+            # If JamesDSP is default, NO physical device has "is_default=True".
+            # So nobody gets "(Active)".
+            
             color = None
-            if not sink.get('connected', True):
+            bold = False
+            if s['is_default']:
+                bold = True
+                color = Qt.GlobalColor.green
+            
+            # If disconnected
+            if not s['connected']:
                 color = Qt.GlobalColor.gray
-
-            data_list.append({
-                'id': sink['priority_id'],
+                bold = False # Reset bold if offline
+            
+            item_data_list.append({
+                'id': s['priority_id'],
                 'text': text,
-                'bold': sink.get('is_default', False),
+                'bold': bold,
                 'color': color
             })
             
-        self.update_list_widget(self.sink_list, data_list)
+        self.update_list_widget(self.sink_list, item_data_list)
 
     def refresh_bt_list_ui(self):
         data_list = []
@@ -838,9 +1078,53 @@ class MainWindow(QMainWindow):
                 )
 
     def switch_to_sink(self, sink_name, display_text):
-        self.audio.set_default_sink(sink_name)
-        if self.move_streams_cb.isChecked():
-            self.audio.move_input_streams(sink_name)
+        # JamesDSP Integration (Graph Rewiring)
+        # Check if JamesDSP sink exists and is active (we can assume if it's in our sink list it exists)
+        # But we need to know if the USER wants to use it or bypass it.
+        # Current logic: If JamesDSP sink is present in the system, we assume we want to use it
+        # BUT only if we are physically switching audio.
+        
+        use_jamesdsp = False
+        jamesdsp_sink_name = "jamesdsp_sink"
+        
+        # Check if JamesDSP is running/present
+        # We can check self.audio.get_sinks() but that might be slow to re-fetch.
+        # We can check `pactl info` or just try `pw-link`.
+        # Simplest: Check if our list of sinks contains 'jamesdsp_sink' (it should if we refreshed).
+        
+        # Optimization: We only try this if the target is NOT JamesDSP itself.
+        if sink_name != jamesdsp_sink_name:
+            # Check if JDSP is available
+            pw = PipeWireController()
+            jdsp_outs = pw.get_jamesdsp_outputs()
+            if jdsp_outs:
+                use_jamesdsp = True
+                print("JamesDSP detected. Attempting graph rewiring...")
+
+        if use_jamesdsp:
+            # 1. Set Default Sink to JamesDSP (so apps route there)
+            self.audio.set_default_sink(jamesdsp_sink_name)
+            
+            # 2. Move streams to JamesDSP (if enabled)
+            if self.move_streams_cb.isChecked():
+                self.audio.move_input_streams(jamesdsp_sink_name)
+            
+            # 3. Rewire JamesDSP Output -> Target Hardware Sink
+            success = pw.relink_jamesdsp(sink_name)
+            if success:
+                print(f"Rewired JamesDSP -> {sink_name}")
+            else:
+                print("Failed to rewire JamesDSP. Fallback to direct switch.")
+                self.audio.set_default_sink(sink_name)
+                if self.move_streams_cb.isChecked():
+                    self.audio.move_input_streams(sink_name)
+
+        else:
+            # Standard Switch
+            self.audio.set_default_sink(sink_name)
+            if self.move_streams_cb.isChecked():
+                self.audio.move_input_streams(sink_name)
+
         self.refresh_sinks_ui()
         clean_text = display_text.replace(" (Active)", "")
         self.status_label.setText(f"Switched to: {clean_text}")
