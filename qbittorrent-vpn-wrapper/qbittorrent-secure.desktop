@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=qBittorrent Secure VPN
+Comment=Start qBittorrent with Las Vegas VPN auto-connect and idle kill switch
+Exec=/home/nverenin/git/ag-scripts/qbittorrent-vpn-wrapper/qbittorrent_vpn_wrapper.py %U
+Icon=qbittorrent
+Terminal=false
+Type=Application
+Categories=Network;P2P;FileTransfer;
+Keywords=torrent;vpn;download;
+MimeType=application/x-bittorrent;x-scheme-handler/magnet;

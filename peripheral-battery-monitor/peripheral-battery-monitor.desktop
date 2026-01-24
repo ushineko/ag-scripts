@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Peripheral Battery Monitor
+Comment=Monitor Logitech and Keychron batteries
+Exec=/usr/bin/python3 /home/nverenin/git/ag-scripts/peripheral-battery-monitor/peripheral-battery.py
+Icon=input-mouse
+Terminal=false
+Type=Application
+Categories=Utility;
+StartupWMClass=peripheral-battery-monitor
