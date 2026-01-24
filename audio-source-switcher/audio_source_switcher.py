@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QListWidget, QListWidgetItem, QPushButton, QCheckBox, 
                              QLabel, QMessageBox, QGroupBox, QHBoxLayout,
                              QAbstractItemView, QSystemTrayIcon, QMenu, QDialog, 
-                             QTextBrowser, QDialogButtonBox)
+                             QTextBrowser, QDialogButtonBox, QSlider)
 from PyQt6.QtCore import QTimer, Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIcon, QAction
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
@@ -309,8 +309,8 @@ class AudioController:
         
         if enable and not is_loaded:
             print(f"Loading loopback for {source_name}")
-            # latency_msec=1 is common for monitoring
-            self.run_command(['pactl', 'load-module', 'module-loopback', f'source={source_name}', 'latency_msec=1'])
+            # latency_msec=1 is too aggressive for USB audio. 50ms is stable.
+            self.run_command(['pactl', 'load-module', 'module-loopback', f'source={source_name}', 'latency_msec=50'])
             
         elif not enable and is_loaded:
             print(f"Unloading loopback module {module_id}")
@@ -754,6 +754,23 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(bt_group)
 
+        # --- Volume Section ---
+        vol_group = QGroupBox("Volume Control")
+        vol_layout = QVBoxLayout()
+        vol_group.setLayout(vol_layout)
+        
+        self.vol_label = QLabel("Volume: --%")
+        self.vol_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vol_layout.addWidget(self.vol_label)
+        
+        self.vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self.vol_slider.setRange(0, 100)
+        self.vol_slider.valueChanged.connect(self.on_vol_slider_changed)
+        self.vol_slider.sliderReleased.connect(self.on_vol_slider_released)
+        vol_layout.addWidget(self.vol_slider)
+        
+        main_layout.addWidget(vol_group)
+
         # --- Footer Controls ---
         controls_group = QGroupBox("Settings")
         controls_layout = QVBoxLayout()
@@ -791,6 +808,56 @@ class MainWindow(QMainWindow):
 
         # System Tray Setup
         self.setup_tray()
+
+    def get_actual_active_sink_name(self):
+        """Helper to find the physical sink we should be controlling/displaying."""
+        bt_map = {d['mac']: d['name'] for d in self.cache_bt_devices}
+        sinks = self.audio.get_sinks(bt_map)
+        default_sink_name = next((s['name'] for s in sinks if s['is_default']), None)
+        
+        if default_sink_name == "jamesdsp_sink":
+            pw = PipeWireController()
+            target = pw.get_jamesdsp_target()
+            if target:
+                return target
+        
+        return default_sink_name
+
+    def refresh_volume_ui(self):
+        target_name = self.get_actual_active_sink_name()
+        if not target_name:
+            self.vol_label.setText("Volume: --%")
+            self.vol_slider.setEnabled(False)
+            return
+
+        vol = self.audio.get_sink_volume(target_name)
+        if vol is not None:
+            self.vol_slider.blockSignals(True)
+            self.vol_slider.setValue(vol)
+            self.vol_slider.blockSignals(False)
+            self.vol_label.setText(f"Volume: {vol}%")
+            self.vol_slider.setEnabled(True)
+        else:
+             self.vol_label.setText("Volume: ??%")
+             self.vol_slider.setEnabled(False)
+
+    def on_vol_slider_changed(self, value):
+        # Update label immediately for responsiveness
+        self.vol_label.setText(f"Volume: {value}%")
+
+    def on_vol_slider_released(self):
+        # Apply volume on release to avoid spawning too many pactl processes
+        val = self.vol_slider.value()
+        target_name = self.get_actual_active_sink_name()
+        
+        if target_name:
+            print(f"Setting volume of {target_name} to {val}%")
+            self.audio.set_sink_volume(target_name, val)
+            
+            # If JamesDSP is active, ensure its virtual sink is at 100% too?
+            # Usually good practice if we want full dynamic range, 
+             # but user might have lowered it manually. We'll leave it alone unless requested.
+            pass
 
     def check_and_sync_volume(self):
         """
@@ -1040,7 +1107,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 11.0</b></p>
+            <p><b>Version 11.1</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
@@ -1140,6 +1207,7 @@ class MainWindow(QMainWindow):
         
         self.refresh_bt_list_ui()
         self.refresh_sinks_ui()
+        self.refresh_volume_ui()
         
         if self.auto_switch_cb.isChecked():
             self.run_auto_switch()

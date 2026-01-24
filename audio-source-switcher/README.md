@@ -20,7 +20,10 @@ A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to ma
     - Minimizes to tray on close.
     - Notifications on auto-switch (via `notify-send`).
 - **Line-In Management**:
-    - **Loopback Toggle**: Easily enable/disable the "Listen to this device" behavior for your system's Line-In (e.g., console audio input) via a checkbox. Refreshes status automatically.
+    -   **Loopback Toggle**: Easily enable/disable the "Listen to this device" behavior for your system's Line-In (e.g., console audio input) via a checkbox. Refreshes status automatically.
+- **Volume Control (New in 11.1)**:
+    -   Integrated slider controls the **Active Hardware Volume**.
+    -   Smart logic bypasses JamesDSP clamping, giving you full 0-100% control while keeping effects active.
 
 ## Audio Routing & JamesDSP Integration
 
@@ -86,7 +89,7 @@ graph TD
 
 ## CLI & Global Hotkeys
 
-Since version 11, you can control the app from the command line, which is perfect for setting up global hotkeys (especially on Wayland).
+Since version 11.1, you can control the app from the command line, which is perfect for setting up global hotkeys (especially on Wayland).
 
 ### Usage
 ```bash
