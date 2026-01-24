@@ -47,9 +47,9 @@ graph TD
     end
 
     subgraph "Physical Hardware"
-        Speakers[Speakers (USB Audio)]
-        Headphones[Arctis Nova Pro]
-        AirPods[Bluetooth Headphones]
+        Speakers["Speakers (USB Audio)"]
+        Headphones["Arctis Nova Pro"]
+        AirPods["Bluetooth Headphones"]
     end
 
     Firefox --> JDSP
