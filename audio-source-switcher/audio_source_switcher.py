@@ -1071,14 +1071,14 @@ class MainWindow(QMainWindow):
         <h3>⌨️ Global Hotkeys & Smart Volume</h3>
         <p>You can bind global shortcuts (via System Settings) to control this app:</p>
         <ul>
-            <li><code>select_audio.py --connect "Device Name"</code> : Switch to specific device</li>
+            <li><code>audio_source_switcher.py --connect "Device Name"</code> : Switch to specific device</li>
         </ul>
         
         <p><b>Why "Smart Volume"?</b><br>
         Standard volume keys often control the "Virtual" JamesDSP sink, which gets clamped at 100%. To control your actual hardware volume while keeping effects active, bind your volume keys to:</p>
         <ul>
-            <li><code>select_audio.py --vol-up</code> : Increase Hardware Volume</li>
-            <li><code>select_audio.py --vol-down</code> : Decrease Hardware Volume</li>
+            <li><code>audio_source_switcher.py --vol-up</code> : Increase Hardware Volume</li>
+            <li><code>audio_source_switcher.py --vol-down</code> : Decrease Hardware Volume</li>
         </ul>
         <p><i>Right-click a device in the list to copy its Command ID.</i></p>
         """
@@ -1950,7 +1950,7 @@ def main():
     # we don't want to bring main app to front. We want to execute command.)
     
     if not args.connect:
-        socket_name = "ag_select_audio_source_v1"
+        socket_name = "ag_audio_source_switcher"
         socket = QLocalSocket()
         socket.connectToServer(socket_name)
         
