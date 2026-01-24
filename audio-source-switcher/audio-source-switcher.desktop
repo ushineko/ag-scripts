@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Audio Source Switcher
 Comment=Manage audio sinks and Bluetooth devices
-Exec=python3 /home/nverenin/git/ag-scripts/select-audio-source/select_audio.py
+Exec=python3 /home/nverenin/git/ag-scripts/audio-source-switcher/audio_source_switcher.py
 Icon=audio-card
 Terminal=false
 Type=Application

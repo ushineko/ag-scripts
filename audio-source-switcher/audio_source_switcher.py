@@ -7,7 +7,8 @@ import argparse
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QListWidget, QListWidgetItem, QPushButton, QCheckBox, 
                              QLabel, QMessageBox, QGroupBox, QHBoxLayout,
-                             QAbstractItemView, QSystemTrayIcon, QMenu)
+                             QAbstractItemView, QSystemTrayIcon, QMenu, QDialog, 
+                             QTextBrowser, QDialogButtonBox)
 from PyQt6.QtCore import QTimer, Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIcon, QAction
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
@@ -38,7 +39,7 @@ class ConnectThread(QThread):
 class ConfigManager:
     """Handles persistence of device order and preferences."""
     def __init__(self):
-        self.config_dir = os.path.expanduser("~/.config/select-audio-source")
+        self.config_dir = os.path.expanduser("~/.config/audio-source-switcher")
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.ensure_config_dir()
         
@@ -179,18 +180,28 @@ class AudioController:
                 else:
                     display_name += " [Disconnected]"
 
-            # Append active port if useful
+            # Append active port if useful, and check availability
             active_port_desc = ""
+            is_physically_available = True
+            
             if active_port_name and ports:
                 for port in ports:
                     if port['name'] == active_port_name:
                         active_port_desc = port.get('description', active_port_name)
+                        # Check physical availability (Jack detection)
+                        availability = port.get('availability', 'unknown')
+                        if availability == 'not available':
+                            is_physically_available = False
                         break
             
             # Avoid redundant port info (e.g. "AirPods Pro - Headphones" is OK, but " - Headphones" is bad)
             # and don't append if it's generic "Analog Output" unless we have no other name
             if active_port_desc and active_port_desc != "Analog Output":
                  display_name += f" - {active_port_desc}"
+
+            # Append Disconnected status if physically unplugged
+            if not is_physically_available and "[Disconnected]" not in display_name:
+                display_name += " [Disconnected]"
 
             # Calculate Stable ID for Priority
             # For Bluetooth: "bt:MAC"
@@ -228,6 +239,82 @@ class AudioController:
                 parts = line.split()
                 if parts:
                     self.run_command(['pactl', 'move-sink-input', parts[0], sink_name], ignore_errors=True)
+
+    def get_sink_volume(self, sink_name):
+        """
+        Returns the volume percentage (integer) of the sink.
+        Returns None if failed.
+        """
+        try:
+            # pactl get-sink-volume <sink>
+            # Output format:
+            # Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+            output = self.run_command(['pactl', 'get-sink-volume', sink_name])
+            if not output: return None
+            
+            # Extract first percentage found
+            match = re.search(r'(\d+)%', output)
+            if match:
+                return int(match.group(1))
+            return None
+        except Exception as e:
+            print(f"Error getting volume for {sink_name}: {e}")
+            return None
+
+    def set_sink_volume(self, sink_name, volume_percent):
+        """
+        Sets sink volume to specific percentage.
+        """
+        # cap at 100% or allow boost? Usually limit to 100% to avoid blasting.
+        # But if user wants >100, we might clip.
+        if volume_percent > 150: volume_percent = 150
+        if volume_percent < 0: volume_percent = 0
+        
+        self.run_command(['pactl', 'set-sink-volume', sink_name, f"{volume_percent}%"])
+
+    def get_line_in_source(self):
+        """Finds the Line-In source name dynamically."""
+        # We look for a source containing 'Line__source'
+        output = self.run_command(['pactl', 'list', 'short', 'sources'])
+        if not output: return None
+        for line in output.split('\n'):
+            if "Line__source" in line:
+                return line.split()[1]
+        return None
+
+    def get_loopback_state(self, source_name):
+        """
+        Returns (is_loaded, module_id).
+        Checks if module-loopback is loaded for the specific source.
+        """
+        if not source_name: return (False, None)
+        
+        output = self.run_command(['pactl', 'list', 'short', 'modules'])
+        if not output: return (False, None)
+        
+        # Output format: ID module-name argument
+        # 536 module-loopback source=...
+        for line in output.split('\n'):
+            if "module-loopback" in line and f"source={source_name}" in line:
+                parts = line.split()
+                try:
+                    module_id = parts[0]
+                    return (True, module_id)
+                except IndexError:
+                    pass
+        return (False, None)
+
+    def set_loopback_state(self, enable, source_name):
+        is_loaded, module_id = self.get_loopback_state(source_name)
+        
+        if enable and not is_loaded:
+            print(f"Loading loopback for {source_name}")
+            # latency_msec=1 is common for monitoring
+            self.run_command(['pactl', 'load-module', 'module-loopback', f'source={source_name}', 'latency_msec=1'])
+            
+        elif not enable and is_loaded:
+            print(f"Unloading loopback module {module_id}")
+            self.run_command(['pactl', 'unload-module', module_id])
 
 class BluetoothController:
     """Handles interaction with bluetoothctl."""
@@ -365,11 +452,47 @@ class PipeWireController:
         # We can search `pw-link -i` (input ports)
         input_ports = []
         raw_in = self.run_command(['pw-link', '-i'])
+        # print(f"DEBUG: Searching ports for '{sink_name}'")
         if raw_in:
              for line in raw_in.split('\n'):
                  if sink_name in line and ":playback_" in line:
+                     # print(f"DEBUG: Found port {line.strip()}")
                      input_ports.append(line.strip())
         return input_ports
+
+    def get_jamesdsp_target(self):
+        """
+        Returns the name of the sink that JamesDSP is currently routed to.
+        Returns None if floating or not found.
+        """
+        jdsp_outs = self.get_jamesdsp_outputs()
+        if not jdsp_outs:
+            return None
+            
+        src = jdsp_outs[0]
+        links = self.get_links()
+        
+        # Simplified robust parsing
+        # Look for lines like:
+        # <src>
+        #   |-> <target>
+        capture_next = False
+        
+        for line in links:
+            sline = line.strip()
+            if sline == src:
+                capture_next = True
+            elif capture_next and line.startswith("  |->"):
+                # Found a link!
+                raw_target = line.replace("  |->", "").strip()
+                if ":playback_" in raw_target:
+                    found_target = raw_target.split(":playback_")[0]
+                    return found_target
+            elif capture_next and not line.startswith("  "):
+                # Indentation broken, we moved to next block
+                capture_next = False
+                
+        return None
 
     def relink_jamesdsp(self, target_sink_name):
         """
@@ -377,48 +500,146 @@ class PipeWireController:
         """
         jdsp_outs = self.get_jamesdsp_outputs()
         if not jdsp_outs:
-            print("JamesDSP outputs not found.")
+            print("DEBUG: JamesDSP outputs not found (relink failed).")
             return False
 
         target_ins = self.get_sink_playback_ports(target_sink_name)
         if not target_ins:
-             print(f"Target sink inputs not found for {target_sink_name}")
-             return False
-        
-        # Sort to match FL to FL, FR to FR usually
+            print(f"DEBUG: Target inputs for '{target_sink_name}' not found via pw-link.")
+            return False
+            
+        # 1. DISCONNECT EXISTING LINKS FIRST
+        # To avoid duplicate audio (playing from both old and new device)
+        links = self.get_links()
+        for out_port in jdsp_outs:
+            # Find what this output is connected to
+            # Parsing "out_port \n |-> target"
+            capture = False
+            for line in links:
+                sline = line.strip()
+                if sline == out_port:
+                    capture = True
+                elif capture and line.startswith("  |->"):
+                    # Found a link to remove
+                    target = line.replace("  |->", "").strip()
+                    # Only remove if it's a playback port (don't break monitors if any?)
+                    if ":playback_" in target:
+                        # print(f"DEBUG: Unlinking {out_port} -> {target}")
+                        self.unlink(out_port, target)
+                elif capture and not line.startswith("  "):
+                    capture = False
+
+        # 2. CONNECT NEW LINKS
+        # Sort to insure FL->FL, FR->FR
         jdsp_outs.sort()
         target_ins.sort()
         
-        # 1. Unlink JDSP from EVERYTHING it is currently connected to
-        links = self.get_links()
-        
-        # Parse links to find what JDSP is connected to
-        # Format is tricky to parse robustly without a graph library, but `pw-link -d out in` works.
-        # We can iterate all known links via `pw-link -l -I` (lines with ID) or just careful parsing.
-        
-        # Easier strategy:
-        # For each JDSP output, grep `pw-link -l` to see what it links to.
-        # The output of `pw-link -l` is:
-        # PortName
-        #   |-> TargetPort
-        
-        current_port = None
-        for line in links:
-            if not line.startswith("  "):
-                current_port = line.strip()
-            else:
-                if current_port in jdsp_outs:
-                    # This is a link FROM jdsp
-                    target = line.replace("|->", "").strip()
-                    self.unlink(current_port, target)
-
-        # 2. Link JDSP to New Target
-        # Simple channel mapping: 0->0, 1->1
-        # This assumes stereo mostly.
-        for i in range(min(len(jdsp_outs), len(target_ins))):
+        # Link corresponding channels
+        # We assume jdsp_outs[0] is FL, target_ins[0] is FL (standard alpha sort)
+        count = min(len(jdsp_outs), len(target_ins))
+        for i in range(count):
             self.link(jdsp_outs[i], target_ins[i])
             
         return True
+    def get_sink_volume(self, sink_name):
+        """
+        Returns the volume percentage (integer) of the sink.
+        Returns None if failed.
+        """
+        try:
+            # pactl get-sink-volume <sink>
+            # Output format:
+            # Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+            output = self.run_command(['pactl', 'get-sink-volume', sink_name])
+            if not output: return None
+            
+            # Extract first percentage found
+            match = re.search(r'(\d+)%', output)
+            if match:
+                return int(match.group(1))
+            return None
+        except Exception as e:
+            print(f"Error getting volume for {sink_name}: {e}")
+            return None
+
+    def set_sink_volume(self, sink_name, volume_percent):
+        """
+        Sets sink volume to specific percentage.
+        """
+        # cap at 100% or allow boost? Usually limit to 100% to avoid blasting.
+        # But if user wants >100, we might clip.
+        if volume_percent > 150: volume_percent = 150
+        if volume_percent < 0: volume_percent = 0
+        
+        self.run_command(['pactl', 'set-sink-volume', sink_name, f"{volume_percent}%"])
+
+
+    def get_sink_volume(self, sink_name):
+        """
+        Returns the volume percentage (integer) of the sink.
+        Returns None if failed.
+        """
+        try:
+            # pactl get-sink-volume <sink>
+            # Output format:
+            # Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+            output = self.run_command(['pactl', 'get-sink-volume', sink_name])
+            if not output: return None
+            
+            # Extract first percentage found
+            match = re.search(r'(\d+)%', output)
+            if match:
+                return int(match.group(1))
+            return None
+        except Exception as e:
+            print(f"Error getting volume for {sink_name}: {e}")
+            return None
+
+    def set_sink_volume(self, sink_name, volume_percent):
+        """
+        Sets sink volume to specific percentage.
+        """
+        # cap at 100% or allow boost? Usually limit to 100% to avoid blasting.
+        # But if user wants >100, we might clip.
+        if volume_percent > 150: volume_percent = 150
+        if volume_percent < 0: volume_percent = 0
+        
+        self.run_command(['pactl', 'set-sink-volume', sink_name, f"{volume_percent}%"])
+
+
+class VolumeMonitorThread(QThread):
+    """
+    Monitors 'pactl subscribe' for sink changes.
+    When 'jamesdsp_sink' changes volume, it signals the main thread to sync.
+    """
+    volume_changed_signal = pyqtSignal()
+
+    def run(self):
+        # pactl subscribe output:
+        # Event 'change' on sink #651 (jamesdsp_sink)
+        
+        # We start a subprocess that runs forever
+        process = subprocess.Popen(
+            ['pactl', 'subscribe'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            
+            # DEBUG
+            # print(f"DEBUG_SUB: {line.strip()}")
+            
+            # We are interested in "sink" events
+            if "Event 'change' on sink" in line:
+                # print(f"DEBUG_SUB: Detected sink change: {line.strip()}")
+                self.volume_changed_signal.emit()
+
 
 
 class MainWindow(QMainWindow):
@@ -433,6 +654,9 @@ class MainWindow(QMainWindow):
         
         # Load cache immediately
         self.cache_bt_devices = self.bt.get_devices()
+        
+        # Circuit breaker for JamesDSP crashes/loops
+        self.jdsp_broken_state = False
 
         if self.target_device_cli:
             # Headless Mode
@@ -449,7 +673,14 @@ class MainWindow(QMainWindow):
             return
 
         self.setWindowTitle("Audio Source Switcher")
-        self.resize(500, 600)
+        
+        # Restore Geometry
+        geom = self.config.get("window_geometry")
+        if geom:
+            from PyQt6.QtCore import QByteArray
+            self.restoreGeometry(QByteArray.fromHex(geom.encode()))
+        else:
+            self.resize(500, 600)
         
         # Window Icon
         icon = QIcon.fromTheme("audio-card")
@@ -537,6 +768,11 @@ class MainWindow(QMainWindow):
         self.auto_switch_cb.toggled.connect(self.on_auto_switch_toggled)
         controls_layout.addWidget(self.auto_switch_cb)
 
+        self.loopback_cb = QCheckBox("Enable Line-In Loopback")
+        self.loopback_cb.clicked.connect(self.on_loopback_toggled)
+        controls_layout.addWidget(self.loopback_cb)
+
+
         self.status_label = QLabel("Ready")
         controls_layout.addWidget(self.status_label)
 
@@ -555,6 +791,201 @@ class MainWindow(QMainWindow):
 
         # System Tray Setup
         self.setup_tray()
+
+    def check_and_sync_volume(self):
+        """
+        Polls JamesDSP volume. If != 100%, syncs to hardware.
+        """
+        # print("DEBUG: check_and_sync_volume tick")
+        
+        # 1. Quick check: Is JamesDSP default?
+        # Optimization: We can check this less frequently or cache it?
+        # For now, let's trust get_default_sink is fast (it runs a tiny process).
+        # Actually, running a process every 200ms might be heavy-ish on Python.
+        # But 'pactl get-default-sink' is very light.
+        
+        # Let's try to optimize: Only check volume of 'jamesdsp_sink' directly.
+        # If it's not running, get_sink_volume returns None instantly.
+        
+        try:
+            jdsp_vol = self.audio.get_sink_volume("jamesdsp_sink")
+            
+            # If JDSP doesn't exist or is 100%, do nothing.
+            if jdsp_vol is None or jdsp_vol == 100:
+                return
+            
+            # Volume Changed! (< 100 or > 100)
+            # Find target.
+            
+            pw = PipeWireController()
+            jdsp_outs = pw.get_jamesdsp_outputs()
+            
+            found_target = None
+            if jdsp_outs:
+                src = jdsp_outs[0]
+                links = pw.get_links()
+                
+                # Simplified robust parsing
+                # Look for lines like:
+                # <src>
+                #   |-> <target>
+                # We iterate and keep state.
+                capture_next = False
+                
+                for line in links:
+                    sline = line.strip()
+                    if sline == src:
+                        capture_next = True
+                    elif capture_next and line.startswith("  |->"):
+                        # Found a link!
+                        raw_target = line.replace("  |->", "").strip()
+                        if ":playback_" in raw_target:
+                            found_target = raw_target.split(":playback_")[0]
+                            # print(f"DEBUG: Found target sink for volume sync: {found_target}")
+                            break
+                    elif capture_next and not line.startswith("  "):
+                        # Indentation broken, we moved to next block
+                        capture_next = False
+            
+            if not found_target:
+                print(f"DEBUG: JamesDSP is active but floating. Cannot sync volume.")
+                return 
+
+            # Get HW Volume
+            current_target_vol = self.audio.get_sink_volume(found_target)
+            if current_target_vol is None: return
+            
+            # Calculate New
+            factor = jdsp_vol / 100.0
+            new_vol = int(current_target_vol * factor)
+            
+            print(f"Volume Sync: JDSP={jdsp_vol}%, Target={current_target_vol}% -> {new_vol}%")
+            
+            # Apply
+            self.audio.set_sink_volume(found_target, new_vol)
+            self.audio.set_sink_volume("jamesdsp_sink", 100)
+            
+        except Exception as e:
+            print(f"Error in volume sync: {e}")
+        
+        try:
+            default_sink = self.audio.get_default_sink()
+            if default_sink != "jamesdsp_sink":
+                return # Not managing JDSP volume right now
+            
+            # Get JDSP Volume
+            # Note: This runs on Main Thread, so it might block slightly if pactl is slow.
+            # But pactl is usually instant.
+            jdsp_vol = self.audio.get_sink_volume("jamesdsp_sink")
+            
+            # DEBUG: Uncomment to trace
+            # if jdsp_vol is not None and jdsp_vol != 100:
+            #    print(f"DEBUG: JDSP Vol is {jdsp_vol}")
+            
+            if jdsp_vol is None: return
+            
+            # If volume is 100% (or very close), do nothing.
+            # We use a small tolerance? No, exact 100% usually.
+            if jdsp_vol == 100:
+                return
+            
+            # It Changed! 
+            # 1. Find target physical sink.
+            # Rerunning logic or querying PW-link?
+            # PW-link is safer.
+            pw = PipeWireController()
+            # We assume we only care about the FIRST channel link
+            # Getting links every volume change might be heavy?
+            # Maybe we can cache "current_target_sink"?
+            # Let's try finding it dynamically first.
+            
+            target_sink_name = None
+            jdsp_outs = pw.get_jamesdsp_outputs()
+            if jdsp_outs:
+                src = jdsp_outs[0]
+                links = pw.get_links()
+                for line in links:
+                    if line.startswith("  |->") and src in previous_line:
+                        # Parsing logic is tricky without state machine in simple iteration
+                        pass
+                
+                # Re-use better parsing logic or extract to helper
+                # Let's extract a fast helper in AudioController or just loop quickly
+                # Quick hack: Query specifically for connections of JDSP output
+                # `pw-link -l` shows entire graph.
+                
+                # Optimized approach:
+                # We just need to know what to control.
+                # If we don't know, we can't sync.
+                # However, if we recently Autoswitched, we might have it stored.
+                pass
+            
+            # Let's use `pactl list sinks` or similar to find what JDSP links to? hard.
+            # Let's use the PipeWireController get_links parsing we wrote in run_auto_switch
+            # But simplified.
+            
+            # Actually, `run_auto_switch` logic to find target is robust.
+            # Let's COPY that logic here but optimized.
+            
+            found_target = None
+            if jdsp_outs:
+                src = jdsp_outs[0]
+                links = pw.get_links()
+                capture = False
+                for line in links:
+                    if line.strip() == src:
+                        capture = True
+                    elif capture and line.startswith("  |->"):
+                        target_port = line.replace("  |->", "").strip()
+                        if ":playback_" in target_port:
+                            found_target = target_port.split(":playback_")[0]
+                        break
+                    elif capture and not line.startswith("  "):
+                        capture = False
+            
+            if not found_target:
+                print("Volume Sync: Could not find hardware sink attached to JamesDSP.")
+                return 
+
+            # 2. Get Current Target Volume
+            current_target_vol = self.audio.get_sink_volume(found_target)
+            if current_target_vol is None: return
+            
+            # 3. Calculate New Volume
+            # Logic: If JDSP went to 95% (down 5%), we should lower Target by 5%?
+            # OR: Simple multiplication? 
+            # If user pressed "Vol Down", JDSP becomes 95%.
+            # We want to apply that relative change?
+            # Or just "Transfer" the delta?
+            
+            # Easier Logic:
+            # NewTarget = OldTarget * (JDSP_Vol / 100)
+            # Then Reset JDSP to 100.
+            # This handles both Up and Down.
+            # Example:
+            # Target = 50%. User presses Vol Down -> JDSP = 95%.
+            # NewTarget = 50 * 0.95 = 47.5%.
+            # Reset JDSP to 100%.
+            
+            # Example Up:
+            # Target = 50%. User presses Vol Up -> JDSP = 105%.
+            # NewTarget = 50 * 1.05 = 52.5%.
+            
+            factor = jdsp_vol / 100.0
+            new_vol = int(current_target_vol * factor)
+            
+            # Safety check: if factor is huge? KDE keys usually step 5%.
+            
+            print(f"Volume Sync: JDSP={jdsp_vol}%, Target={current_target_vol}% -> {new_vol}%")
+            
+            # 4. Apply
+            self.audio.set_sink_volume(found_target, new_vol)
+            
+            # 5. Reset JDSP
+            self.audio.set_sink_volume("jamesdsp_sink", 100)
+            
+        except Exception as e:
+            print(f"Error in volume sync: {e}")
 
     def setup_tray(self):
         self.tray_icon = QSystemTrayIcon(self)
@@ -583,14 +1014,74 @@ class MainWindow(QMainWindow):
         self.tray_icon.show()
 
     def show_about(self):
-        QMessageBox.about(
-            self,
-            "About Audio Source Switcher",
-            "<p><b>Audio Source Switcher</b></p>"
-            "<p>A utility to manage audio output devices and Bluetooth connections "
-            "with priority-based auto-switching.</p>"
-            "<p>Copyright (c) 2026 ushineko</p>"
-        )
+        # Create custom dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Help & About")
+        dlg.resize(600, 500)
+        
+        layout = QVBoxLayout()
+        dlg.setLayout(layout)
+        
+        # Help Text
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(self.get_help_text())
+        layout.addWidget(browser)
+        
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        
+        dlg.exec()
+
+    def get_help_text(self):
+        return """
+        <div align="center">
+            <h1>Audio Source Switcher</h1>
+            <p><b>Version 11.0</b></p>
+            <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
+            <p>Copyright (c) 2026 ushineko</p>
+        </div>
+        <hr>
+        
+        <h3>🎧 Managing Audio</h3>
+        <ul>
+            <li><b>Switch Output:</b> Double-click a device in the list to switch audio to it.</li>
+            <li><b>Priority:</b> Drag and drop devices to reorder them. If <i>"Auto-switch"</i> is checked, the app will automatically switch to the highest-priority connected device.</li>
+            <li><b>Bluetooth:</b> Click "Connect" to pair/connect to a selected device. Offline devices can be auto-connected by double-clicking them in the main list.</li>
+        </ul>
+
+        <h3>🔊 JamesDSP Integration</h3>
+        <p>The app intelligently handles the <b>JamesDSP</b> effects processor:</p>
+        <ul>
+            <li><b>Effects Active:</b> Audio is routed through JamesDSP before reaching your speakers/headphones.</li>
+            <li><b>Smart Switching:</b> When you select a device, the app <i>rewires</i> the internal graph so effects are preserved.</li>
+            <li><b>Safety:</b> Includes a "Circuit Breaker" to prevent crashes if JamesDSP becomes unstable.</li>
+        </ul>
+
+        <h3>🎙️ Line-In Loopback</h3>
+        <p>Use the <b>"Enable Line-In Loopback"</b> checkbox to listen to your Line-In device (e.g. game console input) through your current output. This toggles the system's <code>module-loopback</code>.</p>
+
+        <h3>🧠 Smart Jack Detection</h3>
+        <p>The app intelligently detects if "Front Headphones" are physically unplugged (port unavailable). Unplugged devices are marked as <code>[Disconnected]</code> and skipped by the auto-switcher, making priority lists much more reliable for onboard audio.</p>
+
+
+        <h3>⌨️ Global Hotkeys & Smart Volume</h3>
+        <p>You can bind global shortcuts (via System Settings) to control this app:</p>
+        <ul>
+            <li><code>select_audio.py --connect "Device Name"</code> : Switch to specific device</li>
+        </ul>
+        
+        <p><b>Why "Smart Volume"?</b><br>
+        Standard volume keys often control the "Virtual" JamesDSP sink, which gets clamped at 100%. To control your actual hardware volume while keeping effects active, bind your volume keys to:</p>
+        <ul>
+            <li><code>select_audio.py --vol-up</code> : Increase Hardware Volume</li>
+            <li><code>select_audio.py --vol-down</code> : Decrease Hardware Volume</li>
+        </ul>
+        <p><i>Right-click a device in the list to copy its Command ID.</i></p>
+        """
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -605,6 +1096,10 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def closeEvent(self, event):
+        # Save Window Geometry
+        self.config["window_geometry"] = self.saveGeometry().toHex().data().decode()
+        self.config_mgr.save_config(self.config)
+
         if self.tray_icon.isVisible():
             self.hide()
             event.ignore()
@@ -613,6 +1108,9 @@ class MainWindow(QMainWindow):
             event.accept()
 
     def quit_app(self):
+        # Save geometry before quitting
+        self.config["window_geometry"] = self.saveGeometry().toHex().data().decode()
+        self.config_mgr.save_config(self.config)
         QApplication.quit()
 
     def on_auto_switch_toggled(self, checked):
@@ -653,6 +1151,11 @@ class MainWindow(QMainWindow):
         
         # Get Current Default Info
         default_sink_name = next((s['name'] for s in sinks if s['is_default']), None)
+        
+        self.refresh_loopback_ui()
+        
+        # Check if JamesDSP is available in the list
+        jamesdsp_available = any(s['name'] == "jamesdsp_sink" for s in sinks)
         
         # Check if current default is "connected"
         current_is_valid = False
@@ -702,30 +1205,54 @@ class MainWindow(QMainWindow):
             pass
 
         if target_sink_obj:
-            # If we are using valid physical device, check against default
-            if not is_jdsp_active:
-                if target_sink_obj['name'] != default_sink_name:
-                    should_switch = True
-            else:
-                # JamesDSP is active. We need to check if it's routed correctly.
-                # This is hard to know without querying pw-link.
-                # BUT, if the user manually switched or we auto-switched before, 
-                # we might accept the current state unless a HIGHER priority device just appeared.
-                # Let's assume if we found a higher priority device than what we *remember* setting, or just do it?
-                # To avoid looping (switch -> switch again), we need to know if we are ALREADY on target.
+            target_name = target_sink_obj['name']
+            
+            # 1. Basic Mismatch: We are on a different device entirely
+            if default_sink_name != target_name:
+                should_switch = True
                 
-                # We can check `pw-link` periodically? 
-                # Or just rely on: If a NEW device appeared (higher priority), we switch.
-                pass
-                
-                # Logic: If high priority device is available, we want to be using it.
-                # If we can't easily check current JDSP routing, we might loop if we blindly switch.
-                # Solution: Check if target sink is same as "last switched"? 
-                # Or check `pw-link` here. It's affordable every 5s.
-                
+            # 2. JamesDSP Enforcement:
+            # If we are physically on the target sink (default == target), 
+            # BUT JamesDSP is available and NOT default, we should switch 
+            # to trigger the 'Use JamesDSP' path in switch_to_sink().
+            # Safety Fix: Only enforce if JamesDSP has valid OUTPUT PORTS (is running correctly).
+            # Circuit Breaker: Don't retry if we already failed this session.
+            if jamesdsp_available and default_sink_name == target_name and default_sink_name != "jamesdsp_sink":
+                 if not self.jdsp_broken_state:
+                     pw = PipeWireController()
+                     if pw.get_jamesdsp_outputs():
+                         # print("DEBUG: Enforcing JamesDSP activation for current device.")
+                         should_switch = True
+                     else:
+                         # print("DEBUG: JamesDSP sink exists but has no outputs. Skipping.")
+                         pass
+                 else:
+                     # print("DEBUG: JamesDSP marked broken. Skipping enforcement.")
+                     pass
+            
+            # 3. JamesDSP Correctness:
+            # If currently default IS "jamesdsp_sink", check routing.
+            if default_sink_name == "jamesdsp_sink":
                 try:
                     pw = PipeWireController()
-                    jdsp_outs = pw.get_jamesdsp_outputs()
+                    jdsp_target = pw.get_jamesdsp_target()
+                    
+                    if jdsp_target:
+                        if jdsp_target != target_name:
+                            # It's routed to wrong physical device!
+                            # print(f"DEBUG: JDSP routed to {jdsp_target}, want {target_name}. Switching.")
+                            should_switch = True
+                        else:
+                            # Correctly routed. We are good.
+                            current_is_valid = True 
+                            should_switch = False
+                    else:
+                        # JDSP floating. Fix it.
+                        # print("DEBUG: JDSP floating. Switching.")
+                        should_switch = True
+                        
+                except Exception:
+                    should_switch = True # Fallback
                     # Just check one channel
                     links = pw.get_links()
                     
@@ -864,19 +1391,24 @@ class MainWindow(QMainWindow):
         bt_map = {d['mac']: d['name'] for d in self.cache_bt_devices}
         sinks = self.audio.get_sinks(bt_map)
         
-        # Identify default sink
+        # 1. Identify "Real" Active Device
         default_sink_name = next((s['name'] for s in sinks if s['is_default']), None)
+        # print(f"DEBUG_STARTUP: default_sink_name = {default_sink_name}")
+        active_real_sink_name = default_sink_name
         
-        # Check if JamesDSP is active
-        # Simple check: Is "jamesdsp_sink" the default sink?
         is_jdsp_default = (default_sink_name == "jamesdsp_sink")
         
         if is_jdsp_default:
             self.jdsp_label.show()
+            # JamesDSP is active. Find physical target.
+            pw = PipeWireController()
+            target = pw.get_jamesdsp_target()
+            if target:
+                active_real_sink_name = target
         else:
             self.jdsp_label.hide()
 
-        # Merge offline devices from config priority list
+        # 2. Merge offline devices from config priority list
         priority_list = self.config.get("device_priority", [])
         
         # Map existing online sinks by ID
@@ -885,11 +1417,11 @@ class MainWindow(QMainWindow):
         final_list = []
         seen_ids = set()
         
-        # 1. Add devices in priority order
+        # Add devices in priority order
         for pid in priority_list:
             if pid in seen_ids: continue
             
-            # JamesDSP UI Polish: Hide JamesDSP from the list
+            # Hide JamesDSP
             if "jamesdsp_sink" in pid:
                 continue
 
@@ -899,10 +1431,8 @@ class MainWindow(QMainWindow):
             else:
                 # Add offline placeholder
                 display = pid
-                # Try to get nicer name from BT cache if possible
                 if pid.startswith("bt:"):
                     mac = pid[3:]
-                    # Check cache for name
                     for d in self.cache_bt_devices:
                         if d['mac'] == mac:
                             display = d['name']
@@ -916,52 +1446,60 @@ class MainWindow(QMainWindow):
                 })
                 seen_ids.add(pid)
         
-        # 2. Add remaining online devices (not in config)
+        # Add remaining online devices
         for s in sinks:
             if s['priority_id'] not in seen_ids:
-                # JamesDSP UI Polish: Hide JamesDSP from the list
                 if "jamesdsp_sink" in s['priority_id'] or s['name'] == "jamesdsp_sink":
                     continue
-                    
                 final_list.append(s)
                 seen_ids.add(s['priority_id'])
                 
-        # Update UI List
-        item_data_list = []
-        for s in final_list:
+        # 3. Build Presentation Items with Highlights
+        new_items = []
+        active_item_index = -1
+        
+        for idx, s in enumerate(final_list):
+            # Check overlap with active_real_sink_name
+            # Note: s['name'] might be None for disconnected items
+            is_active = (s['name'] is not None and s['name'] == active_real_sink_name)
+            
             text = s['display_name']
-            is_active_visual = False
-            
-            # If JDSP is active, we want to show the "Target" as active, not JDSP (which is hidden)
-            # However, we don't easily know the content of the target without deeper query.
-            # But the "Effects Active" banner is a strong signal.
-            
-            if s['is_default']:
-                text += " (Active)"
-                is_active_visual = True
-            
-            # If JamesDSP is default, NO physical device has "is_default=True".
-            # So nobody gets "(Active)".
+            if is_active:
+                text = f"✅ {text}"
+                active_item_index = idx
             
             color = None
-            bold = False
-            if s['is_default']:
-                bold = True
-                color = Qt.GlobalColor.green
-            
-            # If disconnected
             if not s['connected']:
-                color = Qt.GlobalColor.gray
-                bold = False # Reset bold if offline
+                color = QColor("gray")
+            elif is_active:
+                color = QColor("#4CAF50") # Green highlight
             
-            item_data_list.append({
+            new_items.append({
                 'id': s['priority_id'],
                 'text': text,
-                'bold': bold,
-                'color': color
+                'bold': is_active,
+                'color': color,
+                'is_active': is_active
             })
             
-        self.update_list_widget(self.sink_list, item_data_list)
+        self.update_list_widget(self.sink_list, new_items)
+        
+        # 4. Scroll to Active on Startup (First Run logic or if unselected)
+        # Check if current selected item is NOT the active one?
+        # Or just ensuring active is visible.
+        # Let's force selection of the active item if nothing is selected.
+        if not self.sink_list.currentItem() and active_item_index >= 0:
+             item = self.sink_list.item(active_item_index)
+             if item:
+                 self.sink_list.setCurrentItem(item)
+                 self.sink_list.scrollToItem(item)
+                 
+        # Update Status Label
+        if active_item_index >= 0:
+             clean_name = new_items[active_item_index]['text'].replace("✅ ", "")
+             self.status_label.setText(f"Active: {clean_name}")
+                
+
 
     def refresh_bt_list_ui(self):
         data_list = []
@@ -980,6 +1518,8 @@ class MainWindow(QMainWindow):
         self.update_list_widget(self.bt_list, data_list)
 
     def on_sink_activated(self, item):
+        # User manually requested a switch. Reset circuit breaker to allow retrying JamesDSP.
+        self.jdsp_broken_state = False
         priority_id = item.data(Qt.ItemDataRole.UserRole)
         
         # 1. Try to find active sink FIRST
@@ -1077,6 +1617,35 @@ class MainWindow(QMainWindow):
                     3000
                 )
 
+    def on_loopback_toggled(self, checked):
+        source = self.audio.get_line_in_source()
+        if source:
+            self.audio.set_loopback_state(checked, source)
+            # Update visual state immediately (though refresh will check it too)
+            # Checked state is already set by click
+            status = "Enabled" if checked else "Disabled"
+            self.status_label.setText(f"Loopback {status}")
+        else:
+            self.status_label.setText("Line-In Source Not Found")
+            self.loopback_cb.setChecked(False)
+
+    def refresh_loopback_ui(self):
+        source = self.audio.get_line_in_source()
+        if not source:
+            self.loopback_cb.setEnabled(False)
+            self.loopback_cb.setText("Line-In Loopback (Not Found)")
+            return
+            
+        self.loopback_cb.setEnabled(True)
+        self.loopback_cb.setText("Enable Line-In Loopback")
+        
+        is_loaded, _ = self.audio.get_loopback_state(source)
+        
+        # Block signals to prevent triggering toggle logic
+        self.loopback_cb.blockSignals(True)
+        self.loopback_cb.setChecked(is_loaded)
+        self.loopback_cb.blockSignals(False)
+
     def switch_to_sink(self, sink_name, display_text):
         # JamesDSP Integration (Graph Rewiring)
         # Check if JamesDSP sink exists and is active (we can assume if it's in our sink list it exists)
@@ -1110,6 +1679,7 @@ class MainWindow(QMainWindow):
                 self.audio.move_input_streams(jamesdsp_sink_name)
             
             # 3. Rewire JamesDSP Output -> Target Hardware Sink
+            # print(f"DEBUG: Attempting relink JDSP -> {sink_name}")
             success = pw.relink_jamesdsp(sink_name)
             if success:
                 print(f"Rewired JamesDSP -> {sink_name}")
@@ -1125,7 +1695,9 @@ class MainWindow(QMainWindow):
             if self.move_streams_cb.isChecked():
                 self.audio.move_input_streams(sink_name)
 
-        self.refresh_sinks_ui()
+        # PA race condition fix: Wait for state to propagate before reading it back
+        QTimer.singleShot(150, self.refresh_sinks_ui)
+        
         clean_text = display_text.replace(" (Active)", "")
         self.status_label.setText(f"Switched to: {clean_text}")
         
@@ -1309,10 +1881,66 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Copied: {clean_name}")
 
 
+def handle_volume_command(direction):
+    """
+    direction: 'up' or 'down'
+    Bypasses standard volume control to handle JamesDSP.
+    """
+    audio = AudioController()
+    pw = PipeWireController()
+    
+    # Check Default Sink
+    default = audio.get_default_sink()
+    
+    target_sink = default
+    
+    # If JamesDSP is default, we want to control the Attached Hardware Sink instead
+    if default == "jamesdsp_sink":
+        hw_target = pw.get_jamesdsp_target()
+        if hw_target:
+            target_sink = hw_target
+            # print(f"Redirecting volume control to: {target_sink}")
+    
+    # Construct pctl command
+    step = "+5%" if direction == "up" else "-5%"
+    
+    # pactl set-sink-volume <sink> +5%
+    subprocess.run(['pactl', 'set-sink-volume', target_sink, step])
+    
+    # OSD / Visual Feedback
+    # KDE/Standard Notification with synchronous hint to act as OSD
+    try:
+        # Get new volume for display
+        new_vol = audio.get_sink_volume(target_sink)
+        if new_vol is not None:
+             # -h string:synchronous:volume makes it replace old notifications (no stacking)
+             # -h int:value:XX shows progress bar on some implementations (like Plasma)
+            subprocess.run([
+                'notify-send',
+                '-h', f'int:value:{new_vol}', 
+                '-h', 'string:synchronous:volume',
+                '-t', '2000', # 2 seconds
+                f"Volume: {new_vol}%"
+            ])
+    except Exception as e:
+        print(f"Error showing OSD: {e}")
+
+
+
 def main():
     parser = argparse.ArgumentParser(description="Audio Source Switcher")
     parser.add_argument("--connect", "-c", type=str, help="Name or ID of device to switch to")
+    parser.add_argument("--vol-up", action="store_true", help="Increase Volume (Smart)")
+    parser.add_argument("--vol-down", action="store_true", help="Decrease Volume (Smart)")
     args = parser.parse_args()
+    
+    # CLI Volume Mode
+    if args.vol_up:
+        handle_volume_command("up")
+        sys.exit(0)
+    if args.vol_down:
+        handle_volume_command("down")
+        sys.exit(0)
 
     app = QApplication(sys.argv)
     

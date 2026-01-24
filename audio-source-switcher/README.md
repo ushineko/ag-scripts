@@ -17,7 +17,10 @@ A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to ma
     - Detects "disconnected" state correctly (when powered off) to allow auto-switching to speakers.
 - **System Tray**:
     - Minimizes to tray on close.
+    - Minimizes to tray on close.
     - Notifications on auto-switch (via `notify-send`).
+- **Line-In Management**:
+    - **Loopback Toggle**: Easily enable/disable the "Listen to this device" behavior for your system's Line-In (e.g., console audio input) via a checkbox. Refreshes status automatically.
 
 ## Audio Routing & JamesDSP Integration
 
@@ -70,21 +73,28 @@ graph TD
 **Benefits:**
 - **No Effect Dropouts**: You never lose your EQ/Bass Boost when switching devices.
 - **Auto-Switching**: If your Headphones disconnect, the app detects the "Floating" JamesDSP output and immediately rewires it to your Speakers.
+- **Exclusive Routing**: The app actively unlinks old connections to ensure audio plays *only* to the selected device (fixing duplicate audio issues).
+
+### Stability & UX
+- **Startup Enforcement**: If you reboot and the system defaults back to hardware (bypassing effects), the app automatically "claims" the audio stream for JamesDSP when launched.
+- **Circuit Breaker**: If JamesDSP crashes or enters a zombie state (Sink present but Process missing), the app will detect the failure and **auto-fallback** to hardware switching to prevent infinite loops.
+    - *To Reset*: Once you fix JamesDSP, simply **Manually Click** a device in the list to re-enable effects.
+- **Visual Feedback**:
+    - **Active Device**: Highlighted in **Bold Green** with a ✅ checkmark.
+    - **Effects Indicator**: A "✨ Effects Active" banner confirms traffic is routing through the filter.
 
 
 ## CLI & Global Hotkeys
 
-Since version 8, you can control the app from the command line, which is perfect for setting up global hotkeys (especially on Wayland).
+Since version 11, you can control the app from the command line, which is perfect for setting up global hotkeys (especially on Wayland).
 
 ### Usage
 ```bash
 # Connect/Switch to a specific device (by name or ID)
-python3 select_audio.py --connect "AirPods Pro"
+python3 audio_source_switcher.py --connect "AirPods Pro"
 
 # The app effectively "Headless" in this mode:
-# - If the device is connected, it switches audio immediately.
-# - If the device is a Bluetooth device and is offline, it auto-connects, waits, and then switches.
-# - You get a system notification with the result.
+# ...
 ```
 
 ### Setting up a Hotkey (KDE Plasma)
@@ -95,7 +105,27 @@ python3 select_audio.py --connect "AirPods Pro"
 5.  Paste the command into the **Action/Command** field.
 6.  Assign your desired key combination (e.g., `Meta+H`).
 
-## Requirements
+### How to Override System Volume Shortcuts (KDE Plasma)
+
+To ensure your volume keys control the hardware (bypassing JamesDSP), you must rebind them to this app.
+
+1.  **Open Shortcuts**: Go to **System Settings** -> **Shortcuts**.
+2.  **Unbind Defaults**:
+    -   Search for **"Audio Volume"**.
+    -   Find "Volume Up" and set it to **None** (or Custom).
+    -   Find "Volume Down" and set it to **None**.
+3.  **Create Custom Shortcuts**:
+    -   Click **Add New**.
+    -   **Name**: "Smart Volume Up".
+    -   **Command**: `python3 /path/to/audio-source-switcher/audio_source_switcher.py --vol-up`
+    -   **Shortcut**: Press your physical `Volume Up` key.
+    -   Repeat for "Smart Volume Down" using `--vol-down`.
+
+> [!TIP]
+> **Locked Media Keys?**
+> If your system refuses to unbind the standard media keys (e.g., Fn+F12), try binding a combination like `Alt+F12` (or `Alt+VolumeUp`) instead. This is often easier to configure and reliable on all keyboards.
+
+**Note**: The app will now show a visual satisfaction bar (OSD) when you change volume, confirming it's working.
 
 - Python 3
 - `PyQt6`
@@ -107,18 +137,29 @@ python3 select_audio.py --connect "AirPods Pro"
 ## Installation
 
 1.  **Dependencies**:
+    Install the required system packages. Avoid using `pip` for system-wide Qt libraries to prevent conflicts.
+
+    ### Arch Linux / CachyOS
     ```bash
     sudo pacman -S python-pyqt6 libnotify bluez-utils
-    # Install headsetcontrol from AUR if you have SteelSeries devices
+    # headsetcontrol is available in the AUR
+    ```
+
+    ### Ubuntu / Debian
+    *Note: Debian/Ubuntu support is theoretical and not actively tested.*
+    ```bash
+    sudo apt update
+    sudo apt install python3-pyqt6 libnotify-bin bluez pulseaudio-utils
+    # headsetcontrol must be built from source or installed via .deb if available
     ```
 
 2.  **Desktop Shortcut**:
     Copy the provided `.desktop` file to your applications folder:
     ```bash
-    cp select-audio-source.desktop ~/.local/share/applications/
+    cp audio-source-switcher.desktop ~/.local/share/applications/
     update-desktop-database ~/.local/share/applications/
     ```
 
 ## Configuration
 
-Device priority and settings are saved to `~/.config/select-audio-source/config.json`.
+Device priority and settings are saved to `~/.config/audio-source-switcher/config.json`.
