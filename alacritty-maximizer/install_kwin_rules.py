@@ -105,20 +105,20 @@ def install_rules():
         
         # POSITION RULE - NEW (Reliable)
         rule['position'] = position_str
-        rule['positionrule'] = '2' # Force
+        rule['positionrule'] = '4' # Apply Initially (Allows moving later)
         
         # Maximize Rules
         rule['maximizevert'] = 'true'
-        rule['maximizevertrule'] = '2' # Force
+        rule['maximizevertrule'] = '4' # Apply Initially
         rule['maximizehoriz'] = 'true'
-        rule['maximizehorizrule'] = '2' # Force
+        rule['maximizehorizrule'] = '4' # Apply Initially
         
         rule['activity'] = 'All Desktops'
-        rule['activityrule'] = '2' # Force
+        rule['activityrule'] = '4' # Apply Initially
         
-        # Ensure minimal decoration if desired, though Maximize usually handles it
-        # rule['noborder'] = 'true'
-        # rule['noborderrule'] = '2'
+        # Ensure minimal decoration
+        rule['noborder'] = 'true'
+        rule['noborderrule'] = '2' # Force (Keep it borderless always)
 
 
     try:

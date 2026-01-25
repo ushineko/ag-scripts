@@ -17,6 +17,7 @@ This repository contains various utility scripts for system management and autom
 | `the-great-cachyos-move/pre_move_check.py` | Migration toolkit for moving a running CachyOS (Btrfs) installation from one drive to another (e.g., SATA to NVMe) using `btrfs send/receive`. Includes pre-checks and runbook generation. |
 | `qbittorrent-vpn-wrapper/qbittorrent_vpn_wrapper.py` | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and a persistent "glued" status dashboard. |
 | `vpn-toggle/toggle_vpn.sh` | GUI-based script (kdialog/zenity) to toggle NetworkManager VPN connections, bounce them, or open settings. Ideal for hotkeys. |
+| `alacritty-maximizer/main.py` | PyQt6 GUI (bundled with an installer/launcher) to launch Alacritty windows fully maximized on specific monitors without titlebars. Manages KWin rules automatically. |
 
 ## Usage
 
