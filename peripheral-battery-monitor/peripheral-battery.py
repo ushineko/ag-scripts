@@ -4,7 +4,7 @@ import signal
 import json
 import os
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame
-from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
 import battery_reader
@@ -449,6 +449,12 @@ class PeripheralMonitor(QWidget):
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    # Single Instance Lock
+    lock = QLockFile(QDir.tempPath() + "/peripheral-battery-monitor.lock")
+    if not lock.tryLock(100):
+        print("Another instance is already running.")
+        sys.exit(1)
 
     if "--debug" in sys.argv:
         battery_reader.set_debug_mode(True)
