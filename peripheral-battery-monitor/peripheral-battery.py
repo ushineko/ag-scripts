@@ -3,7 +3,7 @@ import sys
 import signal
 import json
 import os
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QGridLayout, QFrame
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
@@ -117,10 +117,30 @@ class PeripheralMonitor(QWidget):
         name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(name_lbl)
 
+        # Value Row with Icon
+        h_layout = QHBoxLayout()
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(4)
+        h_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        icon_lbl = QLabel(self)
+        icon_lbl.setFixedSize(24, 24)
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Initial Icon (Show 'missing' until first update)
+        init_icon = QIcon.fromTheme("battery-missing")
+        icon_lbl.setPixmap(init_icon.pixmap(24, 24))
+        
+        if battery_reader.DEBUG_MODE:
+            print(f"DEBUG: Initial icon set for {default_name}")
+        
         val_lbl = QLabel("--%", self)
         val_lbl.setObjectName("ValueLabel")
         val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(val_lbl)
+        
+        h_layout.addWidget(icon_lbl)
+        h_layout.addWidget(val_lbl)
+        layout.addLayout(h_layout)
         
         stat_lbl = QLabel("Disconnected", self)
         stat_lbl.setObjectName("StatusLabel")
@@ -131,7 +151,8 @@ class PeripheralMonitor(QWidget):
             'layout': layout, 
             'name_lbl': name_lbl, 
             'val_lbl': val_lbl, 
-            'stat_lbl': stat_lbl, 
+            'stat_lbl': stat_lbl,
+            'icon_lbl': icon_lbl,
             'last_info': None,
             'default_name': default_name
         }
@@ -322,22 +343,47 @@ class PeripheralMonitor(QWidget):
             self._update_label_block(
                 ui_dict['name_lbl'], 
                 ui_dict['val_lbl'], 
-                ui_dict['stat_lbl'], 
+                ui_dict['stat_lbl'],
+                ui_dict['icon_lbl'], # Pass icon label
                 display_info, 
-                last_valid if use_offline_cache else None, # pass None as last_info to disable offline-mode in helper
+                last_valid if use_offline_cache else None, 
                 ui_dict['default_name']
             )
         except Exception as e:
             # print(f"Error updating {ui_dict['default_name']}: {e}")
             pass
 
-    def _update_label_block(self, name_lbl, val_lbl, stat_lbl, current_info, last_info, fallback_name):
+    def _update_label_block(self, name_lbl, val_lbl, stat_lbl, icon_lbl, current_info, last_info, fallback_name):
         info = current_info or last_info
         
         is_offline = current_info is None and last_info is not None
         
+        icon_name = "battery-missing"
+        
         if info:
             level = info.level
+            
+            # Icon Logic
+            if level >= 0:
+                # Round to nearest 10
+                rounded = int(level / 10) * 10
+                icon_name = f"battery-level-{rounded}"
+                
+                # Check status for charging
+                if "Charging" in info.status or "Full" in info.status:
+                     # Some themes have battery-charging-XX, others just battery-charging
+                     # We'll try generic charging or charging-XX if logic permitted, but strictly:
+                     if level == 100:
+                         icon_name = "battery-charging-100"
+                     else:
+                         icon_name = f"battery-charging-{rounded}"
+                         # Fallback if that specific icon doesn't exist? QIcon.fromTheme handles fallbacks if provided.
+                         # But safely, 'battery-charging' is standard.
+                         # Let's try explicit levels first.
+            
+            # Update Icon
+            icon = QIcon.fromTheme(icon_name, QIcon.fromTheme("battery-missing"))
+            icon_lbl.setPixmap(icon.pixmap(24, 24))
             
             # Handle special "Unknown Level but Connected" state
             if level == -1:
@@ -393,6 +439,9 @@ class PeripheralMonitor(QWidget):
             name_lbl.setText(fallback_name)
             val_lbl.setText('<span style="color: gray;">--%</span>')
             stat_lbl.setText("Disconnected")
+            
+            icon = QIcon.fromTheme("battery-missing")
+            icon_lbl.setPixmap(icon.pixmap(24, 24))
 
     def format_time(self):
         from PyQt6.QtCore import QTime
