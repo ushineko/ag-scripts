@@ -383,9 +383,9 @@ async def _ble_scan_for_airpods(target_mac=None):
                             final_level = c_pct
                             status = "Case Only"
                             
-                        # RSSI check to ensure it's OUR device. Tightened to -70 to avoid neighbors.
-                        if advertisement_data.rssi > -70:
-                            if DEBUG_MODE: print(f"DEBUG: Strong Signal (>-70), accepting data. Level: {final_level} Details: {details}")
+                        # RSSI check to ensure it's OUR device. Relaxed to -85 per user request.
+                        if advertisement_data.rssi > -85:
+                            if DEBUG_MODE: print(f"DEBUG: Strong Signal (>-85), accepting data. Level: {final_level} Details: {details}")
                             found_info = BatteryInfo(
                                 level=final_level,
                                 status=status,
@@ -394,7 +394,7 @@ async def _ble_scan_for_airpods(target_mac=None):
                                 details=details
                             )
                         else:
-                            if DEBUG_MODE: print(f"DEBUG: Signal too weak ({advertisement_data.rssi} <= -70)")
+                            if DEBUG_MODE: print(f"DEBUG: Signal too weak ({advertisement_data.rssi} <= -85)")
                 except Exception:
                     pass
                 

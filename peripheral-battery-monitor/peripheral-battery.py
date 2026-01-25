@@ -36,6 +36,7 @@ class PeripheralMonitor(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = self.load_settings()
+        self.worker = None
         
         self.initUI()
         self.setup_timer()
@@ -286,12 +287,16 @@ class PeripheralMonitor(QWidget):
         self.save_settings()
 
     def setup_timer(self):
-        # Update every 1 minute
+        # Update every 30 seconds
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_status)
-        self.timer.start(60000) 
+        self.timer.start(30000) 
 
     def update_status(self):
+        # Prevent overlap
+        if self.worker and self.worker.isRunning():
+            return
+
         # Start worker thread
         self.worker = UpdateThread()
         self.worker.data_ready.connect(self.on_data_ready)
