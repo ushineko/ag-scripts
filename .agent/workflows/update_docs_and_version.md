@@ -19,9 +19,12 @@ description: Update documentation and version number for a sub-project
     -   **Features**: Add bullet points for any newly implemented features under the "Features" or "Changelog" section.
     -   **Usage**: Update usage examples if CLI arguments or behavior changed.
 
-5.  **Verify Consistency**:
+5. **Update top-level README.md**:
+    -   **Summary**: Update summary of all projects to reflect current information.
+
+6.  **Verify Consistency**:
     -   Ensure the version number in the Source Code matches the README.
     -   Ensure all new features discussed in the chat are documented.
 
-6.  **Notify User**:
+7.  **Notify User**:
     -   Confirm that both code and docs are updated to the new version.

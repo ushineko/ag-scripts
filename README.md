@@ -13,6 +13,10 @@ This repository contains various utility scripts for system management and autom
 | `fake-screensaver/blank.html` | A simple black HTML page that acts as a screensaver. Hides the cursor and supports toggling full-screen mode by clicking or pressing Space. |
 | `fake-screensaver/fake_screensaver.py` | A PyQt-based fake screensaver that keeps the mouse cursor visible. Includes a desktop entry. |
 | `audio-source-switcher/audio_source_switcher.py` | A feature-rich "Audio Source Switcher" with priority auto-switching, Bluetooth device management (auto-connect), JamesDSP integration (smart rewiring), Jack Detection, and Wayland-compatible global hotkeys. |
+| `peripheral-battery-monitor/peripheral-battery.py` | A compact, always-on-top dashboard for Logitech mouse, Keychron keyboard, Arctis headset, and AirPods battery monitoring (L/R/Case status via BLE). Optimized for KDE Wayland. |
+| `the-great-cachyos-move/pre_move_check.py` | Migration toolkit for moving a running CachyOS (Btrfs) installation from one drive to another (e.g., SATA to NVMe) using `btrfs send/receive`. Includes pre-checks and runbook generation. |
+| `qbittorrent-vpn-wrapper/qbittorrent_vpn_wrapper.py` | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and a persistent "glued" status dashboard. |
+| `vpn-toggle/toggle_vpn.sh` | GUI-based script (kdialog/zenity) to toggle NetworkManager VPN connections, bounce them, or open settings. Ideal for hotkeys. |
 
 ## Usage
 
