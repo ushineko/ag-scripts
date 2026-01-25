@@ -1,4 +1,3 @@
-
 import configparser
 import os
 import sys
@@ -22,13 +21,24 @@ def run_kwin_reconfigure():
             continue
     print("Warning: Could not reload KWin configuration automatically. You may need to log out or run 'kwin_wayland --replace' (risky).")
 
-def install_rule():
+def install_rules():
+    # We need PyQt6 to get accurate screen coordinates (matching what we see in main.py)
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QPoint
+        # Create headless app just to query screens
+        if not QApplication.instance():
+            app = QApplication(sys.argv)
+        else:
+            app = QApplication.instance()
+        screens = app.screens()
+    except ImportError:
+        print("Error: PyQt6 not found. Please install it.")
+        return False
+
     config_path = Path.home() / ".config" / "kwinrulesrc"
     
-    # KWin config is technically INI-like but configparser is sometimes strict.
-    # We use strict=False to allow duplicate keys if any (though KWin shouldn't have them).
     config = configparser.ConfigParser(strict=False)
-    # KWin keys are case sensitive
     config.optionxform = str
     
     if config_path.exists():
@@ -44,67 +54,72 @@ def install_rule():
     rules_str = config['General'].get('rules', '')
     rules_list = [r for r in rules_str.split(',') if r]
     
-    try:
-        count = int(config['General'].get('count', len(rules_list)))
-    except ValueError:
-        count = len(rules_list)
-
-    found = False
-    target_section = None
-
-    # Search for existing rule in rules_list
-    for section in rules_list:
-        if section in config:
-            # Check if this rule is ours
-            if config[section].get('wmclass') == 'peripheral-battery-monitor':
-                target_section = section
-                found = True
-                break
-    
-    if not found:
-        # Assign next highest available integer
-        current_ids = [int(r) for r in rules_list if r.isdigit()]
-        next_id = max(current_ids + [0]) + 1
-        target_section = str(next_id)
+    # We create a rule for each detected screen
+    for i, screen in enumerate(screens):
+        rule_name = f"alacritty-monitor-{i}"
         
-        rules_list.append(target_section)
+        # Get geometry
+        geo = screen.geometry()
+        # For KWin, position should be "x,y"
+        position_str = f"{geo.x()},{geo.y()}"
+        description = f"Alacritty Maximize on Monitor {i} ({position_str})"
+        
+        found = False
+        target_section = None
+
+        # Search for existing rule in rules_list
+        for section in rules_list:
+            if section in config:
+                if config[section].get('wmclass') == rule_name:
+                    target_section = section
+                    found = True
+                    break
+        
+        if not found:
+            current_ids = []
+            for r in rules_list:
+                if r.isdigit():
+                    current_ids.append(int(r))
+            
+            next_id = max(current_ids + [0]) + 1
+            target_section = str(next_id)
+            rules_list.append(target_section)
+            print(f"Creating rule '{rule_name}' in section [{target_section}]...")
+        else:
+            print(f"Updating existing rule '{rule_name}' in section [{target_section}]...")
+
         config['General']['rules'] = ','.join(rules_list)
         config['General']['count'] = str(len(rules_list))
-        print(f"Creating new rule in section [{target_section}]...")
-    else:
-        print(f"Updating existing rule in section [{target_section}]...")
 
-    # Define rule properties
-    if target_section not in config:
-        config[target_section] = {}
+        if target_section not in config:
+            config[target_section] = {}
+            
+        rule = config[target_section]
+        rule['Description'] = description
+        rule['wmclass'] = rule_name
+        rule['wmclassmatch'] = '1' # Exact match
         
-    rule = config[target_section]
-    rule['Description'] = 'Peripheral Battery Monitor Always On Top'
-    rule['wmclass'] = 'peripheral-battery-monitor'
-    rule['wmclassmatch'] = '1' # Exact match
-    
-    # Important properties
-    rule['above'] = 'true'
-    rule['aboverule'] = '2' # Force
-    
+        # SCREEN RULE - REMOVED (Unreliable)
+        # rule['screen'] = str(i)
+        # rule['screenrule'] = '2'
+        
+        # POSITION RULE - NEW (Reliable)
+        rule['position'] = position_str
+        rule['positionrule'] = '2' # Force
+        
+        # Maximize Rules
+        rule['maximizevert'] = 'true'
+        rule['maximizevertrule'] = '2' # Force
+        rule['maximizehoriz'] = 'true'
+        rule['maximizehorizrule'] = '2' # Force
+        
+        rule['activity'] = 'All Desktops'
+        rule['activityrule'] = '2' # Force
+        
+        # Ensure minimal decoration if desired, though Maximize usually handles it
+        # rule['noborder'] = 'true'
+        # rule['noborderrule'] = '2'
 
-    # Optional: Force it to not have a titlebar if the user really wanted that visually,
-    # but for now sticking to "above" only as requested.
-
-    rule['noborder'] = 'true' 
-    rule['noborderrule'] = '2'
-
-    # Attempt to enable "Remember" for Position (4), Size (4), and Screen (4)
-    # This tells KWin to save and restore these properties for this window class.
-    rule['positionrule'] = '4'
-    rule['sizerule'] = '4'
-    rule['screenrule'] = '4'
-    
-    # Translucency (95% default) - "Apply Initially" (4) allows app to override
-    rule['opacityactive'] = '95'
-    rule['opacityactiverule'] = '4'
-    rule['opacityinactive'] = '95'
-    rule['opacityinactiverule'] = '4'
 
     try:
         with open(config_path, 'w') as f:
@@ -116,7 +131,7 @@ def install_rule():
         print(f"Failed to write config: {e}")
         return False
 
-def uninstall_rule():
+def uninstall_rules():
     config_path = Path.home() / ".config" / "kwinrulesrc"
     if not config_path.exists():
         print("Config file not found.")
@@ -143,8 +158,8 @@ def uninstall_rule():
     for section in rules_list:
         keep = True
         if section in config:
-            # Check if this rule is ours
-            if config[section].get('wmclass') == 'peripheral-battery-monitor':
+            # Check if this rule belongs to us
+            if config[section].get('wmclass', '').startswith('alacritty-monitor-'):
                 print(f"Removing rule in section [{section}]...")
                 config.remove_section(section)
                 keep = False
@@ -169,6 +184,6 @@ def uninstall_rule():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--uninstall":
-        uninstall_rule()
+        uninstall_rules()
     else:
-        install_rule()
+        install_rules()
