@@ -20,9 +20,23 @@ description: Iteratively run, capture logs, and debug a program until a success 
         *   Did the **Success Condition** occur?
         *   Are there new errors?
     *   **Decision**:
-        *   **Success**: If yes, STOP. You are DONE. 
+        *   **Success**: If yes, Proceed to **Finalization**.
             *   Be sure to remove all temporary logs and files created by this process so you don't clutter up the project.
         *   **Failure**:
             *   Analyze the logs to understand *why*.
             *   **Adjust**: Apply a fix to the code OR add *more* specific logging if the root cause is still hidden.
             *   **Loop**: Go back to **Clean Slate** and repeat.
+
+4.  **Finalization**:
+    *   **Update Sub-project Docs & Version** (Reference: `/update_docs_and_version`):
+        *   **Identify Sub-Project**: Locate main source and README.
+        *   **Bump Version**: Increment version in source code and README.
+        *   **Update README**: Add new features/fixes to the sub-project's README.
+    *   **Ensure Uninstaller** (Reference: `/uninstaller`):
+        *   Check if `uninstall.sh` exists.
+        *   If not, create one that removes desktop files, config entries, etc.
+        *   If yes, update it to include any new artifacts.
+    *   **Update Global Documentation** (Reference: `/update_documentation`):
+        *   Identify all scripts in the repo.
+        *   Update the root `README.md` with a table/list of all scripts and their descriptions.
+    *   **Notify User**: Confirm success and documentation updates.
