@@ -1,20 +1,21 @@
-# Alacritty Maximizer (v1.0)
+# Alacritty Maximizer (v1.1)
 
 A simple tool to launch Alacritty either normally or maximized on a specific monitor.
 
 ## Why?
 Sometimes you want to open a terminal dedicated to a specific screen without dragging it there and valid window management rules are hard to generalize. This tool uses specific KWin rules to force the window to the correct screen and state.
 
-## Version 1.0 Features
+## Version 1.1 Features
 - **Specific Monitor Launching**: Select which monitor to open Alacritty on.
 - **Auto-Maximization**: Windows open fully maximized.
 - **Borderless**: Windows open without titlebars for a clean look.
+- **Robustness**: Uses screen coordinates to identify monitors, ensuring the "Left" monitor is always the "Left" monitor even if system indices change.
 - **Movable**: Although maximized initially, windows can be moved or resized (e.g., using Taskbar r-click, or **Alt+LeftClick** drag in KWin).
 
 ## How it works
 1.  **Selection**: You choose a monitor or "Normal Start" from the GUI.
 2.  **KWin Interaction**: 
-    - The "Maximize on Monitor N" option launches `alacritty` with a special window class: `--class alacritty-monitor-N,Alacritty`.
+    - The "Maximize on Monitor" option launches `alacritty` with a special window class: `--class alacritty-pos-X_Y,Alacritty`.
     - Pre-installed KWin rules match this class and apply:
         - **Position**: Forces the window to the monitor's coordinates.
         - **Size**: Applies "Maximized" state initially.

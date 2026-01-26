@@ -56,13 +56,18 @@ def install_rules():
     
     # We create a rule for each detected screen
     for i, screen in enumerate(screens):
-        rule_name = f"alacritty-monitor-{i}"
-        
         # Get geometry
         geo = screen.geometry()
+        x = geo.x()
+        y = geo.y()
+        
+        # New Naming Scheme: alacritty-pos-X_Y
+        # This is robust against index changes
+        rule_name = f"alacritty-pos-{x}_{y}"
+        
         # For KWin, position should be "x,y"
-        position_str = f"{geo.x()},{geo.y()}"
-        description = f"Alacritty Maximize on Monitor {i} ({position_str})"
+        position_str = f"{x},{y}"
+        description = f"Alacritty Maximize at {position_str}"
         
         found = False
         target_section = None
@@ -70,10 +75,13 @@ def install_rules():
         # Search for existing rule in rules_list
         for section in rules_list:
             if section in config:
-                if config[section].get('wmclass') == rule_name:
+                wmclass = config[section].get('wmclass', '')
+                # Check for exact match or legacy match (optional, but let's just create new ones)
+                if wmclass == rule_name:
                     target_section = section
                     found = True
                     break
+
         
         if not found:
             current_ids = []
@@ -158,8 +166,9 @@ def uninstall_rules():
     for section in rules_list:
         keep = True
         if section in config:
-            # Check if this rule belongs to us
-            if config[section].get('wmclass', '').startswith('alacritty-monitor-'):
+            # Check if this rule belongs to us (legacy or new)
+            wmclass = config[section].get('wmclass', '')
+            if wmclass.startswith('alacritty-monitor-') or wmclass.startswith('alacritty-pos-'):
                 print(f"Removing rule in section [{section}]...")
                 config.remove_section(section)
                 keep = False

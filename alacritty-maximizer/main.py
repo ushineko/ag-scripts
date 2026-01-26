@@ -18,7 +18,7 @@ class AlacrittyLauncher(QWidget):
         self.setLayout(layout)
 
         label = QLabel("Select Launch Option:")
-        label.setStyleSheet("font-weight: bold; font_size: 14px;")
+        label.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(label)
 
         self.list_widget = QListWidget()
@@ -59,6 +59,7 @@ class AlacrittyLauncher(QWidget):
             # Simple heuristic for 2 monitors:
             geo = screen.geometry()
             x = geo.x()
+            y = geo.y()
             
             pos_desc = ""
             if len(screens) > 1:
@@ -80,8 +81,8 @@ class AlacrittyLauncher(QWidget):
             # Let's just stick to the descriptive text.
             
             item = QListWidgetItem(text)
-            # Store the index from the original screens list loop, which matches installer
-            item.setData(Qt.ItemDataRole.UserRole, f"monitor-{i}")
+            # Store the coordinates which are stable
+            item.setData(Qt.ItemDataRole.UserRole, f"pos-{x}_{y}")
             self.list_widget.addItem(item)
 
         # Select first item by default
@@ -120,15 +121,14 @@ class AlacrittyLauncher(QWidget):
         if data == "normal":
             # Just run alacritty
             pass
-        elif data.startswith("monitor-"):
-            # Format: monitor-N
+        elif data.startswith("pos-"):
+            # Format: pos-X_Y
             try:
-                index = int(data.split("-")[1])
+                coords = data.removeprefix("pos-")
                 # Launch with specific class to trigger KWin rule
                 # --class <instance>,<general>
-                # KWin Rule is looking for wmclass=alacritty-monitor-N
-                # We use it for both instance and general to satisfy Wayland app_id matching
-                instance_name = f"alacritty-monitor-{index}"
+                # KWin Rule is looking for wmclass=alacritty-pos-X_Y
+                instance_name = f"alacritty-pos-{coords}"
                 cmd.extend(["--class", f"{instance_name},{instance_name}"])
             except (ValueError, IndexError) as e:
                 QMessageBox.critical(self, "Error", f"Invalid monitor data: {data}\n{e}")
