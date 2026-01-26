@@ -32,6 +32,7 @@ description: Iteratively run, capture logs, and debug a program until a success 
         *   **Identify Sub-Project**: Locate main source and README.
         *   **Bump Version**: Increment version in source code and README.
         *   **Update README**: Add new features/fixes to the sub-project's README.
+        *   **Update Inline Help** (If applicable): Ensure any internal help text, "About" dialog content (e.g., see `audio-source-switcher`), or `--help` output reflects new changes and the updated version.
     *   **Ensure Uninstaller** (Reference: `/uninstaller`):
         *   Check if `uninstall.sh` exists.
         *   If not, create one that removes desktop files, config entries, etc.

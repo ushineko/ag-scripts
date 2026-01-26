@@ -1073,6 +1073,11 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.quit_app)
         
         menu.addAction(show_action)
+        
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        menu.addAction(about_action)
+        
         menu.addSeparator()
         menu.addAction(quit_action)
         
@@ -1107,7 +1112,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 11.1</b></p>
+            <p><b>Version 11.3</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
@@ -1132,22 +1137,15 @@ class MainWindow(QMainWindow):
         <p>Use the <b>"Enable Line-In Loopback"</b> checkbox to listen to your Line-In device (e.g. game console input) through your current output. This toggles the system's <code>module-loopback</code>.</p>
 
         <h3>🧠 Smart Jack Detection</h3>
-        <p>The app intelligently detects if "Front Headphones" are physically unplugged (port unavailable). Unplugged devices are marked as <code>[Disconnected]</code> and skipped by the auto-switcher, making priority lists much more reliable for onboard audio.</p>
+        <p>The app intelligently detects if "Front Headphones" are physically unplugged. Unplugged devices are marked as <code>[Disconnected]</code> and skipped by the auto-switcher.</p>
 
-
-        <h3>⌨️ Global Hotkeys & Smart Volume</h3>
-        <p>You can bind global shortcuts (via System Settings) to control this app:</p>
+        <h3>⌨️ Global Hotkeys & CLI</h3>
+        <p>Control the app from the terminal or system shortcuts:</p>
         <ul>
-            <li><code>audio_source_switcher.py --connect "Device Name"</code> : Switch to specific device</li>
+            <li><b>Switch Device:</b><br><code>--connect "Device Name"</code> (or ID)</li>
+            <li><b>Hardware Volume (Bypasses DSP):</b><br><code>--vol-up</code> / <code>--vol-down</code></li>
         </ul>
-        
-        <p><b>Why "Smart Volume"?</b><br>
-        Standard volume keys often control the "Virtual" JamesDSP sink, which gets clamped at 100%. To control your actual hardware volume while keeping effects active, bind your volume keys to:</p>
-        <ul>
-            <li><code>audio_source_switcher.py --vol-up</code> : Increase Hardware Volume</li>
-            <li><code>audio_source_switcher.py --vol-down</code> : Decrease Hardware Volume</li>
-        </ul>
-        <p><i>Right-click a device in the list to copy its Command ID.</i></p>
+        <p><i>Tip: Right-click a device in the list to copy its instant Command ID.</i></p>
         """
 
     def on_tray_activated(self, reason):
@@ -1158,6 +1156,12 @@ class MainWindow(QMainWindow):
                 self.show_window()
 
     def show_window(self):
+        # Restore geometry if available to fix size-loss on hiding
+        geom = self.config.get("window_geometry")
+        if geom:
+            from PyQt6.QtCore import QByteArray
+            self.restoreGeometry(QByteArray.fromHex(geom.encode()))
+
         self.show()
         self.raise_()
         self.activateWindow()
@@ -2011,6 +2015,9 @@ def main():
         sys.exit(0)
 
     app = QApplication(sys.argv)
+    app.setApplicationName("Audio Source Switcher")
+    app.setApplicationDisplayName("Audio Source Switcher")
+    app.setDesktopFileName("audio-source-switcher")
     
     # 1. Single Instance Check
     # Only if NOT running a connect command (we want to allow connect commands to run parallel/independent, 

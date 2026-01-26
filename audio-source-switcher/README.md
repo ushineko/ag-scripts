@@ -166,3 +166,14 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
 ## Configuration
 
 Device priority and settings are saved to `~/.config/audio-source-switcher/config.json`.
+
+## Changelog
+
+### v11.3
+- Added **About** menu item to the System Tray context menu.
+- Updated internal help text to reflect new CLI options.
+
+### v11.2
+- Fixed window size not being restored when opening from tray.
+- Fixed system tray icon label/tooltip.
+
