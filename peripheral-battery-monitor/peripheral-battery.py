@@ -3,6 +3,8 @@ import sys
 import signal
 import json
 import os
+import subprocess
+
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
@@ -78,17 +80,27 @@ class UpdateThread(QThread):
 
     def run(self):
         results = {}
-        # Fetch subprocess/async data in background. 
-        # Mouse check removed from here as it involves GObject/Solaar which may be unsafe in a thread.
         try:
-            results['kb'] = battery_reader.get_keyboard_battery()
-        except: pass
-        try:
-            results['headset'] = battery_reader.get_headset_battery()
-        except: pass
-        try:
-            results['airpods'] = battery_reader.get_airpods_battery()
-        except: pass
+            # Run the reader in a separate process to avoid resource leaks (DBus/asyncio)
+            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "battery_reader.py")
+            cmd = [sys.executable, script_path, "--json"]
+            
+            # Timeout to prevent hanging threads
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+            
+            if proc.returncode == 0:
+                raw_data = json.loads(proc.stdout)
+                
+                # Reconstruct BatteryInfo objects
+                for key, val in raw_data.items():
+                    if val is not None:
+                         # We need to handle the dict -> Object conversion
+                         # BatteryInfo is a dataclass, so we can unpack
+                         results[key] = battery_reader.BatteryInfo(**val)
+
+        except Exception as e:
+            # Log error?
+            pass
         
         self.data_ready.emit(results)
 
@@ -363,8 +375,8 @@ class PeripheralMonitor(QWidget):
         self.worker.start()
     
     def on_data_ready(self, results):
-        # 1. Update Mouse (Run in Main Thread to avoid GObject/DBus threading issues)
-        self.update_single_device(self.mouse_ui, battery_reader.get_mouse_battery, use_offline_cache=True)
+        # 1. Update Mouse - Now comes from results like everything else
+        self.update_single_device(self.mouse_ui, lambda: results.get('mouse'), use_offline_cache=True)
         
         # 2. Update Keyboard
         self.update_single_device(self.kb_ui, lambda: results.get('kb'), use_offline_cache=True)

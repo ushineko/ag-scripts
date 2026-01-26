@@ -18,6 +18,7 @@ This repository contains various utility scripts for system management and autom
 | `qbittorrent-vpn-wrapper/qbittorrent_vpn_wrapper.py` | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and a persistent "glued" status dashboard. |
 | `vpn-toggle/toggle_vpn.sh` | GUI-based script (kdialog/zenity) to toggle NetworkManager VPN connections, bounce them, or open settings. Ideal for hotkeys. |
 | `alacritty-maximizer/main.py` | PyQt6 GUI (bundled with an installer/launcher) to launch Alacritty windows fully maximized on specific monitors without titlebars. Manages KWin rules automatically. |
+| `kvm-setup/install.sh` | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions, and warns about VirtualBox coexistence. |
 
 ## Usage
 

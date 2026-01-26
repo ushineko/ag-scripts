@@ -1,8 +1,10 @@
 
 import sys
 import structlog
+import logging
+import json # Added explicit import if missing, though likely in sys already or implied
 from unittest.mock import MagicMock
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Optional
 import subprocess
 import os
@@ -535,7 +537,48 @@ def get_airpods_battery() -> Optional[BatteryInfo]:
             
     return None
 
+def get_all_batteries() -> dict:
+    results = {}
+    
+    # Mouse
+    m = get_mouse_battery()
+    if m: results['mouse'] = asdict(m)
+    
+    # Keyboard
+    k = get_keyboard_battery()
+    if k: results['kb'] = asdict(k)
+    
+    # Headset
+    h = get_headset_battery()
+    if h: results['headset'] = asdict(h)
+    
+    # AirPods
+    a = get_airpods_battery()
+    if a: results['airpods'] = asdict(a)
+    
+    return results
+
 if __name__ == "__main__":
+    # Ensure logs go to stderr so stdout is clean for JSON
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    if "--json" in sys.argv:
+        print(json.dumps(get_all_batteries()))
+        sys.exit(0)
+
     # Simple CLI test
     info = get_mouse_battery()
     if info:
