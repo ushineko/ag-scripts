@@ -33,9 +33,13 @@ To remove the packages and disable the service:
 ./uninstall.sh
 ```
 
-## Usage
+## Troubleshooting Network
 
-Launch **Virtual Machine Manager** from your application menu or run:
+If you have Docker or a strict firewall (like UFW) installed, it may block internet access for your VMs even if they have an IP address.
+
+To fix this, run the network fix script:
 ```bash
-virt-manager
+sudo ./fix_network.sh
 ```
+
+This script injects rules into the `DOCKER-USER` chain to allow KVM traffic without interfering with your Docker configuration.
