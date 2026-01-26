@@ -19,6 +19,7 @@ This repository contains various utility scripts for system management and autom
 | `vpn-toggle/toggle_vpn.sh` | GUI-based script (kdialog/zenity) to toggle NetworkManager VPN connections, bounce them, or open settings. Ideal for hotkeys. |
 | `alacritty-maximizer/main.py` | PyQt6 GUI (bundled with an installer/launcher) to launch Alacritty windows fully maximized on specific monitors without titlebars. Manages KWin rules automatically. |
 | `kvm-setup/install.sh` | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions, and warns about VirtualBox coexistence. |
+| `pinball-fx/configure_kwin.py` | "Window Fixer" utility for Pinball FX. Manually triggers KWin rules to force the game onto a portrait monitor. |
 
 ## Usage
 

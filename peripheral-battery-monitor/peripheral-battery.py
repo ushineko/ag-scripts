@@ -4,6 +4,8 @@ import signal
 import json
 import os
 import subprocess
+import faulthandler
+
 
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
@@ -97,10 +99,13 @@ class UpdateThread(QThread):
                          # We need to handle the dict -> Object conversion
                          # BatteryInfo is a dataclass, so we can unpack
                          results[key] = battery_reader.BatteryInfo(**val)
+            else:
+                log = structlog.get_logger()
+                log.error("reader_failed", returncode=proc.returncode, stderr=proc.stderr)
 
         except Exception as e:
-            # Log error?
-            pass
+            log = structlog.get_logger()
+            log.error("update_failed", error=str(e))
         
         self.data_ready.emit(results)
 
@@ -369,11 +374,25 @@ class PeripheralMonitor(QWidget):
         if self.worker and self.worker.isRunning():
             return
 
+    def update_status(self):
+        # Prevent overlap
+        if self.worker is not None:
+             # Just in case it's lingering but finished? 
+             # No, if it's not None it implies running or not cleaned up.
+             # We rely on on_worker_finished to clean it up.
+             return
+
         # Start worker thread
         self.worker = UpdateThread()
         self.worker.data_ready.connect(self.on_data_ready)
+        self.worker.finished.connect(self.on_worker_finished)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
     
+    def on_worker_finished(self):
+        # Safely clear the reference
+        self.worker = None
+
     def on_data_ready(self, results):
         # 1. Update Mouse - Now comes from results like everything else
         self.update_single_device(self.mouse_ui, lambda: results.get('mouse'), use_offline_cache=True)
@@ -390,10 +409,7 @@ class PeripheralMonitor(QWidget):
         self.setToolTip(f"Last updated: {self.format_time()}")
         self.adjustSize()
         
-        # Clean up worker
-        if self.worker:
-            self.worker.deleteLater()
-            self.worker = None
+        # NOTE: Cleanup is handled by finished signal now
 
     def update_single_device(self, ui_dict, func_to_call, use_offline_cache=True):
         try:
@@ -548,7 +564,26 @@ if __name__ == '__main__':
 
     debug_mode = "--debug" in sys.argv
     setup_logging(debug_mode)
+
+    # redirect stderr to file
+    stderr_path = os.path.expanduser("~/.local/state/peripheral-battery-monitor/stderr.log")
+    try:
+        stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        os.dup2(stderr_fd, 2)
+        # We don't close stderr_fd because 2 is now a copy of it, 
+        # but we can close the original descriptor if we want.
+        # Keeping it open is fine.
+    except Exception as e:
+        pass
     
+    # Fault Handler for hard crashes (SIGSEGV/SIGABRT)
+    crash_log_path = os.path.expanduser("~/.local/state/peripheral-battery-monitor/crash.log")
+    try:
+        crash_fd = open(crash_log_path, 'a')
+        faulthandler.enable(file=crash_fd, all_threads=True)
+    except Exception as e:
+        print(f"Failed to enable faulthandler: {e}", file=sys.stderr)
+
     log = structlog.get_logger()
     log.info("app_started", version=__version__, debug=debug_mode)
 

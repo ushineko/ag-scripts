@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Fix Pinball Window
+Comment=Force Pinball FX to Portrait Monitor (Run after launching game)
+Exec=/home/nverenin/git/ag-scripts/pinball-fx/configure_kwin.py
+Icon=dialog-ok-apply
+Terminal=false
+Type=Application
+Categories=Utility;
