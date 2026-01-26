@@ -23,4 +23,15 @@ fi
 echo "Removing KWin Rules..."
 python3 install_kwin_rule.py --uninstall
 
+# 3. Remove Data
+if [ -f "$HOME/.config/peripheral-battery-monitor.json" ]; then
+    rm "$HOME/.config/peripheral-battery-monitor.json"
+    echo "Removed configuration."
+fi
+
+if [ -d "$HOME/.local/state/peripheral-battery-monitor" ]; then
+    rm -rf "$HOME/.local/state/peripheral-battery-monitor"
+    echo "Removed logs."
+fi
+
 echo "Uninstallation complete."

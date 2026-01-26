@@ -21,6 +21,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - `headsetcontrol` (for Arctis headsets)
 - `bluez` (bluetoothctl)
 - `python-bleak` (for AirPods BLE scanning)
+- `python-structlog` (for structured logging)
 
 ## Quick Start
 1. Ensure your Logitech mouse is connected (Unifying/Bolt receiver) and Keychron keyboard is paired via **Bluetooth**.
@@ -36,3 +37,8 @@ python3 peripheral-battery.py
 # Or for troubleshooting:
 python3 peripheral-battery.py --debug
 ```
+
+## Logging
+Logs are automatically saved in JSON format for debugging:
+- **Location**: `~/.local/state/peripheral-battery-monitor/peripheral_battery.log`
+- **Rotation**: Keeps 1 backup file (Max 5MB).

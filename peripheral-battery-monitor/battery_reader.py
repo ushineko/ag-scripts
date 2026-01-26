@@ -1,6 +1,6 @@
 
 import sys
-import logging
+import structlog
 from unittest.mock import MagicMock
 from dataclasses import dataclass
 from typing import Optional
@@ -8,14 +8,7 @@ import subprocess
 import re
 import asyncio
 
-# Configure basic logging
-logging.basicConfig(level=logging.ERROR)
-
-DEBUG_MODE = False
-
-def set_debug_mode(enabled: bool):
-    global DEBUG_MODE
-    DEBUG_MODE = enabled
+log = structlog.get_logger()
 
 @dataclass
 class BatteryInfo:
@@ -70,16 +63,16 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
         try:
             from logitech_receiver import base, device, receiver
         except ImportError as e:
-             print(f"Error: Could not import solaar 'logitech_receiver' library even after mocking. Is solaar installed? Details: {e}", file=sys.stderr)
+             log.error("solaar_import_failed", error=str(e))
              return None
     except Exception as e:
          # Some other error during import (like the GI error we saw)
-         print(f"Initial import failed with: {e}. Retrying with mocks...", file=sys.stderr)
+         log.warning("initial_import_error", error=str(e))
          _setup_mocks()
          try:
             from logitech_receiver import base, device, receiver
          except ImportError as e:
-            print(f"Error checking devices after mocking: {e}", file=sys.stderr)
+            log.error("mock_import_failed", error=str(e))
             return None
 
     # Constants helper
@@ -113,7 +106,7 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
                 continue
                 
     except Exception as e:
-        print(f"Error checking devices: {e}", file=sys.stderr)
+        log.error("device_check_failed", error=str(e))
         return None
 
     return None
@@ -312,8 +305,7 @@ async def _ble_scan_for_airpods(target_mac=None):
     from bleak import BleakScanner
     
     async def scan():
-        if DEBUG_MODE:
-            print(f"DEBUG: Starting BLE Scan for AirPods... Target: {target_mac}")
+        log.debug("starting_ble_scan", target=target_mac)
         found_info = None
         
         # We need a way to stop scanning once found
@@ -330,13 +322,11 @@ async def _ble_scan_for_airpods(target_mac=None):
             hex_data = data.hex()
             
             if hex_data.startswith('0719'):
-                if DEBUG_MODE:
-                    print(f"DEBUG: Found Apple Type 0x07 from {device.address} Name: {device.name} (RSSI: {advertisement_data.rssi})")
-                    print(f"DEBUG: Raw Data: {hex_data}")
+                log.debug("found_apple_device", address=device.address, name=device.name, rssi=advertisement_data.rssi, raw=hex_data)
                 
                 # Check MAC match
                 if target_mac and device.address.upper() == target_mac.upper():
-                    if DEBUG_MODE: print("DEBUG: MATCHED TARGET MAC!")
+                    log.debug("matched_target_mac")
                 
                 try:
                     # Convert back to bytes for easier access
@@ -353,7 +343,9 @@ async def _ble_scan_for_airpods(target_mac=None):
                         b7 = raw[7]
                         case_val = b7 & 0x0F 
                         
-                        if DEBUG_MODE: print(f"DEBUG: Parsing Bytes - B6:0x{b6:02x} (L:{left_val}, R:{right_val}), B7:0x{b7:02x} (C:{case_val})")
+
+                        
+                        log.debug("parsing_bytes", b6=hex(b6), left=left_val, right=right_val, b7=hex(b7), case=case_val)
                         
                         # Helper to convert 0-10 to %
                         def to_percent(v):
@@ -385,7 +377,7 @@ async def _ble_scan_for_airpods(target_mac=None):
                             
                         # RSSI check to ensure it's OUR device. Relaxed to -85 per user request.
                         if advertisement_data.rssi > -85:
-                            if DEBUG_MODE: print(f"DEBUG: Strong Signal (>-85), accepting data. Level: {final_level} Details: {details}")
+                            log.debug("strong_signal", level=final_level, details=details)
                             found_info = BatteryInfo(
                                 level=final_level,
                                 status=status,
@@ -394,7 +386,7 @@ async def _ble_scan_for_airpods(target_mac=None):
                                 details=details
                             )
                         else:
-                            if DEBUG_MODE: print(f"DEBUG: Signal too weak ({advertisement_data.rssi} <= -85)")
+                            log.debug("weak_signal", rssi=advertisement_data.rssi)
                 except Exception:
                     pass
                 
@@ -414,7 +406,9 @@ async def _ble_scan_for_airpods(target_mac=None):
         await asyncio.sleep(5.0) 
         await scanner.stop()
         
-        if DEBUG_MODE: print(f"DEBUG: Scan finished. Result: {found_info}")
+        await scanner.stop()
+        
+        log.debug("scan_finished", result=found_info)
         return found_info
 
     return await scan()
@@ -459,7 +453,7 @@ def get_airpods_battery() -> Optional[BatteryInfo]:
 
     # 2. If Connected but no battery (or just paired), Try BLE Scan
     
-    if DEBUG_MODE: print(f"DEBUG: AirPods Logic - MAC: {mac}, BlueZ Connected: {is_connected}")
+    log.debug("airpods_logic", mac=mac, bluez_connected=is_connected)
 
     if mac:  
         try:

@@ -8,10 +8,70 @@ from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDi
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
 import battery_reader
+import structlog
+import logging.config
+import logging
 
 __version__ = "1.1.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
+
+def setup_logging(debug_mode=False):
+    log_file = os.path.expanduser("~/.local/state/peripheral-battery-monitor/peripheral_battery.log")
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    
+    logging.config.dictConfig({
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "json": {
+                "()": structlog.stdlib.ProcessorFormatter,
+                "processor": structlog.processors.JSONRenderer(),
+            },
+            "console": {
+                "()": structlog.stdlib.ProcessorFormatter,
+                "processor": structlog.dev.ConsoleRenderer(colors=True),
+            },
+        },
+        "handlers": {
+            "file": {
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": log_file,
+                "maxBytes": 5 * 1024 * 1024, # 5MB
+                "backupCount": 1,
+                "formatter": "json",
+                "level": "DEBUG",
+            },
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "console",
+                "level": "DEBUG" if debug_mode else "INFO",
+            },
+        },
+        "loggers": {
+            "": {
+                "handlers": ["file", "console"],
+                "level": "DEBUG",
+                "propagate": True,
+            },
+        }
+    })
+
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
 
 class UpdateThread(QThread):
     data_ready = pyqtSignal(dict)
@@ -132,8 +192,8 @@ class PeripheralMonitor(QWidget):
         init_icon = QIcon.fromTheme("battery-missing")
         icon_lbl.setPixmap(init_icon.pixmap(24, 24))
         
-        if battery_reader.DEBUG_MODE:
-            print(f"DEBUG: Initial icon set for {default_name}")
+        log = structlog.get_logger()
+        log.debug("initial_icon_set", device=default_name)
         
         val_lbl = QLabel("--%", self)
         val_lbl.setObjectName("ValueLabel")
@@ -461,10 +521,12 @@ if __name__ == '__main__':
         print("Another instance is already running.")
         sys.exit(1)
 
-    if "--debug" in sys.argv:
-        battery_reader.set_debug_mode(True)
-        print("Debug mode enabled via CLI.")
+    debug_mode = "--debug" in sys.argv
+    setup_logging(debug_mode)
     
+    log = structlog.get_logger()
+    log.info("app_started", version=__version__, debug=debug_mode)
+
     app = QApplication(sys.argv)
     app.setApplicationName("peripheral-battery-monitor")
     app.setDesktopFileName("peripheral-battery-monitor")
