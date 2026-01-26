@@ -48,11 +48,22 @@ def _setup_mocks():
         if module not in sys.modules:
              sys.modules[module] = MagicMock()
 
+_CACHED_MOUSE = None
+
 def get_mouse_battery() -> Optional[BatteryInfo]:
     """
     Attempts to retrieve battery information for the first found Logitech mouse.
     Returns BatteryInfo object or None if no mouse found.
     """
+    global _CACHED_MOUSE
+    
+    if _CACHED_MOUSE:
+        try:
+             log.debug("using_cached_mouse")
+             return _extract_battery(_CACHED_MOUSE)
+        except Exception as e:
+             log.warning("cached_mouse_failed_rescanning", error=str(e))
+             _CACHED_MOUSE = None
     
     # Try importing normally first
     try:
@@ -97,9 +108,13 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
                             if paired and paired.kind == 'mouse':
                                 # Found a mouse on this receiver
                                 # We prioritize the first mouse we find for now
+                                _CACHED_MOUSE = paired
+                                log.info("new_mouse_cached", device=paired.name)
                                 return _extract_battery(paired)
                 
                 if candidate and candidate.kind == 'mouse':
+                    _CACHED_MOUSE = candidate
+                    log.info("new_mouse_cached", device=candidate.name)
                     return _extract_battery(candidate)
 
             except Exception:
