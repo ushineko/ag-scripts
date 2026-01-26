@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from dataclasses import dataclass
 from typing import Optional
 import subprocess
+import os
 import re
 import asyncio
 
@@ -156,49 +157,91 @@ def _extract_battery(dev) -> Optional[BatteryInfo]:
 
 def get_keyboard_battery() -> Optional[BatteryInfo]:
     """
-    Attempts to retrieve battery information for a Keychron or HID keyboard via UPower.
+    Attempts to retrieve battery information for a Keychron or HID keyboard.
+    Prioritizes Wired check, then UPower (Bluetooth), then Input Device fallback (2.4G).
     """
     
+    # 1. Check Wired Connection (Keychron K4 HE: 3434:0e40)
     try:
-        # 1. Find the keyboard device path in UPower
-        # We look for a keyboard device. We know it's a 'keyboard' type in UPower.
-        enum_proc = subprocess.run(['upower', '-e'], capture_output=True, text=True)
-        if enum_proc.returncode != 0:
-            return None
-            
-        lines = enum_proc.stdout.strip().split('\n')
-        kb_path = None
-        for line in lines:
-            if 'keyboard' in line.lower():
-                # Prefer Keychron if multiple keyboards, but stick to first if not
-                kb_path = line.strip()
-                break
-        
-        if not kb_path:
-            return None
-            
-        # 2. Query the device info
-        info_proc = subprocess.run(['upower', '-i', kb_path], capture_output=True, text=True)
-        if info_proc.returncode != 0:
-            return None
-            
-        output = info_proc.stdout
-        
-        # Regex extraction
-        model_match = re.search(r'model:\s+(.*)', output)
-        level_match = re.search(r'percentage:\s+(\d+)%', output)
-        state_match = re.search(r'state:\s+(.*)', output)
-        
-        if level_match:
-            return BatteryInfo(
-                level=int(level_match.group(1)),
-                status=state_match.group(1).capitalize() if state_match else "Unknown",
-                voltage=None,
-                device_name=model_match.group(1).strip() if model_match else "Keyboard"
-            )
-            
+        # Iterate over USB devices in sysfs
+        usb_root = "/sys/bus/usb/devices"
+        if os.path.exists(usb_root):
+            for device in os.listdir(usb_root):
+                dev_path = os.path.join(usb_root, device)
+                try:
+                    with open(os.path.join(dev_path, "idVendor"), "r") as f:
+                        vid = f.read().strip()
+                    with open(os.path.join(dev_path, "idProduct"), "r") as f:
+                        pid = f.read().strip()
+                    
+                    if vid == "3434" and pid == "0e40":
+                        return BatteryInfo(
+                            level=-1, 
+                            status="Wired", 
+                            voltage=None, 
+                            device_name="Keychron K4 HE"
+                        )
+                except (FileNotFoundError, OSError):
+                    continue
     except Exception:
         pass
+
+    # 2. Check UPower (Bluetooth)
+    # Standard UPower check for battery service
+    try:
+        # We look for a keyboard device. We know it's a 'keyboard' type in UPower.
+        enum_proc = subprocess.run(['upower', '-e'], capture_output=True, text=True)
+        if enum_proc.returncode == 0:
+            lines = enum_proc.stdout.strip().split('\n')
+            kb_path = None
+            for line in lines:
+                if 'keyboard' in line.lower():
+                    # Prefer Keychron if multiple keyboards, but stick to first if not
+                    kb_path = line.strip()
+                    # If we find a Keychron in UPower, it's likely the Bluetooth one active
+                    if "keychron" in kb_path.lower():
+                         break
+            
+            if kb_path:
+                # Query the device info
+                info_proc = subprocess.run(['upower', '-i', kb_path], capture_output=True, text=True)
+                if info_proc.returncode == 0:
+                    output = info_proc.stdout
+                    
+                    # Regex extraction
+                    model_match = re.search(r'model:\s+(.*)', output)
+                    level_match = re.search(r'percentage:\s+(\d+)%', output)
+                    state_match = re.search(r'state:\s+(.*)', output)
+                    
+                    # Only return if we actually got a level (implies Bluetooth battery reporting)
+                    if level_match:
+                        return BatteryInfo(
+                            level=int(level_match.group(1)),
+                            status=state_match.group(1).capitalize() if state_match else "Unknown",
+                            voltage=None,
+                            device_name=model_match.group(1).strip() if model_match else "Keyboard"
+                        )
+    except Exception:
+        pass
+
+    # 3. Check Wireless/2.4G (Input Device Fallback)
+    # If not Wired and not Bluetooth (no UPower battery), but "Keychron" input device exists, assume 2.4G.
+    try:
+        with open("/proc/bus/input/devices", "r") as f:
+            content = f.read()
+            # Look for Keychron name (case insensitive)
+            if re.search(r'N: Name=".*Keychron.*"', content, re.IGNORECASE):
+                # We found the input device, but we fell through the Wired and UPower checks.
+                # Use a distinct status so UI can handle it.
+                return BatteryInfo(
+                    level=-1,
+                    status="Wireless", # Implies 2.4G
+                    voltage=None,
+                    device_name="Keychron K4 HE"
+                )
+    except Exception:
+        pass
+
     return None
 
 def get_headset_battery() -> Optional[BatteryInfo]:

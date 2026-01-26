@@ -1,11 +1,14 @@
 # Peripheral Battery Monitor
-Version 1.1.0
+Version 1.2.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals.
 
 ## Features
 - **Logitech Support**: Uses `solaar` libraries to fetch precise mouse battery levels.
-- **Keychron (Bluetooth) Support**: Uses `upower` to fetch paired keyboard battery levels.
+- **Keychron Support**:
+  - **Bluetooth**: Uses `upower` to fetch battery levels %.
+  - **Wired**: Detects USB connection and shows "Wired" status.
+  - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
 - **Arctis Headsets**: Uses `headsetcontrol` to fetch battery levels.
 - **AirPods Support**: Advanced BLE scanning to fetch granular battery levels for Left, Right, and Case. Supports disconnected monitoring.
 - **Wayland Compatible**: Uses system-native movement for dragging.

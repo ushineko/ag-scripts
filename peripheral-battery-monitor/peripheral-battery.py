@@ -12,7 +12,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -499,7 +499,20 @@ class PeripheralMonitor(QWidget):
             if is_offline:
                 status_text = "(Offline)"
                 
+            if status_text:
+                if status_text == "Wired":
+                    val_text = '<span style="color: #4caf50;">Wired</span>'
+                    icon_name = "input-keyboard" # Or plug icon
+                elif status_text == "Wireless":
+                    val_text = '<span style="color: #4caf50;">Wireless</span>'
+                    icon_name = "network-wireless"
+
             stat_lbl.setText(status_text)
+            
+            # If we overrode icon_name above, update it
+            if status_text in ["Wired", "Wireless"]:
+                 icon = QIcon.fromTheme(icon_name)
+                 icon_lbl.setPixmap(icon.pixmap(24, 24))
         else:
             name_lbl.setText(fallback_name)
             val_lbl.setText('<span style="color: gray;">--%</span>')
