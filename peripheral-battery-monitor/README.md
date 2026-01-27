@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.2.0
+Version 1.2.3
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals.
 
@@ -10,7 +10,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Wired**: Detects USB connection and shows "Wired" status.
   - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
 - **Arctis Headsets**: Uses `headsetcontrol` to fetch battery levels.
-- **AirPods Support**: Advanced BLE scanning to fetch granular battery levels for Left, Right, and Case. Supports disconnected monitoring.
+- **AirPods Support**: Advanced BLE scanning to fetch granular battery levels for Left, Right, and Case. Supports disconnected monitoring. Now with fallback logic and Case display!
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Auto-Remember**: KWin remembers the window position and screen between sessions.

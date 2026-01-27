@@ -384,9 +384,9 @@ async def _ble_scan_for_airpods(target_mac=None):
             if hex_data.startswith('0719'):
                 log.debug("found_apple_device", address=device.address, name=device.name, rssi=advertisement_data.rssi, raw=hex_data)
                 
-                # Check MAC match
-                if target_mac and device.address.upper() == target_mac.upper():
-                    log.debug("matched_target_mac")
+                # Check MAC match (Removed: MAC is randomized)
+                # if target_mac and device.address.upper() == target_mac.upper():
+                #     log.debug("matched_target_mac")
                 
                 try:
                     # Convert back to bytes for easier access
@@ -435,9 +435,8 @@ async def _ble_scan_for_airpods(target_mac=None):
                             final_level = c_pct
                             status = "Case Only"
                             
-                        # RSSI check to ensure it's OUR device. Relaxed to -85 per user request.
-                        if advertisement_data.rssi > -85:
-                            log.debug("strong_signal", level=final_level, details=details)
+                        if advertisement_data.rssi > -70:
+                            log.debug("strong_signal_candidate", level=final_level, details=details, rssi=advertisement_data.rssi, found_mac=device.address)
                             found_info = BatteryInfo(
                                 level=final_level,
                                 status=status,
@@ -446,14 +445,15 @@ async def _ble_scan_for_airpods(target_mac=None):
                                 details=details
                             )
                         else:
-                            log.debug("weak_signal", rssi=advertisement_data.rssi)
+                            log.debug("ignoring_weak_signal", rssi=advertisement_data.rssi, mac=device.address)
                 except Exception:
                     pass
                 
                 # Fallback if decoding failed but packet valid
                 if not found_info:
                     name = device.name or ""
-                    if "AirPods" in name or advertisement_data.rssi > -70:
+                    # Only accept generic match if signal is very strong
+                    if advertisement_data.rssi > -60:
                          found_info = BatteryInfo(
                             level=-1, 
                             status="Connected",

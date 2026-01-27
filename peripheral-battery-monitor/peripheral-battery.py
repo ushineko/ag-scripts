@@ -16,7 +16,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.2.0"
+__version__ = "1.2.3"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -415,29 +415,36 @@ class PeripheralMonitor(QWidget):
         try:
             current_info = func_to_call()
             
+            # Smart Fallback Logic for "Connected" but "--%" (Level -1)
+            if current_info and current_info.level == -1 and current_info.status == "Connected":
+                 last_known = ui_dict.get('last_info')
+                 if last_known and last_known.level >= 0:
+                     # Create a merged info object
+                     merged = battery_reader.BatteryInfo(
+                         level=last_known.level,
+                         status=current_info.status,
+                         voltage=last_known.voltage,
+                         device_name=current_info.device_name,
+                         details=last_known.details
+                     )
+                     current_info = merged
+            
             # If we got info, update last known.
-            if current_info:
+            if current_info and current_info.level >= 0:
                 ui_dict['last_info'] = current_info
             
             # Decide what info to pass to display logic
-            # If use_offline_cache is False and current_info is None, we act as if we have no info at all
-            # (ignoring last_info), effectively forcing "Disconnected" state.
             display_info = current_info
             last_valid = ui_dict['last_info']
             
             if use_offline_cache:
                 display_info = current_info or last_valid
-            else:
-                # If cache is disabled, we only show current info.
-                # However we still keep 'last_info' updated in case we toggle mode later? 
-                # Yes, we updated it above.
-                pass
             
             self._update_label_block(
                 ui_dict['name_lbl'], 
                 ui_dict['val_lbl'], 
                 ui_dict['stat_lbl'],
-                ui_dict['icon_lbl'], # Pass icon label
+                ui_dict['icon_lbl'], 
                 display_info, 
                 last_valid if use_offline_cache else None, 
                 ui_dict['default_name']
@@ -479,10 +486,11 @@ class PeripheralMonitor(QWidget):
             icon_lbl.setPixmap(icon.pixmap(24, 24))
             
             # Handle special "Unknown Level but Connected" state
+            # Handle special "Unknown Level but Connected" state
             if level == -1:
                 val_text = '<span style="color: #e0e0e0;">--%</span>' # Light gray/white for connected
-            elif info.details and ('left' in info.details or 'right' in info.details):
-                # We have L/R details
+            elif info.details and ('left' in info.details or 'right' in info.details or 'case' in info.details):
+                # We have L/R OR Case details
                 parts = []
                 if 'left' in info.details: 
                     l = info.details['left']
@@ -492,15 +500,14 @@ class PeripheralMonitor(QWidget):
                     r = info.details['right']
                     c_r = "#4caf50" if r > 20 else "#f44336"
                     parts.append(f'<span style="color:{c_r}">R:{r}%</span>')
+                if 'case' in info.details:
+                    c = info.details['case']
+                    c_c = "#4caf50" if c > 20 else "#f44336"
+                    parts.append(f'<span style="color:{c_c}">C:{c}%</span>')
                 
                 # Use a smaller font size for the combined string
                 joined = " ".join(parts)
-                val_text = f'<span style="font-size: 15px;">{joined}</span>'
-            elif info.details and 'case' in info.details:
-                # Only Case is known (e.g. earbuds in case/closed?)
-                c = info.details['case']
-                col = "#4caf50" if c > 20 else "#f44336"
-                val_text = f'<span style="color:{col}; font-size: 16px;">Case: {c}%</span>'
+                val_text = f'<span style="font-size: 13px;">{joined}</span>'
             else:
                 color = "#4caf50" if not is_offline else "#558b2f"
                 if level <= 20:

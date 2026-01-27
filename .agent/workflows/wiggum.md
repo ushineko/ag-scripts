@@ -8,6 +8,7 @@ description: Iteratively run, capture logs, and debug a program until a success 
         *   Does the program output logs to stdout/stderr?
         *   Does it support a `--debug` flag? Use it.
         *   **CRITICAL**: If the program is NOT amenable to log capturing (silent, no debug mode), you **MUST** modify the code first to add print/logging statements. Do not skip this.
+    *   **Artifact Restriction**: Do **NOT** generate artifacts (especially images, e.g., "computer monitor with text") unless explicitly requested by the user. Focus on code and logs.
 
 2.  **Clean Slate**:
     *   **Kill Existing Instances**: Before every run, ensure to kill any background instances or GUI processes of the target tool (e.g., `pkill -f my_script.py`) to ensure you are capturing the *new* run and not an old one.
@@ -25,6 +26,7 @@ description: Iteratively run, capture logs, and debug a program until a success 
         *   **Failure**:
             *   Analyze the logs to understand *why*.
             *   **Adjust**: Apply a fix to the code OR add *more* specific logging if the root cause is still hidden.
+            *   **Unit Test**. Once you understand the, write a unit test so the behavior can be tested and checked for regressions. Write the tests in pytest and keep them in a subdirectory in the project you are working on.
             *   **Loop**: Go back to **Clean Slate** and repeat.
 
 4.  **Finalization**:
