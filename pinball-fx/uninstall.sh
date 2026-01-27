@@ -1,5 +1,6 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST_DESKTOP="$HOME/.local/share/applications/PinballFixer.desktop"
 ICON_DEST="$HOME/.local/share/icons/hicolor/256x256/apps/pinball-fx.png"
 

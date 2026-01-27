@@ -10,7 +10,9 @@ APP_NAME = "Pinball FX"
 WM_CLASS = "PinballFX" # Substring match
 RULE_DESCRIPTION = "Pinball FX Portrait Mode"
 
-def get_portrait_screen_info():
+def get_connected_screens():
+    """Returns a list of tuples: (screen_index, width, height, x, y, is_portrait)"""
+    screens_info = []
     try:
         from PyQt6.QtWidgets import QApplication
         if not QApplication.instance():
@@ -21,14 +23,36 @@ def get_portrait_screen_info():
         screens = app.screens()
         for i, screen in enumerate(screens):
             geo = screen.geometry()
-            # Check for portrait (Height > Width)
-            if geo.height() > geo.width():
-                print(f"Found Portrait Monitor: Screen {i} ({geo.width()}x{geo.height()} at {geo.x()},{geo.y()})")
-                return i, geo.x(), geo.y()
+            is_portrait = geo.height() > geo.width()
+            screens_info.append((i, geo.width(), geo.height(), geo.x(), geo.y(), is_portrait))
     except ImportError:
-        print("PyQt6 not found. Cannot auto-detect screen index.")
+        print("PyQt6 not found. Cannot detect screens via Python.")
+        # Fallback could be implemented here (e.g. xrandr parsing), but PyQt6 is expected.
+    return screens_info
+
+def select_screen_menu(screens_info):
+    """Shows a kdialog menu to select a screen."""
+    if not screens_info:
+        return None
+
+    menu_args = ["kdialog", "--title", "Pinball FX Screen Switcher", "--menu", "Select Monitor for Pinball FX:"]
     
-    return None, None, None
+    for s in screens_info:
+        idx, w, h, x, y, portrait = s
+        orientation = "Portrait" if portrait else "Landscape"
+        description = f"Screen {idx}: {w}x{h} ({orientation})"
+        # Key is just the index as string
+        menu_args.extend([str(idx), description])
+
+    # Add Uninstall option
+    menu_args.extend(["UNINSTALL", "Disable/Uninstall Rule"])
+
+    try:
+        result = subprocess.run(menu_args, capture_output=True, text=True, check=True)
+        selection = result.stdout.strip()
+        return selection
+    except subprocess.CalledProcessError:
+        return None # User cancelled
 
 def run_kwin_reconfigure():
     commands = [
@@ -45,12 +69,14 @@ def run_kwin_reconfigure():
             continue
     print("Warning: Could not reload KWin configuration automatically.")
 
-def install_rule():
-    screen_idx, x, y = get_portrait_screen_info()
-    if screen_idx is None:
-        print("No portrait monitor found or PyQt6 missing. Skipping auto-rule creation.")
-        print("Please manually configure KWin rule for screen targeting.")
+def install_rule(screen_index, screens_info):
+    # Find screen info
+    target_screen = next((s for s in screens_info if str(s[0]) == screen_index), None)
+    if not target_screen:
+        print("Invalid screen selection.")
         return
+
+    idx, w, h, x, y, portrait = target_screen
 
     config_path = Path.home() / ".config" / "kwinrulesrc"
     config = configparser.ConfigParser(strict=False)
@@ -73,7 +99,8 @@ def install_rule():
     target_section = None
     for section in rules_list:
         if section in config:
-            if config[section].get('wmclass') == WM_CLASS and config[section].get('Description') == RULE_DESCRIPTION:
+            # Only check Description as wmclass might be a regex now
+            if config[section].get('Description') == RULE_DESCRIPTION:
                 target_section = section
                 break
     
@@ -105,20 +132,22 @@ def install_rule():
     if 'title' in rule: del rule['title']
     if 'titlematch' in rule: del rule['titlematch']
     
-    # Position Rule (More reliable than Screen rule)
+
+    # Position Rule
     rule['position'] = f"{x},{y}"
-    rule['positionrule'] = '4' # Apply Initially
+    rule['positionrule'] = '2' # Force (Apply Now & Lock)
     
-    # Size Rule (Maximize) - handled by fullscreen, but good backup?
-    # rule['maximizevert'] = 'true'
-    # rule['maximizevertrule'] = '4'
-    # rule['maximizehoriz'] = 'true'
-    # rule['maximizehorizrule'] = '4'
+    # Size Rule
+    rule['size'] = f"{w},{h}"
+    rule['sizerule'] = '2' # Force
 
     # Fullscreen Rule
     rule['fullscreen'] = 'true'
-    rule['fullscreenrule'] = '4' # Apply Initially (changed from Force '2' to allow user to exit if needed, or maybe '2' is better?)
-    # Let's stick to '4' (Apply Initially) for fullscreen too if we trust position.
+    rule['fullscreenrule'] = '2' # Force
+    
+    # Nborder Rule (Ensure no decorations)
+    rule['noborder'] = 'true'
+    rule['noborderrule'] = '2' # Force
     
     # Remove old screen rule if it exists as we replace it with position
     if 'screen' in rule: del rule['screen']
@@ -127,7 +156,7 @@ def install_rule():
     try:
         with open(config_path, 'w') as f:
             config.write(f, space_around_delimiters=False)
-        print("Successfully wrote KWin rule.")
+        print(f"Successfully wrote KWin rule for Screen {idx} at {x},{y}.")
         run_kwin_reconfigure()
     except Exception as e:
         print(f"Failed to write config: {e}")
@@ -164,9 +193,37 @@ def uninstall_rule():
             config.write(f, space_around_delimiters=False)
         print("Removed KWin rule.")
         run_kwin_reconfigure()
+    else:
+        print("No existing rule found to remove.")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--uninstall":
+    import argparse
+    parser = argparse.ArgumentParser(description="Configure KWin rules for Pinball FX.")
+    parser.add_argument("--uninstall", action="store_true", help="Uninstall the KWin rule.")
+    parser.add_argument("--screen", type=str, help="Manually select screen index (0, 1, etc.)")
+    args = parser.parse_args()
+
+    if args.uninstall:
         uninstall_rule()
     else:
-        install_rule()
+        screens = get_connected_screens()
+        if not screens:
+            print("Could not detect screens.")
+            sys.exit(1)
+
+        selection = None
+        if args.screen:
+            selection = args.screen
+            # Verify selection logic
+            if not any(str(s[0]) == selection for s in screens):
+                print(f"Error: Screen {selection} not found.")
+                sys.exit(1)
+        else:
+            selection = select_screen_menu(screens)
+        
+        if selection == "UNINSTALL":
+            uninstall_rule()
+        elif selection is not None:
+             install_rule(selection, screens)
+        else:
+            print("Cancelled.")
