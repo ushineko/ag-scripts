@@ -12,7 +12,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QIcon, QFont
 
 # --- configuration ---
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 VPN_CONNECTION_NAME = "us_las_vegas-aes-128-cbc-udp-dns"
 EXPECTED_CITY = "Las Vegas"
 EXPECTED_REGION = "Nevada"
@@ -230,24 +230,35 @@ class MonitorWorker(QThread):
 
     def verify_ip(self):
         self.log_signal.emit("Verifying public IP location...")
-        try:
-            resp = requests.get("http://ip-api.com/json", timeout=15)
-            data = resp.json()
-            city = data.get("city", "Unknown")
-            region = data.get("regionName", "Unknown")
-            query_ip = data.get("query", "Unknown")
-            
-            self.log_signal.emit(f"Detected IP: {query_ip} | Location: {city}, {region}")
-            
-            if EXPECTED_CITY in city or EXPECTED_REGION in region:
-                self.log_signal.emit("Location verification PASSED.")
-                return True
-            else:
-                self.log_signal.emit(f"Location verification FAILED. Expected {EXPECTED_CITY}/{EXPECTED_REGION}.")
-                return False
-        except Exception as e:
-            self.log_signal.emit(f"Error during IP verification: {e}")
-            return False
+        
+        # Retry parameters
+        max_retries = 3
+        wait_seconds = 5
+        
+        for attempt in range(max_retries):
+            if attempt > 0:
+                self.log_signal.emit(f"Retry {attempt}/{max_retries-1} in {wait_seconds}s...")
+                time.sleep(wait_seconds)
+                
+            try:
+                resp = requests.get("http://ip-api.com/json", timeout=15)
+                data = resp.json()
+                city = data.get("city", "Unknown")
+                region = data.get("regionName", "Unknown")
+                query_ip = data.get("query", "Unknown")
+                
+                self.log_signal.emit(f"Detected IP: {query_ip} | Location: {city}, {region}")
+                
+                if EXPECTED_CITY in city or EXPECTED_REGION in region:
+                    self.log_signal.emit("Location verification PASSED.")
+                    return True
+                else:
+                    self.log_signal.emit(f"Location verification FAILED. Expected {EXPECTED_CITY}/{EXPECTED_REGION}.")
+            except Exception as e:
+                self.log_signal.emit(f"Error during IP verification: {e}")
+        
+        self.log_signal.emit("All IP verification attempts failed.")
+        return False
 
     def start_qbittorrent(self):
         # Check if already running
@@ -663,7 +674,9 @@ class MainWindow(QMainWindow):
 
 
     def append_log(self, text):
-        self.log_area.append(f"[{time.strftime('%H:%M:%S')}] {text}")
+        msg = f"[{time.strftime('%H:%M:%S')}] {text}"
+        self.log_area.append(msg)
+        print(msg)
         
     def update_status(self, state, detail):
         self.lbl_status.setText(f"Status: {state}")
