@@ -12,6 +12,7 @@ venv/
 # System
 .DS_Store
 Thumbs.db
+*.log
 
 # IDEs
 .vscode/
