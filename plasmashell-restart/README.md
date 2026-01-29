@@ -1,25 +1,42 @@
 # Plasmashell Restart
 
-A simple script to restart the KDE Plasma shell without logging out. This is useful when desktop widgets, panels, or the wallpaper get stuck or stop updating.
+**Version 1.1.0**
+
+A script to restart or refresh the KDE Plasma shell without logging out. Useful when desktop widgets, panels, or the taskbar get stuck or stop responding.
 
 ## Usage
 
-Run the restart script:
-
 ```bash
+# Full restart (default) - restarts plasmashell via systemd
 ./restart.sh
+
+# Light refresh - refreshes shell via D-Bus without process restart
+./restart.sh --refresh
 ```
 
-Or call it directly if you're in the directory.
+### Options
+
+| Option | Description |
+| :----- | :---------- |
+| `-r`, `--refresh` | Light refresh via D-Bus (no process restart) |
+| `-f`, `--full` | Full restart via systemd (default) |
+| `-h`, `--help` | Show help message |
+| `-v`, `--version` | Show version |
 
 ## What it does
 
-1.  Attempts to gracefully quit `plasmashell` using `kquitapp6` (or `kquitapp5`).
-2.  Falls back to `killall plasmashell` if graceful exit fails.
-3.  Waits a brief moment.
-4.  Restarts `plasmashell` using `kstart`.
+### Full Restart (default)
+1. Uses `systemctl --user restart plasma-plasmashell.service` for proper D-Bus registration
+2. Falls back to legacy `kquitapp6`/`kquitapp5` + `kstart` if systemd service is unavailable
+3. Verifies the service started successfully
+
+### Light Refresh
+1. Sends a D-Bus message to refresh the shell in-place
+2. No process restart required - faster for minor visual glitches
 
 ## Requirements
 
-- KDE Plasma 5 or 6
-- `kstart` (part of kde-cli-tools or similar package depending on distro)
+- KDE Plasma 6
+- systemd (recommended) or `kstart` (fallback)
+
+*Note: Contains fallback code for older setups, but only Plasma 6 is tested.*
