@@ -9,6 +9,7 @@ description: Iteratively run, capture logs, and debug a program until a success 
         *   Does it support a `--debug` flag? Use it.
         *   **CRITICAL**: If the program is NOT amenable to log capturing (silent, no debug mode), you **MUST** modify the code first to add print/logging statements. Do not skip this.
     *   **Artifact Restriction**: Do **NOT** generate artifacts (especially images, e.g., "computer monitor with text") unless explicitly requested by the user. Focus on code and logs.
+    * For scripts that use python, make sure we are using the system python /usr/bin/python or /usr/bin/python3, NOT any other python (such as miniforge3).
 
 2.  **Clean Slate**:
     *   **Kill Existing Instances**: Before every run, ensure to kill any background instances or GUI processes of the target tool (e.g., `pkill -f my_script.py`) to ensure you are capturing the *new* run and not an old one.

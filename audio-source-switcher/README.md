@@ -6,6 +6,10 @@ A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to ma
 
 - **Smart Device List**: Shows PulseAudio sinks and Bluetooth devices in a unified list.
 - **Priority Auto-Switching**: Drag-and-drop devices to reorder. The app automatically switches to the highest-priority connected device.
+- **Microphone Association**: 
+    - Automatically switch inputs when changing outputs.
+    - **Link Microphone**: Manually link specific mics to specific outputs (e.g. use "Yeti Nano" when "Speakers" are active).
+    - **Auto Mode**: Intelligently matches Bluetooth/USB devices (e.g. AirPods Output -> AirPods Mic).
 - **Offline Management**: Remembers devices even when they are disconnected, allowing you to maintain your priority order.
 - **Improved Bluetooth Support**:
     - Connect/Disconnect directly from the UI.
@@ -15,15 +19,10 @@ A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to ma
     - Supports **SteelSeries Arctis Nova Pro Wireless**.
     - Displays battery percentage (e.g., `[87%]`) when connected via USB.
     - Detects "disconnected" state correctly (when powered off) to allow auto-switching to speakers.
+    - **Idle Control**: Configure "Disconnect on Idle" timeout (1-90 mins) directly from the UI to save battery.
 - **System Tray**:
     - Minimizes to tray on close.
-    - Minimizes to tray on close.
     - Notifications on auto-switch (via `notify-send`).
-- **Line-In Management**:
-    -   **Loopback Toggle**: Easily enable/disable the "Listen to this device" behavior for your system's Line-In (e.g., console audio input) via a checkbox. Refreshes status automatically.
-- **Volume Control (New in 11.1)**:
-    -   Integrated slider controls the **Active Hardware Volume**.
-    -   Smart logic bypasses JamesDSP clamping, giving you full 0-100% control while keeping effects active.
 
 ## Audio Routing & JamesDSP Integration
 
@@ -168,6 +167,15 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
 Device priority and settings are saved to `~/.config/audio-source-switcher/config.json`.
 
 ## Changelog
+
+### v11.5
+- **Microphone Association**: Added context menu option to link specific microphones to output devices.
+- **Smart Mic Switching**: Automatically switches input device when output changes.
+- **Bluetooth Names**: Fixed issue where some Bluetooth mics showed as `(null)`.
+
+### v11.4
+- Added **Headset Settings** section.
+- Added **Disconnect on Idle** configuration for SteelSeries Arctis headphones (requires `headsetcontrol`).
 
 ### v11.3
 - Added **About** menu item to the System Tray context menu.

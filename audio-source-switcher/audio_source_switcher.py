@@ -8,7 +8,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QListWidget, QListWidgetItem, QPushButton, QCheckBox, 
                              QLabel, QMessageBox, QGroupBox, QHBoxLayout,
                              QAbstractItemView, QSystemTrayIcon, QMenu, QDialog, 
-                             QTextBrowser, QDialogButtonBox, QSlider)
+                             QTextBrowser, QDialogButtonBox, QSlider, QSpinBox, 
+                             QComboBox)
 from PyQt6.QtCore import QTimer, Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIcon, QAction
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
@@ -49,13 +50,16 @@ class ConfigManager:
 
     def load_config(self):
         if not os.path.exists(self.config_file):
-            return {"device_priority": [], "auto_switch": False}
+            return {"device_priority": [], "auto_switch": False, "arctis_idle_minutes": 0, "mic_links": {}}
         try:
             with open(self.config_file, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                # Ensure defaults
+                if "mic_links" not in data: data["mic_links"] = {}
+                return data
         except Exception as e:
             print(f"Error loading config: {e}")
-            return {"device_priority": [], "auto_switch": False}
+            return {"device_priority": [], "auto_switch": False, "arctis_idle_minutes": 0, "mic_links": {}}
 
     def save_config(self, data):
         try:
@@ -93,6 +97,26 @@ class HeadsetController:
             return None
         except Exception:
             return None
+    
+    @staticmethod
+    def set_inactive_time(minutes):
+        """
+        Sets the inactive time (disconnect on idle).
+        minutes: 0 to disable, or 1-90.
+        """
+        try:
+            # headsetcontrol -i <minutes>
+            subprocess.run(
+                ['headsetcontrol', '-i', str(minutes)],
+                capture_output=True, text=True, check=True
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Error setting inactive time: {e}")
+            return False
+        except Exception as e:
+            print(f"Unexpected error setting inactive time: {e}")
+            return False
 
 class AudioController:
     """Handles interactions with the system audio via pactl."""
@@ -221,7 +245,8 @@ class AudioController:
                 'priority_id': priority_id, # for config/ordering
                 'display_name': display_name,
                 'is_default': (name == default_sink),
-                'connected': not ("[Disconnected]" in display_name) # Used for graying out
+                'connected': not ("[Disconnected]" in display_name), # Used for graying out
+                'properties': props # Store properties for Mic association logic
             })
         return sinks
 
@@ -315,6 +340,108 @@ class AudioController:
         elif not enable and is_loaded:
             print(f"Unloading loopback module {module_id}")
             self.run_command(['pactl', 'unload-module', module_id])
+
+    def get_sources(self, bt_cache=None):
+        """Returns a list of source dicts."""
+        json_output = self.run_command(['pactl', '--format=json', 'list', 'sources'])
+        if not json_output: return []
+        
+        try:
+            sources_data = json.loads(json_output)
+        except json.JSONDecodeError:
+            return []
+
+        sources = []
+        for src in sources_data:
+            name = src.get('name', '')
+            # Skip monitors usually? 
+            # Users rarely want to use a monitor as a mic, except for streaming loopback.
+            # But let's filter monitors of JamesDSP or Null sinks to avoid clutter?
+            # Actually, "Monitor of..." is determined by 'monitor' class usually or having 'monitor' in name?
+            # 'pactl' returns 'device.class' = 'monitor' property.
+            props = src.get('properties', {})
+            if props.get('device.class') == 'monitor':
+                continue
+            
+            display_name = ""
+            
+            # 1. Try BT Cache/Alias for Sources too
+            if 'bluez' in name or props.get('device.api') == 'bluez':
+                mac_match = re.search(r'([0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2})', name, re.IGNORECASE)
+                if mac_match:
+                    mac = mac_match.group(1).replace('_', ':').upper()
+                    if bt_cache and mac in bt_cache:
+                        display_name = bt_cache[mac]
+
+            if not display_name:
+                display_name = props.get('device.description', '')
+                
+            # Cleanup "(null)" garbage
+            if display_name:
+                display_name = display_name.replace("(null)", "").strip()
+            
+            # Smart Naming (similar to Sinks)
+            if not display_name:
+                vendor = props.get('device.vendor.name', '')
+                product = props.get('device.product.name', props.get('device.model', ''))
+                if vendor and product:
+                    display_name = f"{vendor} {product}"
+            
+            if not display_name:
+                 display_name = name
+            
+            sources.append({
+                'name': name,
+                'display_name': display_name,
+                'properties': props
+            })
+        return sources
+
+    def set_default_source(self, source_name):
+        self.run_command(['pactl', 'set-default-source', source_name])
+    
+    def find_associated_source(self, sink_props, sources):
+        """
+        Tries to find a source that matches the sink properties (Same Card / Serial).
+        """
+        sink_card = sink_props.get('alsa.card')
+        sink_serial = sink_props.get('device.serial')
+        sink_bus = sink_props.get('device.bus_path') # USB bus path is very specific matching
+        sink_bluez_addr = sink_props.get('api.bluez5.address')
+        sink_device_name = sink_props.get('device.name')
+
+        # 1. Try BlueZ Address (Bluetooth)
+        if sink_bluez_addr:
+             for src in sources:
+                 if src['properties'].get('api.bluez5.address') == sink_bluez_addr:
+                     return src
+
+        # 2. Try Serial Match (Strongest for USB usually, but fails for BlueZ)
+        if sink_serial:
+            for src in sources:
+                if src['properties'].get('device.serial') == sink_serial:
+                    return src
+        
+        # 3. Try Bus Path (Next Strongest - e.g. same USB port/hub)
+        if sink_bus:
+            for src in sources:
+                if src['properties'].get('device.bus_path') == sink_bus:
+                    return src
+
+        # 4. Try Device Name (Card Name) - often shared between Sink/Source of same card
+        if sink_device_name:
+             for src in sources:
+                 # Note: device.name for sink might be 'bluez_card.X' and source also 'bluez_card.X'
+                 if src['properties'].get('device.name') == sink_device_name:
+                     return src
+
+        # 5. Try ALSA Card Index (Weakest? Card index can change, but usually paired)
+        if sink_card:
+            for src in sources:
+                if src['properties'].get('alsa.card') == sink_card:
+                    return src
+                    
+        return None
 
 class BluetoothController:
     """Handles interaction with bluetoothctl."""
@@ -798,6 +925,31 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.refresh_btn)
         
         main_layout.addWidget(controls_group)
+        
+        # --- Headset Settings Section ---
+        self.headset_group = QGroupBox("Headset Settings")
+        headset_layout = QVBoxLayout()
+        self.headset_group.setLayout(headset_layout)
+        
+        h_layout = QHBoxLayout()
+        
+        self.idle_cb = QCheckBox("Disconnect on Idle")
+        self.idle_cb.toggled.connect(self.on_idle_toggled)
+        h_layout.addWidget(self.idle_cb)
+        
+        self.idle_spin = QSpinBox()
+        self.idle_spin.setRange(1, 90)
+        self.idle_spin.setSuffix(" min")
+        self.idle_spin.setValue(10) # Default
+        self.idle_spin.valueChanged.connect(self.on_idle_spin_changed)
+        h_layout.addWidget(self.idle_spin)
+        
+        headset_layout.addLayout(h_layout)
+        
+        main_layout.addWidget(self.headset_group)
+        
+        # Initialize Headset UI State
+        self.init_headset_ui()
 
         # Timer
         self.timer = QTimer()
@@ -1112,7 +1264,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 11.3</b></p>
+            <p><b>Version 11.5</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
@@ -1123,6 +1275,20 @@ class MainWindow(QMainWindow):
             <li><b>Switch Output:</b> Double-click a device in the list to switch audio to it.</li>
             <li><b>Priority:</b> Drag and drop devices to reorder them. If <i>"Auto-switch"</i> is checked, the app will automatically switch to the highest-priority connected device.</li>
             <li><b>Bluetooth:</b> Click "Connect" to pair/connect to a selected device. Offline devices can be auto-connected by double-clicking them in the main list.</li>
+            <li><b>Mic Association:</b> Right-click a device to Link a specific Microphone to it (or use Auto mode).</li>
+        </ul>
+
+        <h3>🎤 Microphone Association</h3>
+        <p>Automatically switch input devices when changing outputs:</p>
+        <ul>
+            <li><b>Link Mic:</b> Right-click an output device in the list and select <b>"Link Microphone..."</b> to choose which input should be activated when this output is selected.</li>
+            <li><b>Auto-Link:</b> By default (Auto), the app tries to match the input device belonging to the same hardware (e.g., switching to AirPods Output also switches to AirPods Mic).</li>
+        </ul>
+
+        <h3>🎧 Arctis Headset Control</h3>
+        <p>If a SteelSeries Arctis headset is detected:</p>
+        <ul>
+             <li><b>Disconnect on Idle:</b> Automatically turn off the headset to save battery when no audio is playing for a set duration. Configure the timeout (1-90 mins) in the standard settings area.</li>
         </ul>
 
         <h3>🔊 JamesDSP Integration</h3>
@@ -1701,6 +1867,61 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Line-In Source Not Found")
             self.loopback_cb.setChecked(False)
 
+    def init_headset_ui(self):
+        # Load config
+        minutes = self.config.get("arctis_idle_minutes", 0)
+        
+        # Block signals during init
+        self.idle_cb.blockSignals(True)
+        self.idle_spin.blockSignals(True)
+        
+        if minutes > 0:
+            self.idle_cb.setChecked(True)
+            self.idle_spin.setEnabled(True)
+            self.idle_spin.setValue(minutes)
+        else:
+            self.idle_cb.setChecked(False)
+            self.idle_spin.setEnabled(False)
+            # keep spin value at previous or default 10
+        
+        self.idle_cb.blockSignals(False)
+        self.idle_spin.blockSignals(False)
+        
+        # Check availability
+        # We only enable the group if we detect an Arctis headset?
+        # Or we let it be available but only apply if connected.
+        # Ideally, we check presence.
+        status = self.audio.headset.get_battery_status()
+        self.headset_group.setEnabled(status is not None)
+        if status is None:
+             self.headset_group.setTitle("Headset Settings (Not Detected)")
+        else:
+             self.headset_group.setTitle("Headset Settings")
+
+    def on_idle_toggled(self, checked):
+        self.idle_spin.setEnabled(checked)
+        self.apply_idle_settings()
+
+    def on_idle_spin_changed(self, value):
+        self.apply_idle_settings()
+
+    def apply_idle_settings(self):
+        minutes = 0
+        if self.idle_cb.isChecked():
+            minutes = self.idle_spin.value()
+        
+        # Save to config
+        self.config["arctis_idle_minutes"] = minutes
+        self.config_mgr.save_config(self.config)
+        
+        # Apply
+        success = self.audio.headset.set_inactive_time(minutes)
+        if success:
+            state = f"{minutes} min" if minutes > 0 else "Disabled"
+            self.status_label.setText(f"Headset Idle: {state}")
+        else:
+            self.status_label.setText("Error applying headset settings.")
+
     def refresh_loopback_ui(self):
         source = self.audio.get_line_in_source()
         if not source:
@@ -1762,19 +1983,79 @@ class MainWindow(QMainWindow):
                     self.audio.move_input_streams(sink_name)
 
         else:
-            # Standard Switch
-            self.audio.set_default_sink(sink_name)
-            if self.move_streams_cb.isChecked():
                 self.audio.move_input_streams(sink_name)
+
+        # --- Microphone Association Logic ---
+        # 1. Look up config
+        mic_links = self.config.get("mic_links", {})
+        
+        # Identify priority_id for this sink_name (need to reverse lookup or have passed it)
+        # We passed display_text, can we get ID? 
+        # Better: caller probably has ID. 
+        # But for now let's lookup in sinks list (this is slightly inefficient re-fetch but safe)
+        
+        # Note: this re-fetch might be needed anyway to get properties if we didn't pass them
+        p_id = None
+        sink_props = {}
+        
+        # Optimization: Try to find ID from known list in memory logic? 
+        # We just refreshed sinks recently in most cases.
+        bt_map = {d['mac']: d['name'] for d in self.cache_bt_devices}
+        current_sinks = self.audio.get_sinks(bt_map)
+        
+        for s in current_sinks:
+             if s['name'] == sink_name:
+                 p_id = s['priority_id']
+                 sink_props = s.get('properties', {})
+                 break
+        
+        target_source_name = None
+        mic_msg = ""
+        
+        if p_id:
+            link_cfg = mic_links.get(p_id, "default") # Default is "Auto" effectively if not set? No, verify requirements.
+            # Actually default behavior should be "Auto" or "None"? 
+            # User request: "associate... so input is switched too". Implies defaults to some logic.
+            # Plan says: "Default... try to automatically find".
+            
+            # If not in config, treat as "auto"
+            if p_id not in mic_links:
+                link_cfg = "auto"
+            
+            if link_cfg == "default":
+                 # Do not touch mic (System Default behavior)
+                 pass
+            
+            elif link_cfg == "auto":
+                 # Auto Match
+                 sources = self.audio.get_sources(bt_map)
+                 matched = self.audio.find_associated_source(sink_props, sources)
+                 if matched:
+                     target_source_name = matched['name']
+                     mic_msg = f" + Mic: {matched['display_name']}"
+            
+            else:
+                 # Specific Source Name
+                 target_source_name = link_cfg
+                 # Verify it exists/get display name
+                 sources = self.audio.get_sources(bt_map)
+                 for src in sources:
+                     if src['name'] == target_source_name:
+                         mic_msg = f" + Mic: {src['display_name']}"
+                         break
+                     
+        if target_source_name:
+             print(f"Switching Mic to: {target_source_name}")
+             self.audio.set_default_source(target_source_name)
 
         # PA race condition fix: Wait for state to propagate before reading it back
         QTimer.singleShot(150, self.refresh_sinks_ui)
         
         clean_text = display_text.replace(" (Active)", "")
-        self.status_label.setText(f"Switched to: {clean_text}")
+        self.status_label.setText(f"Switched to: {clean_text}{mic_msg}")
         
         # System Notification
-        self.send_notification("Audio Switched", f"Active Device: {clean_text}")
+        self.send_notification("Audio Switched", f"Output: {clean_text}\nInput: {mic_msg.replace(' + Mic: ', '') if mic_msg else 'Unchanged'}")
 
     def get_selected_bt_mac(self):
         item = self.bt_list.currentItem()
@@ -1922,12 +2203,71 @@ class MainWindow(QMainWindow):
         item = self.sink_list.itemAt(pos)
         if not item: return
         
+        if not item: return
+        
         menu = QMenu()
+        
+        # Link Mic Action
+        link_mic_action = QAction("Link Microphone...", self)
+        link_mic_action.triggered.connect(lambda: self.show_link_mic_dialog(item))
+        menu.addAction(link_mic_action)
+        
+        menu.addSeparator()
+
         copy_cmd_action = QAction("Copy Hotkey Command", self)
         copy_cmd_action.triggered.connect(lambda: self.copy_switch_command(item))
         menu.addAction(copy_cmd_action)
         
         menu.exec(self.sink_list.mapToGlobal(pos))
+
+    def show_link_mic_dialog(self, item):
+        priority_id = item.data(Qt.ItemDataRole.UserRole)
+        display_name = item.text().replace("✅ ", "")
+        
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Link Microphone")
+        dlg.resize(400, 150)
+        
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel(f"When switching to output: <b>{display_name}</b>"))
+        layout.addWidget(QLabel("Automatically switch input (Mic) to:"))
+        
+        combo = QComboBox()
+        combo.addItem("Auto (Match Device)", "auto")
+        combo.addItem("Don't Switch (Keep Current)", "default")
+        combo.insertSeparator(2)
+        
+        # Load Sources with BT Cache
+        bt_map = {d['mac']: d['name'] for d in self.cache_bt_devices}
+        sources = self.audio.get_sources(bt_map)
+        
+        for src in sources:
+            combo.addItem(src['display_name'], src['name'])
+            
+        # Set Current Selection
+        current_link = self.config.get("mic_links", {}).get(priority_id, "auto")
+        
+        index = combo.findData(current_link)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        
+        layout.addWidget(combo)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_val = combo.currentData()
+            
+            # Save
+            if "mic_links" not in self.config:
+                self.config["mic_links"] = {}
+                
+            self.config["mic_links"][priority_id] = new_val
+            self.config_mgr.save_config(self.config)
+            self.status_label.setText("Microphone link saved.")
         
     def copy_switch_command(self, item):
         # User prefers the logical name (e.g. "Papa's AirPods Pro")
