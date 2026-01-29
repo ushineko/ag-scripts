@@ -20,6 +20,8 @@ This repository contains various utility scripts for system management and autom
 | `alacritty-maximizer/main.py` | PyQt6 GUI (bundled with an installer/launcher) to launch Alacritty windows fully maximized on specific monitors without titlebars. Manages KWin rules automatically. |
 | `kvm-setup/install.sh` | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions, and warns about VirtualBox coexistence. |
 | `pinball-fx/configure_kwin.py` | "Window Fixer" utility for Pinball FX. Interactive menu to force the game onto any selected monitor and manage persistent KWin rules. |
+| `plasmashell-restart/restart.sh` | Restarts the KDE Plasma shell properly (handling Plasma 5/6 differences) without logging out. Useful for fixing stuck widgets. |
+| `claude-code-setup/install.sh` | Setup script for Claude Code CLI. Installs/Updates Node.js (via Conda if needed) and `@anthropic-ai/claude-code` globally. |
 
 ## Usage
 
