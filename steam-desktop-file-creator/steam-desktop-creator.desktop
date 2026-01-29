@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Steam Desktop Creator
+Comment=Create start menu launchers for Steam games
+Exec=/usr/bin/python3 EXEC_PATH
+Icon=steam
+Terminal=false
+Type=Application
+Categories=Utility;Game;
+Keywords=steam;game;launcher;desktop;
+StartupNotify=true
