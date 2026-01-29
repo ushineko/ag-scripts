@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Steam Desktop File Creator - Create start menu launchers for Steam games.
+Game Desktop File Creator - Create start menu launchers for games.
 
-A PyQt6 GUI application that discovers installed Steam games across all library
-folders and allows creating/removing .desktop launcher files for the start menu.
+A PyQt6 GUI application that discovers installed games from Steam and Heroic
+(Epic Games, GOG) and allows creating/removing .desktop launcher files.
 """
 
-import os
+import json
 import re
-import glob
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,16 +15,16 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QListWidget, QListWidgetItem, QLabel, QStatusBar,
+    QPushButton, QListWidget, QListWidgetItem, QStatusBar,
     QMessageBox, QAbstractItemView
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon, QPixmap
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Steam tools/runtimes to filter out (not actual games)
-FILTERED_APPIDS = {
+STEAM_FILTERED_APPIDS = {
     228980,   # Steamworks Common Redistributables
     1070560,  # Steam Linux Runtime 1.0 (scout)
     1391110,  # Steam Linux Runtime 2.0 (soldier)
@@ -43,67 +41,113 @@ FILTERED_APPIDS = {
 }
 
 # Paths
-STEAM_ROOT = Path.home() / ".steam" / "steam"
-LIBRARY_FOLDERS_VDF = STEAM_ROOT / "steamapps" / "libraryfolders.vdf"
-ICON_CACHE = STEAM_ROOT / "appcache" / "librarycache"
 APPLICATIONS_DIR = Path.home() / ".local" / "share" / "applications"
 ICONS_DIR = Path.home() / ".local" / "share" / "icons" / "hicolor" / "256x256" / "apps"
 
+# Steam paths
+STEAM_ROOT = Path.home() / ".steam" / "steam"
+STEAM_LIBRARY_VDF = STEAM_ROOT / "steamapps" / "libraryfolders.vdf"
+STEAM_ICON_CACHE = STEAM_ROOT / "appcache" / "librarycache"
+
+# Heroic paths
+HEROIC_CONFIG = Path.home() / ".config" / "heroic"
+HEROIC_LEGENDARY_INSTALLED = HEROIC_CONFIG / "legendaryConfig" / "legendary" / "installed.json"
+HEROIC_GOG_INSTALLED = HEROIC_CONFIG / "gogdlConfig" / "gog" / "installed.json"
+HEROIC_ICONS = HEROIC_CONFIG / "icons"
+
 
 @dataclass
-class SteamGame:
-    """Represents an installed Steam game."""
-    appid: int
+class Game:
+    """Represents an installed game from any source."""
+    id: str
     name: str
-    install_dir: str
-    library_path: Path
+    source: str  # "steam", "epic", "gog"
+
+    @property
+    def desktop_file_name(self) -> str:
+        if self.source == "steam":
+            return f"steam-game-{self.id}.desktop"
+        else:
+            return f"heroic-{self.source}-{self.id}.desktop"
 
     @property
     def desktop_file_path(self) -> Path:
-        return APPLICATIONS_DIR / f"steam-game-{self.appid}.desktop"
+        return APPLICATIONS_DIR / self.desktop_file_name
 
     @property
     def icon_name(self) -> str:
-        return f"steam-game-{self.appid}"
+        if self.source == "steam":
+            return f"steam-game-{self.id}"
+        else:
+            return f"heroic-game-{self.id}"
 
     @property
     def has_desktop_file(self) -> bool:
         return self.desktop_file_path.exists()
 
+    @property
+    def source_label(self) -> str:
+        return {"steam": "Steam", "epic": "Epic", "gog": "GOG"}.get(self.source, self.source)
+
+    def get_icon_source(self) -> Optional[Path]:
+        """Get path to source icon file."""
+        if self.source == "steam":
+            # Steam stores icons in subdirectories: librarycache/<appid>/logo.png or header.jpg
+            game_cache = STEAM_ICON_CACHE / self.id
+            if game_cache.exists():
+                # Prefer logo.png (square), fall back to header.jpg
+                logo = game_cache / "logo.png"
+                if logo.exists():
+                    return logo
+                header = game_cache / "header.jpg"
+                if header.exists():
+                    return header
+            return None
+        else:
+            path = HEROIC_ICONS / f"{self.id}.jpg"
+            return path if path.exists() else None
+
+    def get_launch_command(self) -> str:
+        """Get the command to launch this game."""
+        if self.source == "steam":
+            return f"steam steam://rungameid/{self.id}"
+        elif self.source == "epic":
+            return f"xdg-open heroic://launch/legendary/{self.id}"
+        elif self.source == "gog":
+            return f"xdg-open heroic://launch/gog/{self.id}"
+        return ""
+
+    def get_fallback_icon(self) -> str:
+        """Get fallback icon name if game icon not found."""
+        return "steam" if self.source == "steam" else "heroic"
+
+
+# =============================================================================
+# VDF Parser (for Steam)
+# =============================================================================
 
 def parse_vdf(content: str) -> dict:
-    """
-    Parse Valve Data Format (VDF) content into a dictionary.
-
-    VDF is a simple key-value format used by Steam:
-    "key" "value"
-    "key" { nested content }
-    """
+    """Parse Valve Data Format (VDF) content into a dictionary."""
     result = {}
     stack = [result]
     current_key = None
 
-    # Tokenize: match quoted strings or braces separately
-    # Using named groups to distinguish token types
     token_pattern = re.compile(r'"([^"]*)"|(\{)|(\})')
 
     for match in token_pattern.finditer(content):
         quoted_string, open_brace, close_brace = match.groups()
 
         if open_brace:
-            # Start of nested dict
             new_dict = {}
             if current_key is not None:
                 stack[-1][current_key] = new_dict
                 stack.append(new_dict)
                 current_key = None
         elif close_brace:
-            # End of nested dict
             if len(stack) > 1:
                 stack.pop()
             current_key = None
         elif quoted_string is not None:
-            # It's a quoted string (including empty strings)
             if current_key is None:
                 current_key = quoted_string
             else:
@@ -113,12 +157,16 @@ def parse_vdf(content: str) -> dict:
     return result
 
 
-def get_library_paths() -> list[Path]:
+# =============================================================================
+# Steam Scanner
+# =============================================================================
+
+def get_steam_library_paths() -> list[Path]:
     """Get all Steam library paths from libraryfolders.vdf."""
-    if not LIBRARY_FOLDERS_VDF.exists():
+    if not STEAM_LIBRARY_VDF.exists():
         return []
 
-    content = LIBRARY_FOLDERS_VDF.read_text()
+    content = STEAM_LIBRARY_VDF.read_text()
     data = parse_vdf(content)
 
     paths = []
@@ -130,7 +178,7 @@ def get_library_paths() -> list[Path]:
     return paths
 
 
-def scan_library(library_path: Path) -> list[SteamGame]:
+def scan_steam_library(library_path: Path) -> list[Game]:
     """Scan a Steam library for installed games."""
     games = []
     steamapps = library_path / "steamapps"
@@ -147,59 +195,102 @@ def scan_library(library_path: Path) -> list[SteamGame]:
                 app_state = data['AppState']
                 appid = int(app_state.get('appid', 0))
 
-                # Skip filtered apps (tools, runtimes, etc.)
-                if appid in FILTERED_APPIDS:
+                if appid in STEAM_FILTERED_APPIDS:
                     continue
 
                 name = app_state.get('name', f'Unknown ({appid})')
-                install_dir = app_state.get('installdir', '')
-
-                games.append(SteamGame(
-                    appid=appid,
-                    name=name,
-                    install_dir=install_dir,
-                    library_path=library_path
-                ))
+                games.append(Game(id=str(appid), name=name, source="steam"))
         except Exception as e:
             print(f"Error parsing {manifest_path}: {e}")
 
     return games
 
 
-def get_all_games() -> list[SteamGame]:
-    """Get all installed Steam games across all libraries."""
+def get_steam_games() -> list[Game]:
+    """Get all installed Steam games."""
     games = []
-    for library_path in get_library_paths():
-        games.extend(scan_library(library_path))
-
-    # Sort by name
-    games.sort(key=lambda g: g.name.lower())
+    for library_path in get_steam_library_paths():
+        games.extend(scan_steam_library(library_path))
     return games
 
 
-def get_game_icon_path(appid: int) -> Optional[Path]:
-    """Get the path to a game's icon in Steam's cache."""
-    # Steam stores icons as <appid>_icon.jpg
-    icon_path = ICON_CACHE / f"{appid}_icon.jpg"
-    if icon_path.exists():
-        return icon_path
-    return None
+# =============================================================================
+# Heroic Scanner
+# =============================================================================
+
+def get_heroic_games() -> list[Game]:
+    """Get all installed Heroic games (Epic + GOG)."""
+    games = []
+
+    # Epic Games (legendary)
+    if HEROIC_LEGENDARY_INSTALLED.exists():
+        try:
+            data = json.loads(HEROIC_LEGENDARY_INSTALLED.read_text())
+            for app_name, info in data.items():
+                title = info.get("title", app_name)
+                games.append(Game(id=app_name, name=title, source="epic"))
+        except Exception as e:
+            print(f"Error reading Epic games: {e}")
+
+    # GOG Games
+    if HEROIC_GOG_INSTALLED.exists():
+        try:
+            data = json.loads(HEROIC_GOG_INSTALLED.read_text())
+            for app_name, info in data.items():
+                title = info.get("title", app_name)
+                games.append(Game(id=app_name, name=title, source="gog"))
+        except Exception as e:
+            print(f"Error reading GOG games: {e}")
+
+    return games
 
 
-def install_game_icon(game: SteamGame) -> str:
+# =============================================================================
+# Combined Scanner
+# =============================================================================
+
+def get_all_games() -> list[Game]:
+    """Get all installed games from all sources.
+
+    Returns games sorted by:
+    1. Launched games first (have cached icons), never-launched at bottom
+    2. Within each group, sorted by source: Steam, Epic, GOG
+    3. Within each source, sorted alphabetically by name
+    """
+    games = []
+    games.extend(get_steam_games())
+    games.extend(get_heroic_games())
+
+    # Sort order for sources: Steam=0, Epic=1, GOG=2
+    source_order = {"steam": 0, "epic": 1, "gog": 2}
+
+    def sort_key(game: Game) -> tuple:
+        has_icon = game.get_icon_source() is not None
+        return (
+            0 if has_icon else 1,           # Launched games first
+            source_order.get(game.source, 9),  # Then by source
+            game.name.lower()               # Then alphabetically
+        )
+
+    games.sort(key=sort_key)
+    return games
+
+
+# =============================================================================
+# Desktop File Management
+# =============================================================================
+
+def install_game_icon(game: Game) -> str:
     """Install game icon to system icons directory, return icon name."""
-    source_icon = get_game_icon_path(game.appid)
+    source_icon = game.get_icon_source()
 
     if source_icon is None:
-        return "steam"  # Fallback to Steam icon
+        return game.get_fallback_icon()
 
-    # Ensure icons directory exists
     ICONS_DIR.mkdir(parents=True, exist_ok=True)
-
-    dest_icon = ICONS_DIR / f"steam-game-{game.appid}.png"
+    dest_icon = ICONS_DIR / f"{game.icon_name}.png"
 
     try:
-        # Use Qt to convert JPG to PNG
         pixmap = QPixmap(str(source_icon))
         if not pixmap.isNull():
             pixmap.save(str(dest_icon), "PNG")
@@ -207,54 +298,36 @@ def install_game_icon(game: SteamGame) -> str:
     except Exception as e:
         print(f"Error installing icon for {game.name}: {e}")
 
-    return "steam"
+    return game.get_fallback_icon()
 
 
-def remove_game_icon(game: SteamGame) -> None:
+def remove_game_icon(game: Game) -> None:
     """Remove game icon from system icons directory."""
-    icon_path = ICONS_DIR / f"steam-game-{game.appid}.png"
+    icon_path = ICONS_DIR / f"{game.icon_name}.png"
     if icon_path.exists():
         icon_path.unlink()
 
 
-def create_desktop_file(game: SteamGame) -> None:
-    """Create a .desktop file for a Steam game."""
+def create_desktop_file(game: Game) -> None:
+    """Create a .desktop file for a game."""
     icon_name = install_game_icon(game)
+    launcher = "Steam" if game.source == "steam" else "Heroic"
 
     content = f"""[Desktop Entry]
 Name={game.name}
-Comment=Launch {game.name} via Steam
-Exec=steam steam://rungameid/{game.appid}
+Comment=Launch {game.name} via {launcher}
+Exec={game.get_launch_command()}
 Icon={icon_name}
 Terminal=false
 Type=Application
 Categories=Game;
-Keywords=steam;game;
+Keywords={game.source};game;
 StartupNotify=true
 """
 
     APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
     game.desktop_file_path.write_text(content)
 
-    # Update desktop database
-    try:
-        subprocess.run(
-            ["update-desktop-database", str(APPLICATIONS_DIR)],
-            capture_output=True,
-            timeout=10
-        )
-    except Exception:
-        pass  # Non-critical
-
-
-def remove_desktop_file(game: SteamGame) -> None:
-    """Remove the .desktop file for a Steam game."""
-    if game.desktop_file_path.exists():
-        game.desktop_file_path.unlink()
-
-    remove_game_icon(game)
-
-    # Update desktop database
     try:
         subprocess.run(
             ["update-desktop-database", str(APPLICATIONS_DIR)],
@@ -265,10 +338,31 @@ def remove_desktop_file(game: SteamGame) -> None:
         pass
 
 
-class GameListItem(QListWidgetItem):
-    """Custom list item for displaying a Steam game."""
+def remove_desktop_file(game: Game) -> None:
+    """Remove the .desktop file for a game."""
+    if game.desktop_file_path.exists():
+        game.desktop_file_path.unlink()
 
-    def __init__(self, game: SteamGame):
+    remove_game_icon(game)
+
+    try:
+        subprocess.run(
+            ["update-desktop-database", str(APPLICATIONS_DIR)],
+            capture_output=True,
+            timeout=10
+        )
+    except Exception:
+        pass
+
+
+# =============================================================================
+# GUI
+# =============================================================================
+
+class GameListItem(QListWidgetItem):
+    """Custom list item for displaying a game."""
+
+    def __init__(self, game: Game):
         super().__init__()
         self.game = game
         self.update_display()
@@ -278,10 +372,9 @@ class GameListItem(QListWidgetItem):
     def update_display(self):
         """Update the display text based on current state."""
         status = "[Installed]" if self.game.has_desktop_file else ""
-        self.setText(f"{self.game.name}  {status}")
+        self.setText(f"[{self.game.source_label}] {self.game.name}  {status}")
 
-        # Set icon if available
-        icon_path = get_game_icon_path(self.game.appid)
+        icon_path = self.game.get_icon_source()
         if icon_path:
             self.setIcon(QIcon(str(icon_path)))
 
@@ -291,16 +384,15 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.games: list[SteamGame] = []
+        self.games: list[Game] = []
         self.init_ui()
         self.refresh_games()
 
     def init_ui(self):
         """Initialize the user interface."""
-        self.setWindowTitle(f"Steam Desktop File Creator v{VERSION}")
-        self.setMinimumSize(600, 400)
+        self.setWindowTitle(f"Game Desktop Creator v{VERSION}")
+        self.setMinimumSize(650, 450)
 
-        # Central widget
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -344,7 +436,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
 
     def refresh_games(self):
-        """Refresh the list of Steam games."""
+        """Refresh the list of games."""
         self.game_list.clear()
         self.games = get_all_games()
 
@@ -358,7 +450,21 @@ class MainWindow(QMainWindow):
         """Update the status bar with current stats."""
         total = len(self.games)
         installed = sum(1 for g in self.games if g.has_desktop_file)
-        self.status_bar.showMessage(f"{installed} of {total} games have desktop launchers")
+
+        steam_count = sum(1 for g in self.games if g.source == "steam")
+        epic_count = sum(1 for g in self.games if g.source == "epic")
+        gog_count = sum(1 for g in self.games if g.source == "gog")
+
+        sources = []
+        if steam_count:
+            sources.append(f"{steam_count} Steam")
+        if epic_count:
+            sources.append(f"{epic_count} Epic")
+        if gog_count:
+            sources.append(f"{gog_count} GOG")
+
+        source_str = ", ".join(sources) if sources else "0 games"
+        self.status_bar.showMessage(f"{installed}/{total} installed | {source_str}")
 
     def get_checked_items(self) -> list[GameListItem]:
         """Get all checked items in the list."""
@@ -441,7 +547,7 @@ def main():
     import sys
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Steam Desktop File Creator")
+    app.setApplicationName("Game Desktop Creator")
     app.setApplicationVersion(VERSION)
 
     window = MainWindow()

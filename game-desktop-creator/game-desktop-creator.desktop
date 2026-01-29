@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Game Desktop Creator
+Comment=Create start menu launchers for Steam and Heroic games
+Exec=/usr/bin/python3 EXEC_PATH
+Icon=applications-games
+Terminal=false
+Type=Application
+Categories=Utility;Game;
+Keywords=steam;heroic;epic;gog;game;launcher;desktop;
+StartupNotify=true
