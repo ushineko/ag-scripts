@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon, QPixmap
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 # Steam tools/runtimes to filter out (not actual games)
 STEAM_FILTERED_APPIDS = {

@@ -1,8 +1,10 @@
 # Game Desktop Creator
 
-**Version 1.1.0**
+**Version 1.1.1**
 
 A PyQt6 GUI application that creates start menu launchers for your installed games on Linux. Supports **Steam** and **Heroic Games Launcher** (Epic Games Store, GOG).
+
+![Game Desktop Creator](assets/screenshot.png)
 
 ## Table of Contents
 - [Features](#features)
@@ -97,6 +99,9 @@ This installs the application to your start menu. You can then launch "Game Desk
 This removes the application from your start menu and optionally removes all game launchers created by the app.
 
 ## Changelog
+
+### 1.1.1
+- Added screenshot to README
 
 ### 1.1.0
 - Added Heroic Games Launcher support (Epic Games, GOG)
