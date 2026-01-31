@@ -3,6 +3,8 @@ Version 1.2.3
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals.
 
+![Peripheral Battery Monitor](assets/screenshot.png)
+
 ## Features
 - **Logitech Support**: Uses `solaar` libraries to fetch precise mouse battery levels.
 - **Keychron Support**:
