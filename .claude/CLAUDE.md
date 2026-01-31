@@ -62,6 +62,7 @@ When completing work on a sub-project:
 - Update README with new features/fixes
 - Update inline help text, "About" dialogs, or `--help` output if applicable
 - **Update Changelog**: If the README has a `## Changelog` section, add an entry for the new version with a summary of changes
+- **Ensure TOC**: All project READMEs should have a Table of Contents after the title/description
 
 ### 2. Ensure Installer
 - Check if `install.sh` exists in the sub-project

@@ -88,6 +88,7 @@ When all tasks in the plan are complete:
     *   **Update README**: Add new features/fixes to the sub-project's README.
     *   **Update Inline Help** (If applicable): Ensure any internal help text, "About" dialog content, or `--help` output reflects new changes and the updated version.
     *   **Update Changelog**: If the README has a `## Changelog` section, add an entry for the new version summarizing changes.
+    *   **Ensure TOC**: All project READMEs should have a Table of Contents after the title/description.
 *   **Ensure Installer**:
     *   Check if `install.sh` exists.
     *   If not, create one (even if minimal) to maintain consistency.

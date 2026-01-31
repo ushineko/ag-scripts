@@ -2,6 +2,13 @@
 
 A safety wrapper for qBittorrent that ensures a valid VPN connection and IP location before launching the application. It includes a dashboard that attaches itself to the qBittorrent window and provides auto-shutdown capabilities when downloads complete.
 
+## Table of Contents
+- [Features](#features)
+- [Requirements](#requirements)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Changelog](#changelog)
+
 ## Features
 - **VPN Binding**: Automatically connects to a specified NetworkManager VPN profile (default: `us_las_vegas-aes-128-cbc-udp-dns`) before starting.
 - **Leak Protection**: Verifies the public IP location (via ip-api.com) matches the expected region (e.g., "Las Vegas") before launching qBittorrent. Includes retry logic (3 attempts) to handle initial connection delays. If verification fails, it aborts.

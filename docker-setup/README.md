@@ -2,6 +2,12 @@
 
 A simple, automated setup script to get Docker running on Arch-based systems (optimized for CachyOS/Arch).
 
+## Table of Contents
+- [Features](#features)
+- [Usage](#usage)
+- [Post-Install](#post-install)
+- [Changelog](#changelog)
+
 ## Features
 - **Auto-Installation**: Installs `docker` and `docker-buildx` via `pacman`.
 - **Service Management**: Enables and starts the `docker` systemd service.

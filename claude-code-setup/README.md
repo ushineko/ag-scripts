@@ -2,6 +2,13 @@
 
 A script to install and verify `@anthropic-ai/claude-code`, the official CLI tool for Claude.
 
+## Table of Contents
+- [Version](#version)
+- [Description](#description)
+- [Usage](#usage)
+- [Requirements](#requirements)
+- [Changelog](#changelog)
+
 ## Version
 0.1.0
 

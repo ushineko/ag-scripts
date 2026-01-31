@@ -2,6 +2,11 @@
 
 This directory contains scripts used to migrate the CachyOS installation from one NVMe drive to another using `btrfs send/receive`.
 
+## Table of Contents
+- [Scripts](#scripts)
+- [Critical Warnings](#️-critical-warnings)
+- [Changelog](#changelog)
+
 ## Scripts
 
 ### `migration_runbook.sh`

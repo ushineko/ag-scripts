@@ -4,6 +4,13 @@ A utility to force Pinball FX to run on your portrait monitor.
 
 Since launching the game via a custom script proved unstable, this tool is designed to be run **manually after you launch the game** via Heroic/Steam.
 
+## Table of Contents
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Uninstallation](#uninstallation)
+- [Changelog](#changelog)
+
 ## Features
 - Interactive menu to select the target monitor (Portrait or Landscape).
 - Forces the "Pinball FX" window to the selected monitor and handles resizing.

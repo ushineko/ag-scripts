@@ -2,6 +2,16 @@
 
 A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to manage audio output devices and Bluetooth connections.
 
+## Table of Contents
+- [Features](#features)
+- [Audio Routing & JamesDSP Integration](#audio-routing--jamesdsp-integration)
+- [CLI & Global Hotkeys](#cli--global-hotkeys)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Changelog](#changelog)
+
+![Audio Source Switcher](assets/screenshot.png)
+
 ## Features
 
 - **Smart Device List**: Shows PulseAudio sinks and Bluetooth devices in a unified list.

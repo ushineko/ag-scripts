@@ -2,6 +2,16 @@
 
 A simple tool to launch Alacritty either normally or maximized on a specific monitor.
 
+## Table of Contents
+- [Why?](#why)
+- [Version 1.1 Features](#version-11-features)
+- [How it works](#how-it-works)
+- [Installation](#installation)
+- [Uninstallation](#uninstallation)
+- [Requirements](#requirements)
+- [Files](#files)
+- [Changelog](#changelog)
+
 ## Why?
 Sometimes you want to open a terminal dedicated to a specific screen without dragging it there and valid window management rules are hard to generalize. This tool uses specific KWin rules to force the window to the correct screen and state.
 

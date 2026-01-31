@@ -2,6 +2,13 @@
 
 This project provides scripts to easily install and configure KVM (Kernel-based Virtual Machine) on CachyOS (Arch Linux).
 
+## Table of Contents
+- [Coexistence with VirtualBox](#coexistence-with-virtualbox)
+- [Installation](#installation)
+- [Uninstallation](#uninstallation)
+- [Troubleshooting Network](#troubleshooting-network)
+- [Changelog](#changelog)
+
 ## Coexistence with VirtualBox
 
 **IMPORTANT**: You likely have VirtualBox installed. 

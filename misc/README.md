@@ -2,6 +2,11 @@
 
 QOL scripts created during a transition from Windows to Linux (CachyOS). These provide wrappers or functionality for various tasks that weren't immediately available out of the box—particularly around dealing with existing NTFS data drives and mount management.
 
+## Table of Contents
+- [Scripts](#scripts)
+- [Installation](#installation)
+- [Changelog](#changelog)
+
 ## Scripts
 
 ### fix_readonly_mounts.py

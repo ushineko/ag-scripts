@@ -2,6 +2,13 @@
 
 A simple "poor man's screensaver" that displays a black fullscreen window. Unlike a real screensaver or the HTML version, this PyQt application **keeps the mouse cursor visible**, which is useful for certain remote desktop or VM scenarios where you want to hide the content but keep mouse interaction visible or active.
 
+## Table of Contents
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Global Hotkey (KDE Plasma)](#global-hotkey-kde-plasma)
+- [Changelog](#changelog)
+
 ## Features
 - **Black Fullscreen**: Covers the entire monitor with black.
 - **Visible Cursor**: Does not hide the mouse pointer.

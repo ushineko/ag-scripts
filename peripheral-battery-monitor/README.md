@@ -5,6 +5,14 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 
 ![Peripheral Battery Monitor](assets/screenshot.png)
 
+## Table of Contents
+- [Features](#features)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [Manual Usage](#manual-usage)
+- [Logging](#logging)
+- [Changelog](#changelog)
+
 ## Features
 - **Logitech Support**: Uses `solaar` libraries to fetch precise mouse battery levels.
 - **Keychron Support**:

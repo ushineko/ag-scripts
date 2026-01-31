@@ -2,6 +2,12 @@
 
 A simple script to unify RGB control across heterogenous usage of `OpenRGB`, `liquidctl`, and `ckb-next`.
 
+## Table of Contents
+- [Prerequisites](#prerequisites)
+- [Usage](#usage)
+- [Troubleshooting](#troubleshooting)
+- [Changelog](#changelog)
+
 ## Prerequisites
 
 You need to install the drivers for your specific hardware:

@@ -2,6 +2,12 @@
 
 A GUI-friendly Bash script to manage NetworkManager VPN connections. Designed for binding to a keyboard shortcut.
 
+## Table of Contents
+- [Features](#features)
+- [Usage](#usage)
+- [Integration](#integration)
+- [Changelog](#changelog)
+
 ## Features
 - **Smart Detection**: Fuzzy-matches connection names (e.g., "vegas" matches "us_las_vegas...").
 - **GUI Menu**: Pops up a dialog (using `kdialog` or `zenity`) to:

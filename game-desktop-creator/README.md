@@ -4,6 +4,16 @@
 
 A PyQt6 GUI application that creates start menu launchers for your installed games on Linux. Supports **Steam** and **Heroic Games Launcher** (Epic Games Store, GOG).
 
+## Table of Contents
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [How It Works](#how-it-works)
+- [File Locations](#file-locations)
+- [Uninstallation](#uninstallation)
+- [Changelog](#changelog)
+
 ## Features
 
 - Discovers installed games from multiple sources:

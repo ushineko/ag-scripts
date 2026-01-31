@@ -4,6 +4,12 @@
 
 A script to restart or refresh the KDE Plasma shell without logging out. Useful when desktop widgets, panels, or the taskbar get stuck or stop responding.
 
+## Table of Contents
+- [Usage](#usage)
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Changelog](#changelog)
+
 ## Usage
 
 ```bash
