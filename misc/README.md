@@ -1,0 +1,54 @@
+# Miscellaneous System Utilities
+
+A collection of standalone system administration scripts for Linux desktop environments.
+
+## Scripts
+
+### fix_readonly_mounts.py
+
+Automatically detects and repairs NTFS mounts that have fallen into read-only mode (common after improper shutdowns or dual-boot scenarios with Windows).
+
+**Features:**
+- Scans `/mnt/Data*` and `/mnt/System*` mount points
+- Detects read-only mounts via `findmnt`
+- Runs `ntfsfix -d` to clear dirty flags
+- Remounts and verifies write access
+
+**Usage:**
+```bash
+sudo python3 fix_readonly_mounts.py
+```
+
+**Requirements:**
+- Root privileges
+- `ntfs-3g` package (provides `ntfsfix`)
+- `findmnt` (usually pre-installed)
+
+---
+
+### generate_data_mounts.py
+
+Generates fstab entries for data drives labeled `DataN` (e.g., Data1, Data2) or `System`, with appropriate mount options for gaming (Steam/Proton compatibility).
+
+**Features:**
+- Scans block devices via `lsblk`
+- Filters by label pattern (`Data\d+` or `System`)
+- Skips removable and USB devices
+- Generates fstab lines with proper uid/gid/umask for NTFS/exFAT
+
+**Usage:**
+```bash
+python3 generate_data_mounts.py
+# Output can be appended to /etc/fstab after review
+```
+
+**Output example:**
+```
+UUID=ABC123... /mnt/Data1 ntfs defaults,nofail,rw,exec,uid=1000,gid=1000,umask=000 0 2
+```
+
+---
+
+## Installation
+
+These are standalone scripts with no installation required. Copy to a directory in your PATH or run directly.
