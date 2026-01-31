@@ -35,6 +35,13 @@ Or use the installed desktop shortcut.
 
 ## Changelog
 
+### v1.0.2
+- Added retry logic (3 attempts) for public IP verification to handle initial connection delays
+
+### v1.0.1
+- Added seeding management dialog with shutdown scheduling
+- Added torrent removal options
+
 ### v1.0.0
 - Initial release
 - VPN binding with IP geolocation verification

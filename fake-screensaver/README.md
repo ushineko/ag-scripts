@@ -59,8 +59,11 @@ To activate, you can bind this script to a global hotkey (e.g., `Meta+L` or `Met
 
 ## Changelog
 
+### v1.1.0
+- Added multi-screen support via `--screen` flag
+- Can now blank specific screens or all screens
+
 ### v1.0.0
 - Initial release
 - Black fullscreen window with visible cursor
-- Multi-screen support via `--screen` flag
 - Desktop entry for application launcher

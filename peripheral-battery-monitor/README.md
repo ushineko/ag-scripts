@@ -53,16 +53,34 @@ Logs are automatically saved in JSON format for debugging:
 ### v1.2.3
 - Added screenshot to README
 
+### v1.2.2
+- Added faulthandler import for debugging
+- Refactored data fetching via subprocess
+
+### v1.2.1
+- Relaxed BLE RSSI threshold to -85
+- 30-second battery status refresh interval
+- Prevented worker thread overlap
+
 ### v1.2.0
 - Added AirPods BLE scanning with L/R/Case status
 - Added fallback logic for disconnected device monitoring
+- Added unit tests for battery logic
+
+### v1.1.1
+- Single instance enforcement via QLockFile
+- Dynamic battery status icons in UI
+- Fixed mouse device resource exhaustion (dbus/systemd cache)
 
 ### v1.1.0
 - Added Arctis headset support via headsetcontrol
 - Added structured logging with structlog
 
+### v1.0.1
+- Enhanced Keychron support for Wired/Bluetooth/2.4G connections
+
 ### v1.0.0
 - Initial release
 - Logitech mouse support via solaar
-- Keychron keyboard support (Bluetooth/Wired/Wireless)
+- Keychron keyboard support (Bluetooth)
 - KDE Wayland integration with KWin rules
