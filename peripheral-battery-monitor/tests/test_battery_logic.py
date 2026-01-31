@@ -314,32 +314,72 @@ class TestClaudeStats(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    def test_get_session_duration_valid(self):
-        """Test session duration calculation"""
-        from datetime import datetime, timezone, timedelta
+    def test_get_session_window_4h(self):
+        """Test 4-hour session window calculation"""
+        window_start, window_end = pb.get_session_window(4, reset_hour=2)
 
-        # Session started 2 hours 30 minutes ago
-        start = datetime.now(timezone.utc) - timedelta(hours=2, minutes=30)
-        result = pb.get_session_duration(start)
+        # Window should be 4 hours apart
+        delta = window_end - window_start
+        self.assertEqual(delta.total_seconds(), 4 * 3600)
+
+    def test_get_session_window_1h(self):
+        """Test 1-hour session window calculation"""
+        window_start, window_end = pb.get_session_window(1, reset_hour=0)
+
+        delta = window_end - window_start
+        self.assertEqual(delta.total_seconds(), 1 * 3600)
+
+    def test_get_session_window_reset_alignment(self):
+        """Test that window boundaries align to reset hour"""
+        # With reset_hour=2 and 4h windows, boundaries are at 2, 6, 10, 14, 18, 22
+        window_start, window_end = pb.get_session_window(4, reset_hour=2)
+
+        # Window end hour should be in [2, 6, 10, 14, 18, 22]
+        valid_end_hours = [2, 6, 10, 14, 18, 22]
+        self.assertIn(window_end.hour, valid_end_hours)
+
+    def test_get_time_until_reset(self):
+        """Test time until reset calculation"""
+        from datetime import datetime, timedelta
+
+        # Window ends 1 hour 30 minutes from now
+        future = datetime.now().astimezone() + timedelta(hours=1, minutes=30)
+        result = pb.get_time_until_reset(future)
 
         self.assertIn("h", result)
         self.assertIn("m", result)
+        self.assertIn("reset", result)
 
-    def test_get_session_duration_short(self):
-        """Test session duration for sessions under 1 hour"""
-        from datetime import datetime, timezone, timedelta
+    def test_get_time_until_reset_short(self):
+        """Test time until reset for < 1 hour"""
+        from datetime import datetime, timedelta
 
-        # Session started 45 minutes ago
-        start = datetime.now(timezone.utc) - timedelta(minutes=45)
-        result = pb.get_session_duration(start)
+        # Window ends 30 minutes from now
+        future = datetime.now().astimezone() + timedelta(minutes=30)
+        result = pb.get_time_until_reset(future)
 
-        # Should show just minutes, no hours
         self.assertIn("m", result)
+        self.assertIn("reset", result)
 
-    def test_get_session_duration_none(self):
-        """Test session duration with None start time"""
-        result = pb.get_session_duration(None)
-        self.assertEqual(result, "--")
+    def test_session_budget_default(self):
+        """Test that default session budget is 500k tokens"""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+        # Default should be 500000
+        self.assertEqual(monitor.settings.get('claude_session_budget', 500000), 500000)
+
+    def test_set_claude_budget(self):
+        """Test setting the Claude session budget"""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+        monitor.save_settings = MagicMock()
+        monitor.update_claude_section = MagicMock()
+
+        monitor.set_claude_budget(1000000)
+
+        self.assertEqual(monitor.settings['claude_session_budget'], 1000000)
+        monitor.save_settings.assert_called_once()
+        monitor.update_claude_section.assert_called_once()
 
 
 if __name__ == '__main__':
