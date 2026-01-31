@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.2.3
+Version 1.2.4
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals.
 
@@ -57,6 +57,9 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.2.4
+- Keychron: Bluetooth battery now prioritized over "Wired" status when keyboard is charging via USB but connected via BT
 
 ### v1.2.3
 - Added screenshot to README

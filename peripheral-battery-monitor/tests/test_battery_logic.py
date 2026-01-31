@@ -169,5 +169,110 @@ class TestBatteryLogic(unittest.TestCase):
         self.assertIn("C:50%", call_args)
         self.assertIn("#4caf50", call_args)
 
+class TestKeyboardBatteryPriority(unittest.TestCase):
+    """Test that Bluetooth battery is prioritized over Wired status"""
+
+    def test_bluetooth_priority_over_wired(self):
+        """
+        When keyboard is plugged in via USB but also connected via Bluetooth,
+        the Bluetooth battery percentage should be returned (not 'Wired').
+        """
+        from unittest.mock import patch, mock_open
+
+        # Mock UPower to return a valid Bluetooth keyboard with battery
+        upower_enum = MagicMock()
+        upower_enum.returncode = 0
+        upower_enum.stdout = "/org/freedesktop/UPower/devices/keyboard_dev_XX_XX_XX_XX_XX_XX\n"
+
+        upower_info = MagicMock()
+        upower_info.returncode = 0
+        upower_info.stdout = """
+  native-path:          /sys/devices/virtual/misc/uhid/0005:3434:0287.000C/power_supply/hid-dc:2c:26:XX:XX:XX-battery
+  model:                Keychron K4 HE
+  percentage:           75%
+  state:                discharging
+"""
+
+        # Mock USB devices to show wired keyboard IS connected
+        usb_vendor = "3434"
+        usb_product = "0e40"
+
+        def mock_subprocess_run(cmd, *args, **kwargs):
+            if cmd[0] == 'upower':
+                if '-e' in cmd:
+                    return upower_enum
+                if '-i' in cmd:
+                    return upower_info
+            return MagicMock(returncode=1)
+
+        def mock_listdir(path):
+            if path == "/sys/bus/usb/devices":
+                return ["1-1", "1-2", "1-3"]
+            return []
+
+        def mock_open_file(path, *args, **kwargs):
+            if "idVendor" in path:
+                return mock_open(read_data=usb_vendor)()
+            if "idProduct" in path:
+                return mock_open(read_data=usb_product)()
+            raise FileNotFoundError()
+
+        with patch('battery_reader.subprocess.run', side_effect=mock_subprocess_run):
+            with patch('battery_reader.os.path.exists', return_value=True):
+                with patch('battery_reader.os.listdir', side_effect=mock_listdir):
+                    with patch('builtins.open', side_effect=mock_open_file):
+                        result = battery_reader.get_keyboard_battery()
+
+        # Should return Bluetooth battery, NOT Wired status
+        self.assertIsNotNone(result)
+        self.assertEqual(result.level, 75)
+        self.assertEqual(result.status, "Discharging")
+        self.assertIn("Keychron", result.device_name)
+
+    def test_wired_fallback_when_no_bluetooth(self):
+        """
+        When keyboard is plugged in via USB but NO Bluetooth battery available,
+        should return 'Wired' status.
+        """
+        from unittest.mock import patch, mock_open
+
+        # Mock UPower to return no keyboard
+        upower_enum = MagicMock()
+        upower_enum.returncode = 0
+        upower_enum.stdout = "/org/freedesktop/UPower/devices/battery_BAT0\n"
+
+        # Mock USB devices to show wired keyboard IS connected
+        usb_vendor = "3434"
+        usb_product = "0e40"
+
+        def mock_subprocess_run(cmd, *args, **kwargs):
+            if cmd[0] == 'upower' and '-e' in cmd:
+                return upower_enum
+            return MagicMock(returncode=1)
+
+        def mock_listdir(path):
+            if path == "/sys/bus/usb/devices":
+                return ["1-1"]
+            return []
+
+        def mock_open_file(path, *args, **kwargs):
+            if "idVendor" in path:
+                return mock_open(read_data=usb_vendor)()
+            if "idProduct" in path:
+                return mock_open(read_data=usb_product)()
+            raise FileNotFoundError()
+
+        with patch('battery_reader.subprocess.run', side_effect=mock_subprocess_run):
+            with patch('battery_reader.os.path.exists', return_value=True):
+                with patch('battery_reader.os.listdir', side_effect=mock_listdir):
+                    with patch('builtins.open', side_effect=mock_open_file):
+                        result = battery_reader.get_keyboard_battery()
+
+        # Should return Wired status since no BT battery
+        self.assertIsNotNone(result)
+        self.assertEqual(result.level, -1)
+        self.assertEqual(result.status, "Wired")
+
+
 if __name__ == '__main__':
     unittest.main()
