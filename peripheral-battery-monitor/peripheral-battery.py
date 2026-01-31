@@ -5,9 +5,11 @@ import json
 import os
 import subprocess
 import faulthandler
+import shutil
+from datetime import datetime, timezone, timedelta
 
 
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QProgressBar
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
@@ -16,9 +18,57 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.2.4"
+__version__ = "1.3.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
+CLAUDE_STATS_PATH = os.path.expanduser("~/.claude/stats-cache.json")
+
+
+def is_claude_installed():
+    """Check if Claude Code CLI is installed on the system."""
+    return shutil.which('claude') is not None
+
+
+def get_claude_stats():
+    """Read and parse Claude Code usage statistics from stats-cache.json."""
+    if not os.path.exists(CLAUDE_STATS_PATH):
+        return None
+
+    try:
+        with open(CLAUDE_STATS_PATH, 'r') as f:
+            data = json.load(f)
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Find today's token usage by summing all models
+        today_tokens = 0
+        for entry in data.get('dailyModelTokens', []):
+            if entry.get('date') == today:
+                for model, tokens in entry.get('tokensByModel', {}).items():
+                    today_tokens += tokens
+                break
+
+        return {
+            'today_tokens': today_tokens,
+            'last_computed': data.get('lastComputedDate'),
+            'total_sessions': data.get('totalSessions', 0),
+            'total_messages': data.get('totalMessages', 0)
+        }
+    except Exception:
+        return None
+
+
+def get_time_until_reset():
+    """Calculate time until daily quota resets at midnight UTC."""
+    now = datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    delta = tomorrow - now
+
+    hours = int(delta.total_seconds() // 3600)
+    minutes = int((delta.total_seconds() % 3600) // 60)
+
+    return f"{hours}h {minutes}m"
+
 
 def setup_logging(debug_mode=False):
     log_file = os.path.expanduser("~/.local/state/peripheral-battery-monitor/peripheral_battery.log")
@@ -122,7 +172,12 @@ class PeripheralMonitor(QWidget):
         QTimer.singleShot(100, self.update_status)
 
     def load_settings(self):
-        default_settings = {"opacity": 0.95, "font_scale": 1.0}
+        default_settings = {
+            "opacity": 0.95,
+            "font_scale": 1.0,
+            "claude_section_enabled": True,
+            "claude_daily_limit": 500000
+        }
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, 'r') as f:
@@ -179,10 +234,19 @@ class PeripheralMonitor(QWidget):
 
         main_layout.addWidget(self.container)
 
-        self.setMinimumWidth(260) # Increased for 2x2 grid to avoid cutoff names on start
+        # Claude Code Section (conditionally shown)
+        self.claude_section_visible = False
+        self.claude_frame = None
+
+        if is_claude_installed() and self.settings.get('claude_section_enabled', True):
+            self.create_claude_section()
+            main_layout.addWidget(self.claude_frame)
+            self.claude_section_visible = True
+
+        self.setMinimumWidth(260)  # Increased for 2x2 grid to avoid cutoff names on start
         self.update_style()
         self.adjustSize()
-        
+
         # Default position
         self.move(100, 100)
 
@@ -226,14 +290,75 @@ class PeripheralMonitor(QWidget):
         layout.addWidget(stat_lbl)
         
         return {
-            'layout': layout, 
-            'name_lbl': name_lbl, 
-            'val_lbl': val_lbl, 
+            'layout': layout,
+            'name_lbl': name_lbl,
+            'val_lbl': val_lbl,
             'stat_lbl': stat_lbl,
             'icon_lbl': icon_lbl,
             'last_info': None,
             'default_name': default_name
         }
+
+    def create_claude_section(self):
+        """Create the Claude Code usage stats section."""
+        self.claude_frame = QFrame(self)
+        self.claude_frame.setObjectName("ClaudeSection")
+
+        claude_layout = QVBoxLayout(self.claude_frame)
+        claude_layout.setContentsMargins(15, 8, 15, 10)
+        claude_layout.setSpacing(4)
+
+        # Header row: title and reset time
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+
+        # Icon
+        icon_lbl = QLabel(self)
+        icon = QIcon.fromTheme("dialog-scripts", QIcon.fromTheme("utilities-terminal"))
+        icon_lbl.setPixmap(icon.pixmap(16, 16))
+        header_row.addWidget(icon_lbl)
+
+        # Title
+        title_lbl = QLabel("Claude Code", self)
+        title_lbl.setObjectName("ClaudeTitle")
+        header_row.addWidget(title_lbl)
+
+        header_row.addStretch()
+
+        # Reset time
+        self.claude_reset_lbl = QLabel("--h --m", self)
+        self.claude_reset_lbl.setObjectName("ClaudeReset")
+        header_row.addWidget(self.claude_reset_lbl)
+
+        claude_layout.addLayout(header_row)
+
+        # Progress bar
+        self.claude_progress = QProgressBar(self)
+        self.claude_progress.setObjectName("ClaudeProgress")
+        self.claude_progress.setMinimum(0)
+        self.claude_progress.setMaximum(100)
+        self.claude_progress.setValue(0)
+        self.claude_progress.setTextVisible(True)
+        self.claude_progress.setFormat("%p%")
+        self.claude_progress.setFixedHeight(14)
+        claude_layout.addWidget(self.claude_progress)
+
+        # Stats row: tokens used / limit and remaining
+        stats_row = QHBoxLayout()
+
+        self.claude_tokens_lbl = QLabel("0 / 500k", self)
+        self.claude_tokens_lbl.setObjectName("ClaudeStats")
+        stats_row.addWidget(self.claude_tokens_lbl)
+
+        stats_row.addStretch()
+
+        self.claude_remaining_lbl = QLabel("500k left", self)
+        self.claude_remaining_lbl.setObjectName("ClaudeStats")
+        stats_row.addWidget(self.claude_remaining_lbl)
+
+        claude_layout.addLayout(stats_row)
+
+        return self.claude_frame
 
     def update_style(self):
         opacity = self.settings.get("opacity", 0.95)
@@ -272,6 +397,37 @@ class PeripheralMonitor(QWidget):
                 font-size: {stat_size}px;
                 color: #888888;
                 font-style: italic;
+            }}
+            QFrame#ClaudeSection {{
+                background-color: rgba(35, 35, 35, {alpha});
+                border: 1px solid rgba(255, 255, 255, 15);
+                border-radius: 8px;
+                margin-top: 4px;
+            }}
+            QLabel#ClaudeTitle {{
+                font-size: {name_size}px;
+                color: #aaaaaa;
+                font-weight: bold;
+            }}
+            QLabel#ClaudeReset {{
+                font-size: {int(9 * scale)}px;
+                color: #888888;
+            }}
+            QLabel#ClaudeStats {{
+                font-size: {int(9 * scale)}px;
+                color: #888888;
+            }}
+            QProgressBar#ClaudeProgress {{
+                background-color: #1a1a1a;
+                border: 1px solid #444;
+                border-radius: 4px;
+                text-align: center;
+                color: #e0e0e0;
+                font-size: {int(9 * scale)}px;
+            }}
+            QProgressBar#ClaudeProgress::chunk {{
+                background-color: #4caf50;
+                border-radius: 3px;
             }}
         """)
 
@@ -339,6 +495,39 @@ class PeripheralMonitor(QWidget):
             font_group.addAction(action)
             fontMenu.addAction(action)
 
+        # Claude Section Menu (only if Claude is installed)
+        if is_claude_installed():
+            contextMenu.addSeparator()
+            claudeMenu = contextMenu.addMenu("Claude Code")
+
+            toggleAction = QAction("Show Usage Stats", self, checkable=True)
+            toggleAction.setChecked(self.settings.get('claude_section_enabled', True))
+            toggleAction.triggered.connect(self.toggle_claude_section)
+            claudeMenu.addAction(toggleAction)
+
+            # Daily Limit Submenu
+            limitMenu = claudeMenu.addMenu("Daily Limit")
+            limit_group = QActionGroup(self)
+
+            limits = [
+                ("100k tokens", 100000),
+                ("250k tokens", 250000),
+                ("500k tokens", 500000),
+                ("1M tokens", 1000000),
+                ("Unlimited", 0),
+            ]
+
+            current_limit = self.settings.get('claude_daily_limit', 500000)
+
+            for label, val in limits:
+                action = QAction(label, self, checkable=True)
+                action.setData(val)
+                action.triggered.connect(lambda checked, v=val: self.set_claude_limit(v))
+                if current_limit == val:
+                    action.setChecked(True)
+                limit_group.addAction(action)
+                limitMenu.addAction(action)
+
         contextMenu.addSeparator()
 
         refreshAct = QAction("Refresh Now", self)
@@ -348,7 +537,7 @@ class PeripheralMonitor(QWidget):
         quitAct = QAction("Quit", self)
         quitAct.triggered.connect(QApplication.instance().quit)
         contextMenu.addAction(quitAct)
-        
+
         # Use popup() and global cursor position, verified to be the most reliable combo on Wayland.
         contextMenu.popup(QCursor.pos())
 
@@ -362,6 +551,30 @@ class PeripheralMonitor(QWidget):
         self.update_style()
         self.adjustSize()
         self.save_settings()
+
+    def toggle_claude_section(self, checked):
+        """Toggle Claude Code section visibility."""
+        self.settings["claude_section_enabled"] = checked
+        self.save_settings()
+
+        if checked and is_claude_installed():
+            if self.claude_frame is None:
+                self.create_claude_section()
+                self.layout().addWidget(self.claude_frame)
+            self.claude_frame.show()
+            self.claude_section_visible = True
+            self.update_claude_section()
+        elif self.claude_frame is not None:
+            self.claude_frame.hide()
+            self.claude_section_visible = False
+
+        self.adjustSize()
+
+    def set_claude_limit(self, val):
+        """Set the daily token limit for Claude Code usage tracking."""
+        self.settings["claude_daily_limit"] = val
+        self.save_settings()
+        self.update_claude_section()
 
     def setup_timer(self):
         # Update every 30 seconds
@@ -393,6 +606,68 @@ class PeripheralMonitor(QWidget):
         # Safely clear the reference
         self.worker = None
 
+    def update_claude_section(self):
+        """Update the Claude Code usage stats display."""
+        if not self.claude_section_visible or self.claude_frame is None:
+            return
+
+        stats = get_claude_stats()
+        if stats is None:
+            # Hide section if stats unavailable
+            self.claude_frame.hide()
+            self.claude_section_visible = False
+            self.adjustSize()
+            return
+
+        today_tokens = stats['today_tokens']
+        daily_limit = self.settings.get('claude_daily_limit', 500000)
+
+        # Calculate remaining and percentage
+        if daily_limit > 0:
+            remaining = max(0, daily_limit - today_tokens)
+            percentage = min(100, (today_tokens / daily_limit) * 100)
+        else:
+            # Unlimited mode - show 0% used
+            remaining = float('inf')
+            percentage = 0
+
+        # Update progress bar
+        self.claude_progress.setValue(int(percentage))
+        self._update_claude_progress_color(percentage)
+
+        # Format token counts (use k for thousands)
+        def format_tokens(n):
+            if n == float('inf'):
+                return "∞"
+            elif n >= 1000:
+                return f"{n / 1000:.1f}k"
+            else:
+                return str(int(n))
+
+        used_str = format_tokens(today_tokens)
+        limit_str = format_tokens(daily_limit) if daily_limit > 0 else "∞"
+        remaining_str = format_tokens(remaining)
+
+        self.claude_tokens_lbl.setText(f"{used_str} / {limit_str}")
+        self.claude_remaining_lbl.setText(f"{remaining_str} left")
+        self.claude_reset_lbl.setText(get_time_until_reset())
+
+    def _update_claude_progress_color(self, percentage):
+        """Update progress bar color based on usage percentage."""
+        if percentage < 50:
+            color = "#4caf50"  # Green
+        elif percentage < 75:
+            color = "#ff9800"  # Yellow/Orange
+        else:
+            color = "#f44336"  # Red
+
+        self.claude_progress.setStyleSheet(f"""
+            QProgressBar#ClaudeProgress::chunk {{
+                background-color: {color};
+                border-radius: 3px;
+            }}
+        """)
+
     def on_data_ready(self, results):
         # 1. Update Mouse - Now comes from results like everything else
         self.update_single_device(self.mouse_ui, lambda: results.get('mouse'), use_offline_cache=True)
@@ -405,10 +680,13 @@ class PeripheralMonitor(QWidget):
 
         # 4. Update AirPods - User wants "Disconnected", no offline cache
         self.update_single_device(self.airpods_ui, lambda: results.get('airpods'), use_offline_cache=False)
-        
+
+        # 5. Update Claude Code section
+        self.update_claude_section()
+
         self.setToolTip(f"Last updated: {self.format_time()}")
         self.adjustSize()
-        
+
         # NOTE: Cleanup is handled by finished signal now
 
     def update_single_device(self, ui_dict, func_to_call, use_offline_cache=True):

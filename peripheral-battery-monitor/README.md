@@ -1,7 +1,7 @@
 # Peripheral Battery Monitor
-Version 1.2.4
+Version 1.3.0
 
-A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals.
+A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
 
 ![Peripheral Battery Monitor](assets/screenshot.png)
 
@@ -21,6 +21,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
 - **Arctis Headsets**: Uses `headsetcontrol` to fetch battery levels.
 - **AirPods Support**: Advanced BLE scanning to fetch granular battery levels for Left, Right, and Case. Supports disconnected monitoring. Now with fallback logic and Case display!
+- **Claude Code Integration**: Displays daily API token usage with progress bar and time until reset. Auto-hides if Claude Code is not installed. Configurable daily limits via right-click menu.
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Auto-Remember**: KWin remembers the window position and screen between sessions.
@@ -57,6 +58,14 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.3.0
+- Added Claude Code usage stats section below the battery grid
+- Shows daily token usage with progress bar (color-coded: green/yellow/red)
+- Displays time until daily quota resets (midnight UTC)
+- Auto-hides if Claude Code is not installed
+- Configurable daily limit via right-click context menu (100k, 250k, 500k, 1M, Unlimited)
+- Toggle visibility via right-click menu
 
 ### v1.2.4
 - Keychron: Bluetooth battery now prioritized over "Wired" status when keyboard is charging via USB but connected via BT

@@ -36,6 +36,7 @@ class MockLayout:
     def addWidget(self, *args): pass
     def addLayout(self, *args, **kwargs): pass
     def setAlignment(self, *args): pass
+    def addStretch(self, *args): pass
 
 class MockQApplication:
     def __init__(self, argv): pass
@@ -59,6 +60,16 @@ class MockQAction:
     @property
     def triggered(self): return MagicMock()
 
+class MockQProgressBar(MockQWidget):
+    def __init__(self, *args, **kwargs): pass
+    def setObjectName(self, name): pass
+    def setMinimum(self, val): pass
+    def setMaximum(self, val): pass
+    def setValue(self, val): pass
+    def setTextVisible(self, visible): pass
+    def setFormat(self, fmt): pass
+    def setFixedHeight(self, h): pass
+
 # 2. Inject Mocks into sys.modules
 mock_qt_widgets = MagicMock()
 mock_qt_widgets.QWidget = MockQWidget
@@ -71,6 +82,7 @@ mock_qt_widgets.QGridLayout = MockLayout
 mock_qt_widgets.QMenu = MagicMock
 mock_qt_widgets.QAction = MockQAction
 mock_qt_widgets.QActionGroup = MagicMock
+mock_qt_widgets.QProgressBar = MockQProgressBar
 
 sys.modules['PyQt6'] = MagicMock()
 sys.modules['PyQt6.QtWidgets'] = mock_qt_widgets
@@ -272,6 +284,123 @@ class TestKeyboardBatteryPriority(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.level, -1)
         self.assertEqual(result.status, "Wired")
+
+
+class TestClaudeStats(unittest.TestCase):
+    """Test Claude Code usage statistics parsing"""
+
+    def test_is_claude_installed_true(self):
+        """Test detection when Claude is installed"""
+        from unittest.mock import patch
+
+        with patch('shutil.which', return_value='/usr/bin/claude'):
+            result = pb.is_claude_installed()
+        self.assertTrue(result)
+
+    def test_is_claude_installed_false(self):
+        """Test detection when Claude is not installed"""
+        from unittest.mock import patch
+
+        with patch('shutil.which', return_value=None):
+            result = pb.is_claude_installed()
+        self.assertFalse(result)
+
+    def test_get_claude_stats_valid_file(self):
+        """Test parsing a valid stats-cache.json file"""
+        from unittest.mock import patch, mock_open
+        from datetime import datetime, timezone
+        import json
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        mock_stats = {
+            "version": 2,
+            "lastComputedDate": today,
+            "dailyModelTokens": [
+                {
+                    "date": today,
+                    "tokensByModel": {
+                        "claude-opus-4-5-20251101": 15000,
+                        "claude-sonnet-4-20250514": 5000
+                    }
+                }
+            ],
+            "totalSessions": 10,
+            "totalMessages": 500
+        }
+
+        with patch('os.path.exists', return_value=True):
+            with patch('builtins.open', mock_open(read_data=json.dumps(mock_stats))):
+                result = pb.get_claude_stats()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['today_tokens'], 20000)  # 15000 + 5000
+        self.assertEqual(result['total_sessions'], 10)
+        self.assertEqual(result['total_messages'], 500)
+
+    def test_get_claude_stats_missing_file(self):
+        """Test handling of missing stats file"""
+        from unittest.mock import patch
+
+        with patch('os.path.exists', return_value=False):
+            result = pb.get_claude_stats()
+
+        self.assertIsNone(result)
+
+    def test_get_claude_stats_corrupt_json(self):
+        """Test handling of corrupt JSON file"""
+        from unittest.mock import patch, mock_open
+
+        with patch('os.path.exists', return_value=True):
+            with patch('builtins.open', mock_open(read_data="not valid json {")):
+                result = pb.get_claude_stats()
+
+        self.assertIsNone(result)
+
+    def test_get_claude_stats_no_today_data(self):
+        """Test when stats file exists but has no data for today"""
+        from unittest.mock import patch, mock_open
+        import json
+
+        mock_stats = {
+            "version": 2,
+            "lastComputedDate": "2024-01-01",
+            "dailyModelTokens": [
+                {
+                    "date": "2024-01-01",
+                    "tokensByModel": {
+                        "claude-opus-4-5-20251101": 50000
+                    }
+                }
+            ],
+            "totalSessions": 5,
+            "totalMessages": 100
+        }
+
+        with patch('os.path.exists', return_value=True):
+            with patch('builtins.open', mock_open(read_data=json.dumps(mock_stats))):
+                result = pb.get_claude_stats()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['today_tokens'], 0)  # No data for today
+
+    def test_get_time_until_reset(self):
+        """Test time until reset calculation"""
+        result = pb.get_time_until_reset()
+
+        # Should be in format "Xh Ym"
+        self.assertIn("h", result)
+        self.assertIn("m", result)
+
+        # Parse and validate range (0-23 hours, 0-59 minutes)
+        parts = result.replace("h", "").replace("m", "").split()
+        hours = int(parts[0])
+        minutes = int(parts[1])
+
+        self.assertGreaterEqual(hours, 0)
+        self.assertLessEqual(hours, 23)
+        self.assertGreaterEqual(minutes, 0)
+        self.assertLessEqual(minutes, 59)
 
 
 if __name__ == '__main__':
