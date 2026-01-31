@@ -305,41 +305,8 @@ class TestClaudeStats(unittest.TestCase):
             result = pb.is_claude_installed()
         self.assertFalse(result)
 
-    def test_get_claude_stats_valid_file(self):
-        """Test parsing a valid stats-cache.json file"""
-        from unittest.mock import patch, mock_open
-        from datetime import datetime, timezone
-        import json
-
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-        mock_stats = {
-            "version": 2,
-            "lastComputedDate": today,
-            "dailyModelTokens": [
-                {
-                    "date": today,
-                    "tokensByModel": {
-                        "claude-opus-4-5-20251101": 15000,
-                        "claude-sonnet-4-20250514": 5000
-                    }
-                }
-            ],
-            "totalSessions": 10,
-            "totalMessages": 500
-        }
-
-        with patch('os.path.exists', return_value=True):
-            with patch('builtins.open', mock_open(read_data=json.dumps(mock_stats))):
-                result = pb.get_claude_stats()
-
-        self.assertIsNotNone(result)
-        self.assertEqual(result['today_tokens'], 20000)  # 15000 + 5000
-        self.assertEqual(result['total_sessions'], 10)
-        self.assertEqual(result['total_messages'], 500)
-
-    def test_get_claude_stats_missing_file(self):
-        """Test handling of missing stats file"""
+    def test_get_claude_stats_missing_projects(self):
+        """Test handling of missing projects directory"""
         from unittest.mock import patch
 
         with patch('os.path.exists', return_value=False):
@@ -347,60 +314,32 @@ class TestClaudeStats(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    def test_get_claude_stats_corrupt_json(self):
-        """Test handling of corrupt JSON file"""
-        from unittest.mock import patch, mock_open
+    def test_get_session_duration_valid(self):
+        """Test session duration calculation"""
+        from datetime import datetime, timezone, timedelta
 
-        with patch('os.path.exists', return_value=True):
-            with patch('builtins.open', mock_open(read_data="not valid json {")):
-                result = pb.get_claude_stats()
+        # Session started 2 hours 30 minutes ago
+        start = datetime.now(timezone.utc) - timedelta(hours=2, minutes=30)
+        result = pb.get_session_duration(start)
 
-        self.assertIsNone(result)
-
-    def test_get_claude_stats_no_today_data(self):
-        """Test when stats file exists but has no data for today"""
-        from unittest.mock import patch, mock_open
-        import json
-
-        mock_stats = {
-            "version": 2,
-            "lastComputedDate": "2024-01-01",
-            "dailyModelTokens": [
-                {
-                    "date": "2024-01-01",
-                    "tokensByModel": {
-                        "claude-opus-4-5-20251101": 50000
-                    }
-                }
-            ],
-            "totalSessions": 5,
-            "totalMessages": 100
-        }
-
-        with patch('os.path.exists', return_value=True):
-            with patch('builtins.open', mock_open(read_data=json.dumps(mock_stats))):
-                result = pb.get_claude_stats()
-
-        self.assertIsNotNone(result)
-        self.assertEqual(result['today_tokens'], 0)  # No data for today
-
-    def test_get_time_until_reset(self):
-        """Test time until reset calculation"""
-        result = pb.get_time_until_reset()
-
-        # Should be in format "Xh Ym"
         self.assertIn("h", result)
         self.assertIn("m", result)
 
-        # Parse and validate range (0-23 hours, 0-59 minutes)
-        parts = result.replace("h", "").replace("m", "").split()
-        hours = int(parts[0])
-        minutes = int(parts[1])
+    def test_get_session_duration_short(self):
+        """Test session duration for sessions under 1 hour"""
+        from datetime import datetime, timezone, timedelta
 
-        self.assertGreaterEqual(hours, 0)
-        self.assertLessEqual(hours, 23)
-        self.assertGreaterEqual(minutes, 0)
-        self.assertLessEqual(minutes, 59)
+        # Session started 45 minutes ago
+        start = datetime.now(timezone.utc) - timedelta(minutes=45)
+        result = pb.get_session_duration(start)
+
+        # Should show just minutes, no hours
+        self.assertIn("m", result)
+
+    def test_get_session_duration_none(self):
+        """Test session duration with None start time"""
+        result = pb.get_session_duration(None)
+        self.assertEqual(result, "--")
 
 
 if __name__ == '__main__':

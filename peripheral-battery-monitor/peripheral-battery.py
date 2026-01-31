@@ -6,10 +6,10 @@ import os
 import subprocess
 import faulthandler
 import shutil
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QProgressBar
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
@@ -21,7 +21,7 @@ import logging
 __version__ = "1.3.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
-CLAUDE_STATS_PATH = os.path.expanduser("~/.claude/stats-cache.json")
+CLAUDE_PROJECTS_PATH = os.path.expanduser("~/.claude/projects")
 
 
 def is_claude_installed():
@@ -30,44 +30,87 @@ def is_claude_installed():
 
 
 def get_claude_stats():
-    """Read and parse Claude Code usage statistics from stats-cache.json."""
-    if not os.path.exists(CLAUDE_STATS_PATH):
+    """Read and parse Claude Code usage from the most recent session file."""
+    if not os.path.exists(CLAUDE_PROJECTS_PATH):
         return None
 
     try:
-        with open(CLAUDE_STATS_PATH, 'r') as f:
-            data = json.load(f)
+        # Find the most recently modified session JSONL file
+        latest_session = None
+        latest_mtime = 0
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for root, dirs, files in os.walk(CLAUDE_PROJECTS_PATH):
+            for f in files:
+                if f.endswith('.jsonl'):
+                    path = os.path.join(root, f)
+                    mtime = os.path.getmtime(path)
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+                        latest_session = path
 
-        # Find today's token usage by summing all models
-        today_tokens = 0
-        for entry in data.get('dailyModelTokens', []):
-            if entry.get('date') == today:
-                for model, tokens in entry.get('tokensByModel', {}).items():
-                    today_tokens += tokens
-                break
+        if not latest_session:
+            return None
+
+        # Parse the session file for usage data
+        total_input = 0
+        total_output = 0
+        total_cache_read = 0
+        total_cache_create = 0
+        api_calls = 0
+        session_start = None
+
+        with open(latest_session, 'r') as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    # Get session start time from first user message
+                    if session_start is None and data.get('type') == 'user':
+                        # Try to get timestamp from the message
+                        pass  # We'll use file mtime instead
+
+                    if 'message' in data and isinstance(data['message'], dict):
+                        usage = data['message'].get('usage', {})
+                        if usage:
+                            api_calls += 1
+                            total_input += usage.get('input_tokens', 0)
+                            total_output += usage.get('output_tokens', 0)
+                            total_cache_read += usage.get('cache_read_input_tokens', 0)
+                            total_cache_create += usage.get('cache_creation_input_tokens', 0)
+                except json.JSONDecodeError:
+                    pass
+
+        # Get session start time from file creation time (approximate)
+        session_start_ts = os.path.getctime(latest_session)
 
         return {
-            'today_tokens': today_tokens,
-            'last_computed': data.get('lastComputedDate'),
-            'total_sessions': data.get('totalSessions', 0),
-            'total_messages': data.get('totalMessages', 0)
+            'session_tokens': total_input + total_output,
+            'input_tokens': total_input,
+            'output_tokens': total_output,
+            'cache_read': total_cache_read,
+            'cache_create': total_cache_create,
+            'api_calls': api_calls,
+            'session_start': datetime.fromtimestamp(session_start_ts, tz=timezone.utc),
+            'session_file': latest_session
         }
     except Exception:
         return None
 
 
-def get_time_until_reset():
-    """Calculate time until daily quota resets at midnight UTC."""
+def get_session_duration(session_start):
+    """Calculate how long the current session has been running."""
+    if session_start is None:
+        return "--"
+
     now = datetime.now(timezone.utc)
-    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    delta = tomorrow - now
+    delta = now - session_start
 
     hours = int(delta.total_seconds() // 3600)
     minutes = int((delta.total_seconds() % 3600) // 60)
 
-    return f"{hours}h {minutes}m"
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    else:
+        return f"{minutes}m"
 
 
 def setup_logging(debug_mode=False):
@@ -175,8 +218,7 @@ class PeripheralMonitor(QWidget):
         default_settings = {
             "opacity": 0.95,
             "font_scale": 1.0,
-            "claude_section_enabled": True,
-            "claude_daily_limit": 500000
+            "claude_section_enabled": True
         }
         if os.path.exists(CONFIG_PATH):
             try:
@@ -325,36 +367,25 @@ class PeripheralMonitor(QWidget):
 
         header_row.addStretch()
 
-        # Reset time
-        self.claude_reset_lbl = QLabel("--h --m", self)
-        self.claude_reset_lbl.setObjectName("ClaudeReset")
-        header_row.addWidget(self.claude_reset_lbl)
+        # Session duration
+        self.claude_duration_lbl = QLabel("--", self)
+        self.claude_duration_lbl.setObjectName("ClaudeReset")
+        header_row.addWidget(self.claude_duration_lbl)
 
         claude_layout.addLayout(header_row)
 
-        # Progress bar
-        self.claude_progress = QProgressBar(self)
-        self.claude_progress.setObjectName("ClaudeProgress")
-        self.claude_progress.setMinimum(0)
-        self.claude_progress.setMaximum(100)
-        self.claude_progress.setValue(0)
-        self.claude_progress.setTextVisible(True)
-        self.claude_progress.setFormat("%p%")
-        self.claude_progress.setFixedHeight(14)
-        claude_layout.addWidget(self.claude_progress)
-
-        # Stats row: tokens used / limit and remaining
+        # Stats row: tokens and API calls
         stats_row = QHBoxLayout()
 
-        self.claude_tokens_lbl = QLabel("0 / 500k", self)
+        self.claude_tokens_lbl = QLabel("0 tokens", self)
         self.claude_tokens_lbl.setObjectName("ClaudeStats")
         stats_row.addWidget(self.claude_tokens_lbl)
 
         stats_row.addStretch()
 
-        self.claude_remaining_lbl = QLabel("500k left", self)
-        self.claude_remaining_lbl.setObjectName("ClaudeStats")
-        stats_row.addWidget(self.claude_remaining_lbl)
+        self.claude_calls_lbl = QLabel("0 calls", self)
+        self.claude_calls_lbl.setObjectName("ClaudeStats")
+        stats_row.addWidget(self.claude_calls_lbl)
 
         claude_layout.addLayout(stats_row)
 
@@ -416,18 +447,6 @@ class PeripheralMonitor(QWidget):
             QLabel#ClaudeStats {{
                 font-size: {int(9 * scale)}px;
                 color: #888888;
-            }}
-            QProgressBar#ClaudeProgress {{
-                background-color: #1a1a1a;
-                border: 1px solid #444;
-                border-radius: 4px;
-                text-align: center;
-                color: #e0e0e0;
-                font-size: {int(9 * scale)}px;
-            }}
-            QProgressBar#ClaudeProgress::chunk {{
-                background-color: #4caf50;
-                border-radius: 3px;
             }}
         """)
 
@@ -503,33 +522,10 @@ class PeripheralMonitor(QWidget):
             contextMenu.addSeparator()
             claudeMenu = contextMenu.addMenu("Claude Code")
 
-            toggleAction = QAction("Show Usage Stats", self, checkable=True)
+            toggleAction = QAction("Show Session Stats", self, checkable=True)
             toggleAction.setChecked(self.settings.get('claude_section_enabled', True))
             toggleAction.triggered.connect(self.toggle_claude_section)
             claudeMenu.addAction(toggleAction)
-
-            # Daily Limit Submenu
-            limitMenu = claudeMenu.addMenu("Daily Limit")
-            limit_group = QActionGroup(self)
-
-            limits = [
-                ("100k tokens", 100000),
-                ("250k tokens", 250000),
-                ("500k tokens", 500000),
-                ("1M tokens", 1000000),
-                ("Unlimited", 0),
-            ]
-
-            current_limit = self.settings.get('claude_daily_limit', 500000)
-
-            for label, val in limits:
-                action = QAction(label, self, checkable=True)
-                action.setData(val)
-                action.triggered.connect(lambda checked, v=val: self.set_claude_limit(v))
-                if current_limit == val:
-                    action.setChecked(True)
-                limit_group.addAction(action)
-                limitMenu.addAction(action)
 
         contextMenu.addSeparator()
 
@@ -572,12 +568,6 @@ class PeripheralMonitor(QWidget):
             self.claude_section_visible = False
 
         self.adjustSize()
-
-    def set_claude_limit(self, val):
-        """Set the daily token limit for Claude Code usage tracking."""
-        self.settings["claude_daily_limit"] = val
-        self.save_settings()
-        self.update_claude_section()
 
     def setup_timer(self):
         # Update every 30 seconds
@@ -622,54 +612,22 @@ class PeripheralMonitor(QWidget):
             self.adjustSize()
             return
 
-        today_tokens = stats['today_tokens']
-        daily_limit = self.settings.get('claude_daily_limit', 500000)
-
-        # Calculate remaining and percentage
-        if daily_limit > 0:
-            remaining = max(0, daily_limit - today_tokens)
-            percentage = min(100, (today_tokens / daily_limit) * 100)
-        else:
-            # Unlimited mode - show 0% used
-            remaining = float('inf')
-            percentage = 0
-
-        # Update progress bar
-        self.claude_progress.setValue(int(percentage))
-        self._update_claude_progress_color(percentage)
-
-        # Format token counts (use k for thousands)
+        # Format token counts (use k for thousands, M for millions)
         def format_tokens(n):
-            if n == float('inf'):
-                return "∞"
+            if n >= 1000000:
+                return f"{n / 1000000:.1f}M"
             elif n >= 1000:
                 return f"{n / 1000:.1f}k"
             else:
                 return str(int(n))
 
-        used_str = format_tokens(today_tokens)
-        limit_str = format_tokens(daily_limit) if daily_limit > 0 else "∞"
-        remaining_str = format_tokens(remaining)
+        session_tokens = stats['session_tokens']
+        api_calls = stats['api_calls']
+        session_start = stats.get('session_start')
 
-        self.claude_tokens_lbl.setText(f"{used_str} / {limit_str}")
-        self.claude_remaining_lbl.setText(f"{remaining_str} left")
-        self.claude_reset_lbl.setText(get_time_until_reset())
-
-    def _update_claude_progress_color(self, percentage):
-        """Update progress bar color based on usage percentage."""
-        if percentage < 50:
-            color = "#4caf50"  # Green
-        elif percentage < 75:
-            color = "#ff9800"  # Yellow/Orange
-        else:
-            color = "#f44336"  # Red
-
-        self.claude_progress.setStyleSheet(f"""
-            QProgressBar#ClaudeProgress::chunk {{
-                background-color: {color};
-                border-radius: 3px;
-            }}
-        """)
+        self.claude_tokens_lbl.setText(f"{format_tokens(session_tokens)} tokens")
+        self.claude_calls_lbl.setText(f"{api_calls} calls")
+        self.claude_duration_lbl.setText(get_session_duration(session_start))
 
     def on_data_ready(self, results):
         # 1. Update Mouse - Now comes from results like everything else
