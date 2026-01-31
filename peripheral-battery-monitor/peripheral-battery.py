@@ -446,6 +446,9 @@ class PeripheralMonitor(QWidget):
                 color: #e0e0e0;
                 border: 1px solid #444;
             }
+            QMenu::item {
+                padding: 4px 24px 4px 8px;
+            }
             QMenu::item:selected {
                 background-color: #3d3d3d;
             }
