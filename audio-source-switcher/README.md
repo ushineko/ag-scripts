@@ -185,3 +185,17 @@ Device priority and settings are saved to `~/.config/audio-source-switcher/confi
 - Fixed window size not being restored when opening from tray.
 - Fixed system tray icon label/tooltip.
 
+### v11.1
+- Added CLI control (`--connect`, `--vol-up`, `--vol-down`)
+- Added global hotkey support for Wayland
+
+### Earlier Development (pre-versioning)
+- **Volume Control**: Smart volume routing to hardware (bypassing JamesDSP sink)
+- **Jack Detection**: Physical headphone jack monitoring
+- **JamesDSP Integration**: Intelligent graph rewiring for audio effects
+- **Project Rename**: Renamed from earlier prototype
+- **Priority Auto-Switching**: Drag-and-drop device priority ordering
+- **Bluetooth Management**: Connect/disconnect directly from UI
+- **System Tray**: Minimize to tray, notifications on auto-switch
+- **Offline Device Memory**: Maintains priority order for disconnected devices
+- **Initial Release**: Basic PulseAudio sink switching with PyQt6 UI
