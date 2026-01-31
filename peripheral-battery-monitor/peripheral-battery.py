@@ -18,7 +18,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_PROJECTS_PATH = os.path.expanduser("~/.claude/projects")
@@ -676,20 +676,32 @@ class PeripheralMonitor(QWidget):
             resetMenu = claudeMenu.addMenu("Reset Hour (from /usage)")
             reset_group = QActionGroup(self)
 
-            # Common reset hours (every 2 hours covers most cases)
+            # All 24 hours (window durations like 5h can have any reset hour)
             reset_hours = [
                 ("12am (midnight)", 0),
+                ("1am", 1),
                 ("2am", 2),
+                ("3am", 3),
                 ("4am", 4),
+                ("5am", 5),
                 ("6am", 6),
+                ("7am", 7),
                 ("8am", 8),
+                ("9am", 9),
                 ("10am", 10),
+                ("11am", 11),
                 ("12pm (noon)", 12),
+                ("1pm", 13),
                 ("2pm", 14),
+                ("3pm", 15),
                 ("4pm", 16),
+                ("5pm", 17),
                 ("6pm", 18),
+                ("7pm", 19),
                 ("8pm", 20),
+                ("9pm", 21),
                 ("10pm", 22),
+                ("11pm", 23),
             ]
 
             current_reset = self.settings.get("claude_reset_hour", 2)
