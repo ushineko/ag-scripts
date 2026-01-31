@@ -53,9 +53,11 @@ To remove the tool and its rules:
 ## Changelog
 
 ### v1.1
-- Added specific monitor launching via screen coordinates
-- Added borderless/maximized window support via KWin rules
-- Improved robustness with coordinate-based monitor identification
+- Switched to screen coordinates for monitor identification (robustness improvement)
+- Monitor selection now resilient to system index changes
 
 ### v1.0
-- Initial release with basic Alacritty launching
+- Initial release
+- PyQt6 GUI for monitor selection
+- KWin rules for maximization and borderless windows
+- Desktop entry installation

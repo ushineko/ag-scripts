@@ -18,8 +18,11 @@ A python script to verify system state before attempting migration (free space, 
 
 ## Changelog
 
+### v1.1.0
+- Enhanced runbook with stable `/dev/disk/by-id/` device targeting
+- Safety improvement to prevent wrong-disk accidents
+
 ### v1.0.0
 - Initial release
 - Automated btrfs send/receive migration runbook
 - Pre-migration system check script
-- Stable device path handling via `/dev/disk/by-id/`
