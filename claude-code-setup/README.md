@@ -26,3 +26,11 @@ Run the uninstallation script:
 
 ## Requirements
 - Node.js and npm (The installer will error if not found).
+
+## Changelog
+
+### v0.1.0
+- Initial release
+- Node.js/npm dependency check
+- Global npm package installation
+- Uninstall script

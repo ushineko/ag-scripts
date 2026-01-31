@@ -49,3 +49,13 @@ To remove the tool and its rules:
 - `install_kwin_rules.py`: Script to inject KWin rules.
 - `install.sh`: Master installation script.
 - `uninstall.sh`: Removal script.
+
+## Changelog
+
+### v1.1
+- Added specific monitor launching via screen coordinates
+- Added borderless/maximized window support via KWin rules
+- Improved robustness with coordinate-based monitor identification
+
+### v1.0
+- Initial release with basic Alacritty launching

@@ -87,6 +87,7 @@ When all tasks in the plan are complete:
     *   **Bump Version**: Increment version in source code and README.
     *   **Update README**: Add new features/fixes to the sub-project's README.
     *   **Update Inline Help** (If applicable): Ensure any internal help text, "About" dialog content, or `--help` output reflects new changes and the updated version.
+    *   **Update Changelog**: If the README has a `## Changelog` section, add an entry for the new version summarizing changes.
 *   **Ensure Installer**:
     *   Check if `install.sh` exists.
     *   If not, create one (even if minimal) to maintain consistency.

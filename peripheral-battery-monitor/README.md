@@ -47,3 +47,22 @@ python3 peripheral-battery.py --debug
 Logs are automatically saved in JSON format for debugging:
 - **Location**: `~/.local/state/peripheral-battery-monitor/peripheral_battery.log`
 - **Rotation**: Keeps 1 backup file (Max 5MB).
+
+## Changelog
+
+### v1.2.3
+- Added screenshot to README
+
+### v1.2.0
+- Added AirPods BLE scanning with L/R/Case status
+- Added fallback logic for disconnected device monitoring
+
+### v1.1.0
+- Added Arctis headset support via headsetcontrol
+- Added structured logging with structlog
+
+### v1.0.0
+- Initial release
+- Logitech mouse support via solaar
+- Keychron keyboard support (Bluetooth/Wired/Wireless)
+- KDE Wayland integration with KWin rules

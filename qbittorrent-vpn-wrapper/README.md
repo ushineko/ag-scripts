@@ -32,3 +32,12 @@ Run the wrapper directly (it will launch qBittorrent for you):
 ./qbittorrent_vpn_wrapper.py
 ```
 Or use the installed desktop shortcut.
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- VPN binding with IP geolocation verification
+- Activity monitoring via qBittorrent WebUI
+- Idle detection with auto-shutdown dialog
+- Window glue functionality via kdotool

@@ -26,3 +26,12 @@ Pass a partial name string to control a specific VPN:
 
 ## Integration
 Bind this script to a global hotkey (e.g., Meta+V) in your desktop environment (KDE/GNOME) for quick access.
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- Fuzzy connection name matching
+- GUI menu via kdialog/zenity
+- Enable/Disable/Bounce/Config actions
+- Desktop notifications

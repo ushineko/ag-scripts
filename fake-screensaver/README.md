@@ -57,4 +57,10 @@ To activate, you can bind this script to a global hotkey (e.g., `Meta+L` or `Met
     ```
     *(Run `./fake_screensaver.py` in a terminal to see available screen indices).*
 
+## Changelog
 
+### v1.0.0
+- Initial release
+- Black fullscreen window with visible cursor
+- Multi-screen support via `--screen` flag
+- Desktop entry for application launcher

@@ -61,6 +61,7 @@ When completing work on a sub-project:
 - Increment version in source code and README
 - Update README with new features/fixes
 - Update inline help text, "About" dialogs, or `--help` output if applicable
+- **Update Changelog**: If the README has a `## Changelog` section, add an entry for the new version with a summary of changes
 
 ### 2. Ensure Installer
 - Check if `install.sh` exists in the sub-project

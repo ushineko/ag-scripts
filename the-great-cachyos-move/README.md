@@ -15,3 +15,11 @@ A python script to verify system state before attempting migration (free space, 
 ## ⚠️ Critical Warnings
 *   **Data Loss**: `migration_runbook.sh` is destructive. It **wipes** the configured target disk.
 *   **Device Paths**: **NEVER** hardcode `/dev/nvmeXnY` in destructive scripts. Always use `/dev/disk/by-id/` to guarantee you are nuking the correct hardware.
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- Automated btrfs send/receive migration runbook
+- Pre-migration system check script
+- Stable device path handling via `/dev/disk/by-id/`

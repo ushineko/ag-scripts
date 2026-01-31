@@ -37,3 +37,10 @@ Supported colors: `red`, `green`, `blue`, `white`, `off`.
 -   **Permission Denied**: If the script fails to set colors, try running with `sudo` or ensure your user has access to the USB devices (setup udev rules).
 -   **Devices not found (OpenRGB)**: Run `openrgb --server` once to initialize or run the GUI to scan for devices.
 -   **Mousepad not changing**: Ensure `ckb-next-daemon` is active. Check `/run/ckb-next-cmd` exists.
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- Unified control for OpenRGB, liquidctl, and ckb-next
+- Support for basic colors (red, green, blue, white, off)

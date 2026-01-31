@@ -21,3 +21,11 @@ If you just installed Docker, you may need to apply the group changes to your cu
 newgrp docker
 ```
 Or simply log out and back in.
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- Auto-installation via pacman
+- Service management and group setup
+- Installation verification with hello-world container

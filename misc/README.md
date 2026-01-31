@@ -52,3 +52,10 @@ UUID=ABC123... /mnt/Data1 ntfs defaults,nofail,rw,exec,uid=1000,gid=1000,umask=0
 ## Installation
 
 These are standalone scripts with no installation required. Copy to a directory in your PATH or run directly.
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- `fix_readonly_mounts.py`: NTFS read-only mount detection and repair
+- `generate_data_mounts.py`: fstab entry generation for data drives

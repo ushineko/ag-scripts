@@ -40,3 +40,14 @@ A script to restart or refresh the KDE Plasma shell without logging out. Useful 
 - systemd (recommended) or `kstart` (fallback)
 
 *Note: Contains fallback code for older setups, but only Plasma 6 is tested.*
+
+## Changelog
+
+### v1.1.0
+- Added light refresh mode via D-Bus (`--refresh` flag)
+- Added systemd-first restart approach
+- Added version flag
+
+### v1.0.0
+- Initial release
+- Basic plasmashell restart via kquitapp/kstart

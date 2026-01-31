@@ -35,3 +35,11 @@ You can also run the script from the terminal with arguments:
 ```bash
 ./uninstall.sh
 ```
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- Interactive monitor selection menu
+- Persistent KWin rules for window positioning
+- CLI support with `--screen` and `--uninstall` flags

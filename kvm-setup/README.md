@@ -43,3 +43,11 @@ sudo ./fix_network.sh
 ```
 
 This script injects rules into the `DOCKER-USER` chain to allow KVM traffic without interfering with your Docker configuration.
+
+## Changelog
+
+### v1.0.0
+- Initial release
+- Automated QEMU/libvirt installation
+- User group configuration
+- Docker/firewall network fix script
