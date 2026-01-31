@@ -24,23 +24,16 @@ pip install PyQt6
 
 ## Installation
 
-### Running Directly
-You can run the script directly:
+```bash
+./install.sh
+```
+
+This installs a desktop entry so "Fake Screensaver" appears in your applications menu.
+
+Or run directly without installing:
 ```bash
 ./fake_screensaver.py
 ```
-
-### Desktop Entry (Launcher)
-To add this to your application menu (so you can launch it like any other app):
-
-1. Edit `fake-screensaver.desktop` and ensure the `Exec` path points to the correct location of `fake_screensaver.py`.
-2. Copy the desktop file to your local applications folder:
-
-```bash
-cp fake-screensaver.desktop ~/.local/share/applications/
-```
-
-3. It should now appear in your system's application launcher as "Fake Screensaver".
 
 ## Global Hotkey (KDE Plasma)
 
@@ -65,6 +58,9 @@ To activate, you can bind this script to a global hotkey (e.g., `Meta+L` or `Met
     *(Run `./fake_screensaver.py` in a terminal to see available screen indices).*
 
 ## Changelog
+
+### v1.1.1
+- Added install.sh script
 
 ### v1.1.0
 - Added multi-screen support via `--screen` flag
