@@ -10,6 +10,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | :--- | :--- |
 | [audio-source-switcher](audio-source-switcher/) | Feature-rich PyQt6 audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, and global hotkeys. A good example of PipeWire/PulseAudio graph manipulation. |
 | [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring. Demonstrates BLE scanning, upower/solaar integration, and KDE Wayland window rules. |
+| [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology—spec-driven, iterative development with quality gates and fresh context per iteration. |
 
 ## Scripts
 
@@ -31,6 +32,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | `pinball-fx/configure_kwin.py` | "Window Fixer" utility for Pinball FX. Interactive menu to force the game onto any selected monitor and manage persistent KWin rules. |
 | `plasmashell-restart/restart.sh` | Restarts or refreshes the KDE Plasma 6 shell via systemd (full restart) or D-Bus (light refresh). Keeps taskbar operative. |
 | `claude-code-setup/install.sh` | Setup script for Claude Code CLI. Installs/Updates Node.js (via Conda if needed) and `@anthropic-ai/claude-code` globally. |
+| `claude-code-global/install.sh` | Installs the Ralph Wiggum global `CLAUDE.md` config to `~/.claude/`. Enables spec-driven, iterative development workflow for all Claude Code sessions. |
 
 ## Usage
 
