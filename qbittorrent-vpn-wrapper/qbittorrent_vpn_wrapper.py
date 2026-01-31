@@ -12,7 +12,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QIcon, QFont
 
 # --- configuration ---
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 VPN_CONNECTION_NAME = "us_las_vegas-aes-128-cbc-udp-dns"
 EXPECTED_CITY = "Las Vegas"
 EXPECTED_REGION = "Nevada"
