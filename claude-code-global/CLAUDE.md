@@ -97,7 +97,8 @@ Per-project `CLAUDE.md` files can override these defaults by specifying:
 
 | Trigger | Mode | Behavior |
 |---------|------|----------|
-| "Ralph, start working" | Loop | Provide commands to launch ralph-loop.sh |
+| `/ralph` command | Loop | Enter Loop Mode, work through specs autonomously |
+| `ralph-loop.sh` | Loop | External orchestration with fresh context per iteration |
 | Working through specs/ | Loop | Implement, test, signal completion |
 | Conversation/questions | Interactive | Guide and collaborate |
 
