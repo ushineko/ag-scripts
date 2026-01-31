@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.3.0
+Version 1.3.1
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
 
@@ -107,6 +107,10 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.3.1
+- Fixed bug where Claude Code section would permanently hide when no activity data was available in the current session window
+- Section now shows "No activity" state instead of hiding when there's no data
 
 ### v1.3.0
 - Added Claude Code usage stats section below the battery grid

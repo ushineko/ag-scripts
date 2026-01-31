@@ -18,7 +18,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_PROJECTS_PATH = os.path.expanduser("~/.claude/projects")
@@ -795,8 +795,14 @@ class PeripheralMonitor(QWidget):
 
     def update_claude_section(self):
         """Update the Claude Code usage stats display."""
-        if not self.claude_section_visible or self.claude_frame is None:
+        # Check if section should be visible based on settings (not transient state)
+        if not self.settings.get('claude_section_enabled', True) or self.claude_frame is None:
             return
+
+        # Ensure section is visible if it should be
+        if not self.claude_section_visible:
+            self.claude_frame.show()
+            self.claude_section_visible = True
 
         # Get window boundaries based on configured window hours and reset hour
         window_hours = self.settings.get('claude_window_hours', 4)
@@ -806,10 +812,11 @@ class PeripheralMonitor(QWidget):
         # Get stats for current window
         stats = get_claude_stats(window_start, window_end)
         if stats is None:
-            # Hide section if stats unavailable
-            self.claude_frame.hide()
-            self.claude_section_visible = False
-            self.adjustSize()
+            # Show "no data" state instead of hiding
+            self.claude_progress.setValue(0)
+            self.claude_tokens_lbl.setText("No activity")
+            self.claude_calls_lbl.setText("0 calls")
+            self.claude_duration_lbl.setText(get_time_until_reset(window_end))
             return
 
         # Format token counts (use k for thousands, M for millions)
