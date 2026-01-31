@@ -54,11 +54,40 @@ UUID=ABC123... /mnt/Data1 ntfs defaults,nofail,rw,exec,uid=1000,gid=1000,umask=0
 
 ---
 
+### capture_window_screenshot.sh
+
+Captures a screenshot of a specific window for README documentation. Uses kdotool for window management and spectacle for screenshots on KDE Wayland.
+
+**Features:**
+- Finds windows by class name or title (case-insensitive)
+- Brings window to front before capturing
+- Optional auto-launch if app not running
+- Configurable delay for window settling
+- Wayland-compatible
+
+**Usage:**
+```bash
+# Screenshot a running app
+./capture_window_screenshot.sh "peripheral-battery-monitor" assets/screenshot.png
+
+# Launch if not running, then screenshot
+./capture_window_screenshot.sh "Battery Monitor" screenshot.png --launch "python3 app.py" --delay 2
+```
+
+**Requirements:**
+- `kdotool` (KDE window management)
+- `spectacle` (KDE screenshot tool)
+
+---
+
 ## Installation
 
 These are standalone scripts with no installation required. Copy to a directory in your PATH or run directly.
 
 ## Changelog
+
+### v1.1.0
+- Added `capture_window_screenshot.sh`: Window screenshot utility for documentation
 
 ### v1.0.0
 - Initial release
