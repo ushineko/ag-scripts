@@ -1,14 +1,23 @@
 # AG Scripts
 
-This repository contains various utility scripts for system management and automation.
+QOL scripts and utilities created during a transition from Windows to Linux (CachyOS). These provide wrappers or functionality for various tasks that weren't immediately available out of the box.
+
+## Highlights
+
+A couple of projects that may be of broader interest—either as standalone utilities or as code references/learning vehicles:
+
+| Project | Description |
+| :--- | :--- |
+| [audio-source-switcher](audio-source-switcher/) | Feature-rich PyQt6 audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, and global hotkeys. A good example of PipeWire/PulseAudio graph manipulation. |
+| [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring. Demonstrates BLE scanning, upower/solaar integration, and KDE Wayland window rules. |
 
 ## Scripts
 
 | Script | Description |
 | :--- | :--- |
 | `docker-setup/setup_docker.sh` | Sets up Docker for the current user. Installs Docker if missing, enables the service, adds the user to the `docker` group, and verifies the installation with a test container. |
-| `fix_readonly_mounts.py` | Scans for read-only mounts (specifically labeled "DataN" or "System"), attempts to fix them using `ntfsfix`, and verifies write access. Must be run as root. |
-| `generate_data_mounts.py` | Generates `/etc/fstab` entries for block devices with labels matching "DataN" or "System", setting up mounts with appropriate permissions (uid/gid) for the current user. |
+| `misc/fix_readonly_mounts.py` | Scans for read-only mounts (specifically labeled "DataN" or "System"), attempts to fix them using `ntfsfix`, and verifies write access. Must be run as root. |
+| `misc/generate_data_mounts.py` | Generates `/etc/fstab` entries for block devices with labels matching "DataN" or "System", setting up mounts with appropriate permissions (uid/gid) for the current user. |
 | `set-rgb/change_color.py` | Controls RGB lighting on various hardware devices (via OpenRGB, liquidctl, and ckb-next). Supports basic colors (red, green, blue, white, off). |
 | `fake-screensaver/blank.html` | A simple black HTML page that acts as a screensaver. Hides the cursor and supports toggling full-screen mode by clicking or pressing Space. |
 | `fake-screensaver/fake_screensaver.py` | A PyQt-based fake screensaver that keeps the mouse cursor visible. Includes a desktop entry. |
