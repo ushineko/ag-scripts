@@ -4,8 +4,8 @@ Monitor thread for VPN health checking and auto-reconnect
 import logging
 import time
 import threading
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from datetime import datetime
+from typing import Dict, List
 from enum import Enum
 
 from PyQt6.QtCore import QThread, pyqtSignal
