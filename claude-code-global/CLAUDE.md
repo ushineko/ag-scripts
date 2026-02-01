@@ -218,6 +218,37 @@ Output `<promise>DONE</promise>` only when ALL of these pass:
 
 ---
 
+## Writing and Communication Standards
+
+All written artifacts (specs, documentation, commit messages, validation reports, code comments) should prioritize clarity and precision over style.
+
+### Avoid Superlative and Marketing Language
+
+**Prohibited words/phrases** - Use specific, factual alternatives:
+- **Superlatives**: "amazing", "awesome", "excellent", "incredible", "fantastic"
+- **Marketing fluff**: "enterprise-grade", "world-class", "cutting-edge", "next-generation", "industry-leading"
+- **Vague quality claims**: "robust", "scalable", "performant", "reliable" (unless backed by metrics)
+
+**Guidelines**:
+- **Be factual and direct**: Describe what IS, not how impressive it is
+- **Use concrete language**: "Handles 1000 req/sec" not "highly performant"
+- **Quantify when possible**: "Reduces load time from 3s to 800ms" not "dramatically faster"
+- **State capabilities clearly**: "Supports clustering via Redis" not "enterprise-grade scalability"
+
+**Examples**:
+
+| ❌ Avoid | ✅ Use Instead |
+|---------|---------------|
+| "This amazing feature provides enterprise-grade scalability" | "This feature supports horizontal scaling via Redis clustering" |
+| "Awesome refactor that makes the code more robust" | "Refactor: extract database logic into repository pattern" |
+| "Incredible test coverage improvements" | "Increase test coverage from 45% to 87%" |
+| "World-class error handling implementation" | "Add retry logic with exponential backoff for API calls" |
+| "Cutting-edge AI-powered optimization" | "Use TF-IDF vectorization for document similarity" |
+
+**Purpose**: Written artifacts exist to communicate project status, requirements, and technical decisions clearly. Superlative and marketing language adds no information and obscures meaning.
+
+---
+
 ## Project-Specific Overrides
 
 Per-project `CLAUDE.md` files can override these defaults by specifying:
