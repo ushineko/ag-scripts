@@ -1,6 +1,6 @@
 # Claude Code Global Config (Ralph Wiggum Methodology)
 
-**Version 1.1.0**
+**Version 1.2.0**
 
 A global `CLAUDE.md` configuration file for Claude Code that implements the Ralph Wiggum autonomous coding methodology—a spec-driven, iterative development workflow with quality gates and fresh context per iteration.
 
@@ -31,13 +31,16 @@ The methodology supports two modes:
 
 ## Features
 
-- **Phased Workflow**: Orient → Select → Implement → Validate → Record → Commit
+- **Phased Workflow**: Orient → Select → Implement → Validate → Code Quality → Security → Record → Commit
 - **Context Detection**: Automatically detects when running in loop mode vs interactive
-- **Quality Gates**: Enforces tests passing before marking work complete
-- **Git Preferences**: Conventional commits, no Co-Authored-By lines
+- **Quality Gates**: Enforces tests passing, code quality checks, and security review before marking work complete
+- **Code Quality Pass**: Checks for dead code, duplication, and poor encapsulation
+- **Security Review Pass**: CVE scanning, OWASP top 10 checks, and security anti-pattern detection
+- **Git Preferences**: Conventional commits, no Co-Authored-By lines, VPN connectivity checks
 - **Project Overrides**: Per-project `CLAUDE.md` files can extend or override defaults
 - **/ralph Command**: Slash command to trigger Loop Mode within an interactive session
 - **ralph-loop.sh**: External orchestrator for fully autonomous spec processing
+- **File Sync Workflow**: Clear procedures for keeping global config in version control
 
 ## Installation
 
@@ -50,6 +53,27 @@ This installs:
 - `/ralph` command → `~/.claude/commands/ralph.md`
 
 If you already have a global config, it will be backed up first.
+
+## Keeping Files in Sync
+
+**IMPORTANT**: This project's `CLAUDE.md` is the canonical source that gets installed to `~/.claude/CLAUDE.md`. These two files must stay in sync.
+
+### When updating the global methodology:
+
+1. **Edit the version-controlled copy**: Make changes to `claude-code-global/CLAUDE.md` in this repo
+2. **Sync to installed location**: Run `./install.sh` to copy changes to `~/.claude/CLAUDE.md`
+3. **Commit to version control**: Commit the changes to this project
+4. **Version bump**: Update the version number in README.md if changes are significant
+
+### When changes are made directly to ~/.claude/CLAUDE.md:
+
+If you've made changes directly to the installed file (e.g., during development):
+
+1. Copy changes back to this project: `cp ~/.claude/CLAUDE.md claude-code-global/CLAUDE.md`
+2. Review the diff carefully
+3. Commit to this project's version control
+
+This ensures the global methodology is properly tracked and can be shared/reinstalled.
 
 ## Usage
 
@@ -166,6 +190,13 @@ This removes:
 If a backup exists, you'll be prompted to restore it.
 
 ## Changelog
+
+### v1.2.0
+- **Phase 4: Code Quality Refactor Pass** - Added conditional refactoring step to check for dead code, duplication, and poor encapsulation
+- **Phase 5: Security Review Pass** - Added comprehensive security analysis including CVE scanning, OWASP top 10 checks, and security anti-patterns
+- **Workflow renumbering** - Phases renumbered to accommodate new quality gates (Record History → Phase 6, Commit → Phase 7, Completion Signal → Phase 8)
+- **Remote Connectivity Check** - Added git connectivity check with VPN bounce reminder
+- **File Sync Documentation** - Added workflow rules and procedures for keeping `~/.claude/CLAUDE.md` and `claude-code-global/CLAUDE.md` in sync
 
 ### v1.1.0
 - Added `/ralph` slash command for triggering Loop Mode
