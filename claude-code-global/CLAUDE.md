@@ -256,6 +256,60 @@ All written artifacts (specs, documentation, commit messages, validation reports
 
 ---
 
+## Tool and Package Installation
+
+When you determine that a tool or package needs to be installed:
+
+**STOP and ASK the user first** - Do NOT automatically install packages
+
+**Why**: Installation is environment-specific and depends on:
+- Operating system and package manager (apt, pacman, brew, dnf, etc.)
+- Python installation type (system python, conda, virtualenv, pipx, etc.)
+- User's environment preferences (some users avoid system-wide pip installs)
+- Security and permission requirements
+
+**Process**:
+1. **Detect the need**: When a command fails because a tool is missing (e.g., `pip-audit`, `tree`, `rg`)
+2. **Ask the user**:
+   - "The tool X is not installed. Should I install it?"
+   - If applicable: "Which method: [pip/apt/pacman/other]?"
+3. **Wait for approval**: Do not proceed with installation without confirmation
+4. **Document alternatives**: If the tool has a reasonable fallback, mention it
+
+**Fallback strategies**:
+- **If installation not approved**: Use reasonable defaults when available
+  - Example: If `pip-audit` unavailable, skip CVE scanning but note it in validation report
+  - Example: If `tree` unavailable, use `find` and `ls` alternatives
+- **If no reasonable default exists**: Document the limitation clearly
+  - Note what validation/functionality could not be completed
+  - Include this in any validation reports or documentation
+
+**Examples**:
+
+❌ **Wrong approach**:
+```
+Tool not found. Installing via pip...
+[proceeds with pip install without asking]
+```
+
+✅ **Correct approach**:
+```
+The pip-audit tool is not installed. This tool scans Python dependencies for known CVEs.
+
+Options:
+1. Install it: pipx install pip-audit (recommended)
+2. Skip CVE scanning (will note this limitation in validation report)
+
+Should I proceed with installation? [Provide installation command for your environment]
+```
+
+**Special cases**:
+- **System tools** (apt, pacman): Always ask - these require sudo and modify system state
+- **Python packages**: Ask which method (pip, pipx, conda) and where (system, venv)
+- **Development tools**: Consider if they should be in requirements.txt instead
+
+---
+
 ## Project-Specific Overrides
 
 Per-project `CLAUDE.md` files can override these defaults by specifying:
