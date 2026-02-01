@@ -68,21 +68,26 @@ def get_session_window(window_hours=4, reset_hour=2):
     return window_start, window_end
 
 
-def get_time_until_reset(window_end):
-    """Calculate time remaining until window resets."""
+def get_time_until_reset(window_start, window_end):
+    """Calculate time remaining until window resets, with window times displayed."""
     now = datetime.now().astimezone()
     delta = window_end - now
 
+    # Format window times in 24H format
+    start_time = window_start.strftime("%H:%M")
+    end_time = window_end.strftime("%H:%M")
+    window_str = f"{start_time}-{end_time}"
+
     if delta.total_seconds() <= 0:
-        return "resetting..."
+        return f"{window_str} (resetting...)"
 
     hours = int(delta.total_seconds() // 3600)
     minutes = int((delta.total_seconds() % 3600) // 60)
 
     if hours > 0:
-        return f"{hours}h {minutes}m reset"
+        return f"{window_str} ({hours}h {minutes}m)"
     else:
-        return f"{minutes}m reset"
+        return f"{window_str} ({minutes}m)"
 
 
 def get_claude_stats(window_start=None, window_end=None):
@@ -828,7 +833,7 @@ class PeripheralMonitor(QWidget):
             self.claude_progress.setValue(0)
             self.claude_tokens_lbl.setText("No activity")
             self.claude_calls_lbl.setText("0 calls")
-            self.claude_duration_lbl.setText(get_time_until_reset(window_end))
+            self.claude_duration_lbl.setText(get_time_until_reset(window_start, window_end))
             return
 
         # Format token counts (use k for thousands, M for millions)
@@ -876,7 +881,7 @@ class PeripheralMonitor(QWidget):
             self.claude_tokens_lbl.setText(f"{format_tokens(session_tokens)} tokens")
 
         self.claude_calls_lbl.setText(f"{api_calls} calls")
-        self.claude_duration_lbl.setText(get_time_until_reset(window_end))
+        self.claude_duration_lbl.setText(get_time_until_reset(window_start, window_end))
 
     def on_data_ready(self, results):
         # 1. Update Mouse - Now comes from results like everything else

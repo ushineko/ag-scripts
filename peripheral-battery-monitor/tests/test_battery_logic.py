@@ -339,27 +339,41 @@ class TestClaudeStats(unittest.TestCase):
         self.assertIn(window_end.hour, valid_end_hours)
 
     def test_get_time_until_reset(self):
-        """Test time until reset calculation"""
+        """Test time until reset calculation with window times"""
         from datetime import datetime, timedelta
 
-        # Window ends 1 hour 30 minutes from now
-        future = datetime.now().astimezone() + timedelta(hours=1, minutes=30)
-        result = pb.get_time_until_reset(future)
+        # Window starts now, ends 1 hour 30 minutes from now
+        now = datetime.now().astimezone()
+        window_start = now
+        window_end = now + timedelta(hours=1, minutes=30)
+        result = pb.get_time_until_reset(window_start, window_end)
 
+        # Should contain window times in HH:MM-HH:MM format
+        self.assertIn("-", result)
+        self.assertIn(":", result)
+        # Should contain time remaining in parentheses
         self.assertIn("h", result)
         self.assertIn("m", result)
-        self.assertIn("reset", result)
+        self.assertIn("(", result)
+        self.assertIn(")", result)
 
     def test_get_time_until_reset_short(self):
-        """Test time until reset for < 1 hour"""
+        """Test time until reset for < 1 hour with window times"""
         from datetime import datetime, timedelta
 
-        # Window ends 30 minutes from now
-        future = datetime.now().astimezone() + timedelta(minutes=30)
-        result = pb.get_time_until_reset(future)
+        # Window starts now, ends 30 minutes from now
+        now = datetime.now().astimezone()
+        window_start = now
+        window_end = now + timedelta(minutes=30)
+        result = pb.get_time_until_reset(window_start, window_end)
 
+        # Should contain window times in HH:MM-HH:MM format
+        self.assertIn("-", result)
+        self.assertIn(":", result)
+        # Should contain time remaining in parentheses
         self.assertIn("m", result)
-        self.assertIn("reset", result)
+        self.assertIn("(", result)
+        self.assertIn(")", result)
 
     def test_session_budget_default(self):
         """Test that default session budget is 500k tokens"""
