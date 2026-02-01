@@ -142,6 +142,13 @@ After completing validation phases (3-5), save results to track quality trends:
 
 **Location**: `validation-reports/` or `history/validation/` in the project root
 
+**IMPORTANT - Location verification**:
+- **For sub-projects**: Always place validation reports in the sub-project directory
+  - Example: `game-desktop-creator/validation-reports/` NOT `validation-reports/`
+  - Before saving, verify you're in the correct directory with `pwd`
+- **For standalone projects**: Place in the repository root `validation-reports/`
+- **Double-check**: After creating a report, confirm it's in the right location before committing
+
 **When to save**:
 - After completing all quality gates (Phases 3-5)
 - Before final commit (Phase 7)
