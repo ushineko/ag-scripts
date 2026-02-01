@@ -56,6 +56,42 @@ HEROIC_GOG_INSTALLED = HEROIC_CONFIG / "gogdlConfig" / "gog" / "installed.json"
 HEROIC_ICONS = HEROIC_CONFIG / "icons"
 
 
+# =============================================================================
+# Input Sanitization Functions
+# =============================================================================
+
+def sanitize_desktop_file_value(value: str) -> str:
+    """Sanitize a value for use in a .desktop file.
+
+    Removes newlines and other characters that could inject additional
+    desktop file entries or break the file format.
+    """
+    # Replace newlines with spaces to prevent injection
+    sanitized = value.replace('\n', ' ').replace('\r', ' ')
+    # Remove backslashes to prevent escape sequence injection
+    sanitized = sanitized.replace('\\', '')
+    # Limit length to reasonable value
+    sanitized = sanitized[:200]
+    return sanitized
+
+
+def sanitize_game_id(game_id: str) -> str:
+    """Sanitize a game ID to prevent path traversal.
+
+    Only allows alphanumeric characters, dashes, underscores, and periods.
+    Removes path separators and other potentially dangerous characters.
+    """
+    import re
+    # Only keep safe characters: alphanumeric, dash, underscore, period
+    sanitized = re.sub(r'[^a-zA-Z0-9._-]', '', game_id)
+    # Prevent leading dots (hidden files) or double dots (path traversal)
+    sanitized = sanitized.lstrip('.')
+    sanitized = sanitized.replace('..', '')
+    # Limit length
+    sanitized = sanitized[:100]
+    return sanitized if sanitized else "unknown"
+
+
 @dataclass
 class Game:
     """Represents an installed game from any source."""
@@ -65,10 +101,11 @@ class Game:
 
     @property
     def desktop_file_name(self) -> str:
+        safe_id = sanitize_game_id(self.id)
         if self.source == "steam":
-            return f"steam-game-{self.id}.desktop"
+            return f"steam-game-{safe_id}.desktop"
         else:
-            return f"heroic-{self.source}-{self.id}.desktop"
+            return f"heroic-{self.source}-{safe_id}.desktop"
 
     @property
     def desktop_file_path(self) -> Path:
@@ -76,10 +113,11 @@ class Game:
 
     @property
     def icon_name(self) -> str:
+        safe_id = sanitize_game_id(self.id)
         if self.source == "steam":
-            return f"steam-game-{self.id}"
+            return f"steam-game-{safe_id}"
         else:
-            return f"heroic-game-{self.id}"
+            return f"heroic-game-{safe_id}"
 
     @property
     def has_desktop_file(self) -> bool:
@@ -109,12 +147,13 @@ class Game:
 
     def get_launch_command(self) -> str:
         """Get the command to launch this game."""
+        safe_id = sanitize_game_id(self.id)
         if self.source == "steam":
-            return f"steam steam://rungameid/{self.id}"
+            return f"steam steam://rungameid/{safe_id}"
         elif self.source == "epic":
-            return f"xdg-open heroic://launch/legendary/{self.id}"
+            return f"xdg-open heroic://launch/legendary/{safe_id}"
         elif self.source == "gog":
-            return f"xdg-open heroic://launch/gog/{self.id}"
+            return f"xdg-open heroic://launch/gog/{safe_id}"
         return ""
 
     def get_fallback_icon(self) -> str:
@@ -313,10 +352,15 @@ def create_desktop_file(game: Game) -> None:
     icon_name = install_game_icon(game)
     launcher = "Steam" if game.source == "steam" else "Heroic"
 
+    # Sanitize all values to prevent desktop file injection
+    safe_name = sanitize_desktop_file_value(game.name)
+    safe_comment = sanitize_desktop_file_value(f"Launch {game.name} via {launcher}")
+    safe_exec = sanitize_desktop_file_value(game.get_launch_command())
+
     content = f"""[Desktop Entry]
-Name={game.name}
-Comment=Launch {game.name} via {launcher}
-Exec={game.get_launch_command()}
+Name={safe_name}
+Comment={safe_comment}
+Exec={safe_exec}
 Icon={icon_name}
 Terminal=false
 Type=Application

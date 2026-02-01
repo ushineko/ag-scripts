@@ -9,7 +9,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
-from game_desktop_creator import parse_vdf, Game, STEAM_FILTERED_APPIDS, get_heroic_games
+from game_desktop_creator import (
+    parse_vdf, Game, STEAM_FILTERED_APPIDS, get_heroic_games,
+    sanitize_desktop_file_value, sanitize_game_id
+)
 
 
 class TestVdfParser:
@@ -203,6 +206,98 @@ class TestHeroicJsonParsing:
             assert game.id == app_name
             assert game.name == info["title"]
             assert game.source == "gog"
+
+
+class TestSanitization:
+    """Tests for input sanitization functions."""
+
+    def test_sanitize_desktop_file_value_removes_newlines(self):
+        """Test that newlines are removed from desktop file values."""
+        malicious = "Game Name\nExec=evil_command\n"
+        result = sanitize_desktop_file_value(malicious)
+        assert '\n' not in result
+        assert '\r' not in result
+        assert result == "Game Name Exec=evil_command "
+
+    def test_sanitize_desktop_file_value_removes_backslashes(self):
+        """Test that backslashes are removed."""
+        value = "Game\\nName\\rTest"
+        result = sanitize_desktop_file_value(value)
+        assert '\\' not in result
+        assert result == "GamenNamerTest"
+
+    def test_sanitize_desktop_file_value_limits_length(self):
+        """Test that values are limited to 200 characters."""
+        long_value = "A" * 300
+        result = sanitize_desktop_file_value(long_value)
+        assert len(result) == 200
+
+    def test_sanitize_desktop_file_value_normal_input(self):
+        """Test that normal input is preserved."""
+        normal = "Portal 2"
+        result = sanitize_desktop_file_value(normal)
+        assert result == normal
+
+    def test_sanitize_game_id_allows_safe_chars(self):
+        """Test that safe characters are preserved."""
+        safe_id = "abc123-test_game.v2"
+        result = sanitize_game_id(safe_id)
+        assert result == safe_id
+
+    def test_sanitize_game_id_removes_path_separators(self):
+        """Test that path separators are removed."""
+        malicious = "../../etc/passwd"
+        result = sanitize_game_id(malicious)
+        assert '/' not in result
+        assert '\\' not in result
+        # Result should only contain safe chars
+        assert result == "etcpasswd"
+
+    def test_sanitize_game_id_removes_special_chars(self):
+        """Test that special characters are removed."""
+        special = "game@name#with$specials%"
+        result = sanitize_game_id(special)
+        assert result == "gamenamewithspecials"
+
+    def test_sanitize_game_id_strips_leading_dots(self):
+        """Test that leading dots are removed."""
+        hidden = "...hidden_file"
+        result = sanitize_game_id(hidden)
+        assert not result.startswith('.')
+
+    def test_sanitize_game_id_removes_double_dots(self):
+        """Test that double dots are removed."""
+        traversal = "game..name"
+        result = sanitize_game_id(traversal)
+        assert '..' not in result
+
+    def test_sanitize_game_id_limits_length(self):
+        """Test that IDs are limited to 100 characters."""
+        long_id = "A" * 150
+        result = sanitize_game_id(long_id)
+        assert len(result) == 100
+
+    def test_sanitize_game_id_empty_fallback(self):
+        """Test that empty IDs get a fallback value."""
+        result = sanitize_game_id("@#$%")
+        assert result == "unknown"
+
+    def test_game_with_malicious_id(self):
+        """Test that Game class sanitizes malicious IDs."""
+        game = Game(id="../../../evil", name="Test", source="steam")
+        assert '../' not in game.desktop_file_name
+        assert '../' not in game.icon_name
+        assert '../' not in game.get_launch_command()
+
+    def test_game_with_malicious_name_in_desktop_file(self):
+        """Test that malicious names are sanitized when creating desktop files."""
+        # This test verifies the integration - actual desktop file creation
+        # is tested separately, but we can verify the Game object itself
+        game = Game(id="123", name="Game\nExec=evil\n", source="steam")
+        # The sanitization happens in create_desktop_file, not in the Game class
+        # but we ensure the name is preserved as-is in the object
+        assert game.name == "Game\nExec=evil\n"
+        # The actual sanitization will happen when create_desktop_file is called
 
 
 if __name__ == "__main__":
