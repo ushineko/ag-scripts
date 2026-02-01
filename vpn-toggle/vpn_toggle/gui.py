@@ -173,6 +173,11 @@ class VPNWidget(QFrame):
             vpn_config = dialog.get_config()
             self.config_manager.update_vpn_config(self.vpn_name, vpn_config)
             logger.info(f"Updated configuration for {self.vpn_name}")
+
+            # Notify monitor of config change
+            if self.monitor_thread and self.monitor_thread.isRunning():
+                self.monitor_thread.notify_config_changed()
+
             self.update_status()
 
 
@@ -520,8 +525,20 @@ class VPNToggleMainWindow(QMainWindow):
             self.config_manager.update_monitor_settings(**settings)
             self.append_log(f"Settings updated: {settings}")
 
+            # Notify monitor of config change
+            if self.monitor_thread and self.monitor_thread.isRunning():
+                self.monitor_thread.notify_config_changed()
+
     def on_assert_result(self, vpn_name: str, success: bool, message: str):
         """Handle assert result signal"""
+        # Log the result to activity log
+        status = "PASSED" if success else "FAILED"
+        display_name = vpn_name
+        if vpn_name in self.vpn_widgets:
+            display_name = self.vpn_widgets[vpn_name].display_name
+
+        self.append_log(f"{display_name}: {message} [{status}]")
+
         # Update the corresponding VPN widget
         if vpn_name in self.vpn_widgets:
             self.vpn_widgets[vpn_name].update_status()

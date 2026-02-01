@@ -3,6 +3,7 @@ Monitor thread for VPN health checking and auto-reconnect
 """
 import logging
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 from enum import Enum
@@ -55,6 +56,7 @@ class MonitorThread(QThread):
         # Thread control
         self.running = True
         self.monitoring_enabled = False
+        self.config_changed = threading.Event()  # Event to wake up monitor on config changes
 
         # Per-VPN state tracking
         self.failure_counts: Dict[str, int] = {}
@@ -79,6 +81,9 @@ class MonitorThread(QThread):
             # Check each configured VPN
             vpns_to_monitor = self._get_monitored_vpns()
 
+            if vpns_to_monitor:
+                logger.debug(f"Starting check cycle for {len(vpns_to_monitor)} VPN(s)")
+
             for vpn_config in vpns_to_monitor:
                 if not self.running:
                     break
@@ -91,8 +96,9 @@ class MonitorThread(QThread):
 
                 self._check_vpn(vpn_config, monitor_settings)
 
-            # Sleep for check interval
-            time.sleep(check_interval)
+            # Sleep for check interval, or wake up early if config changes
+            self.config_changed.wait(timeout=check_interval)
+            self.config_changed.clear()  # Reset the event for next cycle
 
         logger.info("Monitor thread stopped")
         self.log_message.emit("Monitor thread stopped")
@@ -134,7 +140,9 @@ class MonitorThread(QThread):
 
         if time_since_connect < grace_period:
             self.vpn_states[vpn_name] = MonitorState.GRACE_PERIOD
-            logger.debug(f"{vpn_name}: In grace period ({time_since_connect:.1f}s / {grace_period}s)")
+            remaining = grace_period - time_since_connect
+            logger.debug(f"{vpn_name}: In grace period ({time_since_connect:.1f}s / {grace_period}s, {remaining:.0f}s remaining)")
+            self.log_message.emit(f"{vpn_name}: In grace period, checks will start in {remaining:.0f}s")
             return
 
         # Set state to monitoring
@@ -144,8 +152,11 @@ class MonitorThread(QThread):
         asserts_config = vpn_config.get('asserts', [])
         if not asserts_config:
             # No asserts configured, nothing to check
+            logger.debug(f"{vpn_name}: No asserts configured, skipping")
             return
 
+        logger.info(f"{vpn_name}: Running {len(asserts_config)} assert(s)")
+        self.log_message.emit(f"{vpn_name}: Checking {len(asserts_config)} assert(s)...")
         all_passed = True
         for assert_config in asserts_config:
             if not self.running:
@@ -290,8 +301,17 @@ class MonitorThread(QThread):
             'connection_time': self.connection_times.get(vpn_name)
         }
 
+    def notify_config_changed(self):
+        """
+        Notify the monitor that configuration has changed.
+        This will wake up the monitor immediately to reload settings.
+        """
+        logger.debug("Configuration changed, waking up monitor")
+        self.config_changed.set()
+
     def stop(self):
         """Stop the monitor thread gracefully."""
         logger.info("Stopping monitor thread...")
         self.running = False
+        self.config_changed.set()  # Wake up the thread if it's sleeping
         self.wait(5000)  # Wait up to 5 seconds for thread to finish
