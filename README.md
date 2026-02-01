@@ -10,6 +10,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | :--- | :--- |
 | [audio-source-switcher](audio-source-switcher/) | Feature-rich PyQt6 audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, and global hotkeys. A good example of PipeWire/PulseAudio graph manipulation. |
 | [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring. Demonstrates BLE scanning, upower/solaar integration, and KDE Wayland window rules. |
+| [game-desktop-creator](game-desktop-creator/) | PyQt6 GUI for creating start menu launchers for Steam, Epic (via Heroic), and GOG games. Useful for Linux gaming setups. |
 | [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology—spec-driven, iterative development with quality gates and fresh context per iteration. |
 
 ## Projects
@@ -22,6 +23,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [claude-code-setup](claude-code-setup/) | Setup script for Claude Code CLI. Installs/updates Node.js and `@anthropic-ai/claude-code` globally. |
 | [docker-setup](docker-setup/) | Sets up Docker for the current user. Installs Docker if missing, enables the service, and adds user to the `docker` group. |
 | [fake-screensaver](fake-screensaver/) | PyQt-based fake screensaver that keeps the mouse cursor visible, plus a simple HTML blank page fallback. |
+| [game-desktop-creator](game-desktop-creator/) | PyQt6 GUI for creating start menu launchers for Steam, Epic, and GOG games. Discovers games from Steam and Heroic Games Launcher. |
 | [kvm-setup](kvm-setup/) | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions. |
 | [misc](misc/) | General utilities for NTFS mount fixing and fstab generation during Windows-to-Linux migration. |
 | [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring. |
