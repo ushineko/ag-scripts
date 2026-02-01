@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont
 
 from .config import ConfigManager
 from .vpn_manager import VPNManager
@@ -193,6 +193,22 @@ class VPNConfigDialog(QDialog):
         self.setMinimumWidth(500)
         self.setup_ui()
 
+    def _find_assert_by_type(self, vpn_config: Dict, assert_type: str) -> Optional[Dict]:
+        """
+        Find an assert configuration by type.
+
+        Args:
+            vpn_config: VPN configuration dictionary
+            assert_type: Type of assert to find (e.g., 'dns_lookup', 'geolocation')
+
+        Returns:
+            Assert configuration dict if found, None otherwise
+        """
+        for assert_config in vpn_config.get('asserts', []):
+            if assert_config.get('type') == assert_type:
+                return assert_config
+        return None
+
     def setup_ui(self):
         """Setup dialog UI"""
         layout = QVBoxLayout()
@@ -224,11 +240,7 @@ class VPNConfigDialog(QDialog):
         dns_layout = QFormLayout()
 
         # Find existing DNS assert
-        dns_assert = None
-        for assert_config in vpn_config.get('asserts', []):
-            if assert_config.get('type') == 'dns_lookup':
-                dns_assert = assert_config
-                break
+        dns_assert = self._find_assert_by_type(vpn_config, 'dns_lookup')
 
         self.dns_enabled = QCheckBox("Enable DNS lookup check")
         self.dns_enabled.setChecked(dns_assert is not None)
@@ -250,11 +262,7 @@ class VPNConfigDialog(QDialog):
         geo_layout = QFormLayout()
 
         # Find existing geolocation assert
-        geo_assert = None
-        for assert_config in vpn_config.get('asserts', []):
-            if assert_config.get('type') == 'geolocation':
-                geo_assert = assert_config
-                break
+        geo_assert = self._find_assert_by_type(vpn_config, 'geolocation')
 
         self.geo_enabled = QCheckBox("Enable geolocation check")
         self.geo_enabled.setChecked(geo_assert is not None)
