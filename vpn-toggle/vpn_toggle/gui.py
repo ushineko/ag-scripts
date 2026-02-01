@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QCheckBox, QTextEdit,
     QScrollArea, QFrame, QMessageBox, QSpinBox,
-    QGroupBox, QDialog, QDialogButtonBox, QFormLayout
+    QGroupBox, QDialog, QDialogButtonBox, QFormLayout,
+    QLineEdit, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -87,6 +88,10 @@ class VPNWidget(QFrame):
         self.bounce_btn.clicked.connect(self.on_bounce)
         button_layout.addWidget(self.bounce_btn)
 
+        self.configure_btn = QPushButton("Configure")
+        self.configure_btn.clicked.connect(self.on_configure)
+        button_layout.addWidget(self.configure_btn)
+
         button_layout.addStretch()
         layout.addLayout(button_layout)
 
@@ -159,6 +164,158 @@ class VPNWidget(QFrame):
             self.monitor_thread.reset_vpn_state(self.vpn_name)
 
         self.update_status()
+
+    def on_configure(self):
+        """Handle configure button click"""
+        dialog = VPNConfigDialog(self.vpn_name, self.display_name, self.config_manager, self)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            vpn_config = dialog.get_config()
+            self.config_manager.update_vpn_config(self.vpn_name, vpn_config)
+            logger.info(f"Updated configuration for {self.vpn_name}")
+            self.update_status()
+
+
+class VPNConfigDialog(QDialog):
+    """Dialog for configuring VPN asserts"""
+
+    def __init__(self, vpn_name: str, display_name: str, config_manager: ConfigManager, parent=None):
+        super().__init__(parent)
+        self.vpn_name = vpn_name
+        self.display_name = display_name
+        self.config_manager = config_manager
+        self.setWindowTitle(f"Configure {display_name}")
+        self.setMinimumWidth(500)
+        self.setup_ui()
+
+    def setup_ui(self):
+        """Setup dialog UI"""
+        layout = QVBoxLayout()
+
+        # Get current VPN config or create default
+        vpn_config = self.config_manager.get_vpn_config(self.vpn_name)
+        if not vpn_config:
+            vpn_config = {
+                'name': self.vpn_name,
+                'display_name': self.display_name,
+                'enabled': True,
+                'asserts': []
+            }
+
+        # Display name
+        form_layout = QFormLayout()
+        self.display_name_edit = QLineEdit(vpn_config.get('display_name', self.display_name))
+        form_layout.addRow("Display Name:", self.display_name_edit)
+
+        # Enabled checkbox
+        self.enabled_checkbox = QCheckBox("Enable monitoring for this VPN")
+        self.enabled_checkbox.setChecked(vpn_config.get('enabled', True))
+        form_layout.addRow("", self.enabled_checkbox)
+
+        layout.addLayout(form_layout)
+
+        # DNS Assert section
+        dns_group = QGroupBox("DNS Lookup Assert")
+        dns_layout = QFormLayout()
+
+        # Find existing DNS assert
+        dns_assert = None
+        for assert_config in vpn_config.get('asserts', []):
+            if assert_config.get('type') == 'dns_lookup':
+                dns_assert = assert_config
+                break
+
+        self.dns_enabled = QCheckBox("Enable DNS lookup check")
+        self.dns_enabled.setChecked(dns_assert is not None)
+        dns_layout.addRow("", self.dns_enabled)
+
+        self.dns_hostname = QLineEdit(dns_assert.get('hostname', 'myip.opendns.com') if dns_assert else 'myip.opendns.com')
+        self.dns_hostname.setPlaceholderText("e.g., myip.opendns.com")
+        dns_layout.addRow("Hostname:", self.dns_hostname)
+
+        self.dns_prefix = QLineEdit(dns_assert.get('expected_prefix', '100.') if dns_assert else '100.')
+        self.dns_prefix.setPlaceholderText("e.g., 100. or 10.8.")
+        dns_layout.addRow("Expected IP Prefix:", self.dns_prefix)
+
+        dns_group.setLayout(dns_layout)
+        layout.addWidget(dns_group)
+
+        # Geolocation Assert section
+        geo_group = QGroupBox("Geolocation Assert")
+        geo_layout = QFormLayout()
+
+        # Find existing geolocation assert
+        geo_assert = None
+        for assert_config in vpn_config.get('asserts', []):
+            if assert_config.get('type') == 'geolocation':
+                geo_assert = assert_config
+                break
+
+        self.geo_enabled = QCheckBox("Enable geolocation check")
+        self.geo_enabled.setChecked(geo_assert is not None)
+        geo_layout.addRow("", self.geo_enabled)
+
+        self.geo_field = QComboBox()
+        self.geo_field.addItems(['city', 'regionName', 'country'])
+        if geo_assert:
+            field = geo_assert.get('field', 'city')
+            index = self.geo_field.findText(field)
+            if index >= 0:
+                self.geo_field.setCurrentIndex(index)
+        geo_layout.addRow("Location Field:", self.geo_field)
+
+        self.geo_value = QLineEdit(geo_assert.get('expected_value', '') if geo_assert else '')
+        self.geo_value.setPlaceholderText("e.g., Las Vegas, Nevada, United States")
+        geo_layout.addRow("Expected Value:", self.geo_value)
+
+        geo_group.setLayout(geo_layout)
+        layout.addWidget(geo_group)
+
+        # Help text
+        help_label = QLabel(
+            "Tip: Run the VPN and check the Activity Log to see detected DNS IPs and locations.\n"
+            "Use partial matches (e.g., 'Vegas' matches 'Las Vegas')."
+        )
+        help_label.setStyleSheet("color: gray; font-size: 10px; padding: 10px;")
+        help_label.setWordWrap(True)
+        layout.addWidget(help_label)
+
+        # Buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+    def get_config(self) -> Dict:
+        """Get the configured VPN settings"""
+        asserts = []
+
+        # Add DNS assert if enabled
+        if self.dns_enabled.isChecked():
+            asserts.append({
+                'type': 'dns_lookup',
+                'hostname': self.dns_hostname.text().strip(),
+                'expected_prefix': self.dns_prefix.text().strip(),
+                'description': f"DNS check: {self.dns_hostname.text()} matches {self.dns_prefix.text()}"
+            })
+
+        # Add geolocation assert if enabled
+        if self.geo_enabled.isChecked() and self.geo_value.text().strip():
+            asserts.append({
+                'type': 'geolocation',
+                'field': self.geo_field.currentText(),
+                'expected_value': self.geo_value.text().strip(),
+                'description': f"Geolocation: {self.geo_field.currentText()} = {self.geo_value.text()}"
+            })
+
+        return {
+            'name': self.vpn_name,
+            'display_name': self.display_name_edit.text().strip(),
+            'enabled': self.enabled_checkbox.isChecked(),
+            'asserts': asserts
+        }
 
 
 class SettingsDialog(QDialog):
