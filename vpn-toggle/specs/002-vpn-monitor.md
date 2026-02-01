@@ -53,68 +53,72 @@ Major iteration of vpn-toggle adding integrated monitor mode with assert-based h
 ## Acceptance Criteria
 
 ### Core Infrastructure
-- [ ] Package structure created (vpn_toggle/ directory)
-- [ ] ConfigManager loads/saves JSON config
-- [ ] ConfigManager provides defaults when config doesn't exist
-- [ ] ConfigManager thread-safe (uses locking)
-- [ ] Logging setup (file + console)
-- [ ] Config tests pass (pytest tests/test_config.py)
+- [x] Package structure created (vpn_toggle/ directory)
+- [x] ConfigManager loads/saves JSON config
+- [x] ConfigManager provides defaults when config doesn't exist
+- [x] ConfigManager thread-safe (uses locking)
+- [x] Logging setup (file + console)
+- [x] Config tests pass (pytest tests/test_config.py)
 
 ### VPN Management
-- [ ] VPNManager lists all VPN connections via nmcli
-- [ ] VPNManager gets VPN status (connected/disconnected)
-- [ ] VPNManager connects VPN
-- [ ] VPNManager disconnects VPN
-- [ ] VPNManager bounces VPN (disconnect + connect)
-- [ ] VPN operations logged
-- [ ] VPN manager tests pass (pytest tests/test_vpn_manager.py)
+- [x] VPNManager lists all VPN connections via nmcli
+- [x] VPNManager gets VPN status (connected/disconnected)
+- [x] VPNManager connects VPN
+- [x] VPNManager disconnects VPN
+- [x] VPNManager bounces VPN (disconnect + connect)
+- [x] VPN operations logged
+- [x] VPN manager tests pass (pytest tests/test_vpn_manager.py)
 
 ### Assert System
-- [ ] DNS lookup assert implemented (socket.gethostbyname)
-- [ ] DNS assert supports partial IP prefix matching (e.g., "100.")
-- [ ] Geolocation assert implemented (ip-api.com)
-- [ ] Geolocation assert prints detected location for debugging
-- [ ] Geolocation assert supports field selection (city, region, country)
-- [ ] Assert factory creates asserts from config
-- [ ] Assert tests pass (pytest tests/test_asserts.py)
+- [x] DNS lookup assert implemented (socket.gethostbyname)
+- [x] DNS assert supports partial IP prefix matching (e.g., "100.")
+- [x] Geolocation assert implemented (ip-api.com)
+- [x] Geolocation assert prints detected location for debugging
+- [x] Geolocation assert supports field selection (city, region, country)
+- [x] Assert factory creates asserts from config
+- [x] Assert tests pass (pytest tests/test_asserts.py)
 
 ### Monitor Thread
-- [ ] MonitorThread runs in background (QThread)
-- [ ] Monitor checks asserts on configured interval (120s default)
-- [ ] Monitor respects grace period after connection (15s default)
-- [ ] Monitor tracks failures per VPN
-- [ ] Monitor auto-reconnects on assert failure
-- [ ] Monitor disables VPN after failure threshold (3 default)
-- [ ] Monitor emits PyQt signals for GUI updates
-- [ ] Monitor tests pass (pytest tests/test_monitor.py)
+- [x] MonitorThread runs in background (QThread)
+- [x] Monitor checks asserts on configured interval (120s default)
+- [x] Monitor respects grace period after connection (15s default)
+- [x] Monitor tracks failures per VPN
+- [x] Monitor auto-reconnects on assert failure
+- [x] Monitor disables VPN after failure threshold (3 default)
+- [x] Monitor emits PyQt signals for GUI updates
+- [x] Monitor tests pass (pytest tests/test_monitor.py)
 
 ### GUI Implementation
-- [ ] Main window displays all VPNs in list
-- [ ] VPN list shows status (connected/disconnected)
-- [ ] VPN list shows assert status (X/Y passing)
-- [ ] VPN list shows last check time
-- [ ] Manual connect button works
-- [ ] Manual disconnect button works
-- [ ] Manual bounce button works
-- [ ] Monitor enable/disable toggle works
-- [ ] Activity log displays monitor events
-- [ ] Activity log auto-scrolls to bottom
-- [ ] Window geometry saved on close
-- [ ] Window geometry restored on open
-- [ ] Settings dialog allows configuring asserts
-- [ ] Settings dialog allows configuring monitor timing
+- [x] Main window displays all VPNs in list
+- [x] VPN list shows status (connected/disconnected)
+- [x] VPN list shows assert status (X/Y passing)
+- [x] VPN list shows last check time
+- [x] Manual connect button works
+- [x] Manual disconnect button works
+- [x] Manual bounce button works
+- [x] Manual configure button opens VPN config dialog
+- [x] Monitor enable/disable toggle works
+- [x] Activity log displays monitor events
+- [x] Activity log auto-scrolls to bottom
+- [x] Window geometry saved on close
+- [x] Window geometry restored on open
+- [x] VPN config dialog allows setting display name
+- [x] VPN config dialog allows enabling/disabling monitoring per VPN
+- [x] VPN config dialog allows configuring DNS assert (hostname, IP prefix)
+- [x] VPN config dialog allows configuring geolocation assert (field, value)
+- [x] Settings dialog allows configuring monitor timing (interval, grace, threshold)
 
 ### Integration & Testing
-- [ ] Main entry point (vpn_toggle_v2.py) implemented
-- [ ] Legacy arguments swallowed/ignored gracefully
-- [ ] --debug flag enables debug logging
-- [ ] install.sh creates desktop file
-- [ ] install.sh makes scripts executable
-- [ ] uninstall.sh removes desktop file
-- [ ] README.md updated with v2.0 features
-- [ ] Root README.md updated with vpn-toggle description
-- [ ] All pytest tests pass
-- [ ] Manual VPN operations work (connect/disconnect/bounce)
+- [x] Main entry point (vpn_toggle_v2.py) implemented
+- [x] Legacy arguments swallowed/ignored gracefully
+- [x] --debug flag enables debug logging
+- [x] install.sh creates desktop file
+- [x] install.sh makes scripts executable
+- [x] uninstall.sh removes desktop file
+- [x] README.md updated with v2.0 features
+- [x] Root README.md updated with vpn-toggle description
+- [x] All pytest tests pass (64 tests)
+- [x] Manual VPN operations work (connect/disconnect/bounce)
 
 ### End-to-End Verification
 - [ ] Monitor mode auto-reconnects on assert failure
