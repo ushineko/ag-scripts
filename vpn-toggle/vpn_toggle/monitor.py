@@ -38,7 +38,6 @@ class MonitorThread(QThread):
     status_changed = pyqtSignal(str, str)  # vpn_name, status_text
     assert_result = pyqtSignal(str, bool, str)  # vpn_name, success, message
     log_message = pyqtSignal(str)  # log message
-    reconnect_attempted = pyqtSignal(str, int)  # vpn_name, attempt_number
     vpn_disabled = pyqtSignal(str, str)  # vpn_name, reason
 
     def __init__(self, config_manager: ConfigManager, vpn_manager: VPNManager):
@@ -207,7 +206,6 @@ class MonitorThread(QThread):
                 logger.info(f"{vpn_name}: Attempting auto-reconnect (attempt {failure_count})")
                 self.log_message.emit(f"{vpn_name}: Attempting auto-reconnect...")
                 self.vpn_states[vpn_name] = MonitorState.RECONNECTING
-                self.reconnect_attempted.emit(vpn_name, failure_count)
 
                 success, message = self.vpn_manager.bounce_vpn(vpn_name)
 
