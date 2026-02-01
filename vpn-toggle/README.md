@@ -15,6 +15,8 @@ A comprehensive VPN management tool with integrated monitoring and health checki
 
 VPN Toggle v2.0 is a complete rewrite featuring a persistent GUI with integrated monitoring capabilities.
 
+![VPN Toggle Screenshot](vpn-toggle-screenshot.png)
+
 ### Features (v2.0)
 
 #### Core Features
