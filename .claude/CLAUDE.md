@@ -76,7 +76,21 @@ When completing work on a sub-project:
 ### 4. Update Global Documentation
 - Update the root `README.md` with table/list of all scripts and descriptions
 
-### 5. Final Test Run
+### 5. Code Quality Refactor Pass
+**Conditional refactoring** - Only refactor if issues are found:
+- **Check for dead code**: Unused imports, unreferenced functions, unused signals/events
+- **Check for code duplication**: Repeated patterns, duplicate logic blocks
+- **Check for poor encapsulation**: God classes, long methods (>50 lines), mixed responsibilities
+- **Extract helper methods**: When the same pattern appears 2+ times
+- **Verify tests still pass** after any refactoring
+
+**Guidelines**:
+- If no significant issues found, mark as passed and proceed
+- Keep refactorings small and focused
+- Never skip this step - code quality matters
+- Commit refactorings separately with clear messages
+
+### 6. Final Test Run
 - Run full test suite to confirm nothing regressed
 
 ---
