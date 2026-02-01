@@ -30,7 +30,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [qbittorrent-vpn-wrapper](qbittorrent-vpn-wrapper/) | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and status dashboard. |
 | [set-rgb](set-rgb/) | Controls RGB lighting on hardware devices via OpenRGB, liquidctl, and ckb-next. |
 | [the-great-cachyos-move](the-great-cachyos-move/) | Migration toolkit for moving CachyOS (Btrfs) installations between drives using `btrfs send/receive`. |
-| [vpn-toggle](vpn-toggle/) | GUI-based script (kdialog/zenity) to toggle NetworkManager VPN connections. Ideal for hotkeys. |
+| [vpn-toggle](vpn-toggle/) | VPN manager with integrated monitoring, health checking, auto-reconnect, and persistent PyQt6 GUI for NetworkManager connections. |
 
 ## Usage
 
