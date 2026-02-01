@@ -130,10 +130,62 @@ When working on features/tasks, follow these phases:
 - When in doubt about a potential vulnerability, err on the side of caution
 - Commit security fixes separately with clear messages (e.g., "security: fix SQL injection in user query")
 
-### Phase 6: Record History
+### Phase 6: Record History & Validation Artifacts
 - Document significant learnings and decisions
 - Update `history/` folder if project uses one
 - Keep notes for future context
+- **Save validation results** as project artifacts for tracking quality over time
+
+#### Validation Artifacts
+
+After completing validation phases (3-5), save results to track quality trends:
+
+**Location**: `validation-reports/` or `history/validation/` in the project root
+
+**When to save**:
+- After completing all quality gates (Phases 3-5)
+- Before final commit (Phase 7)
+- For significant milestones or releases
+
+**What to include**:
+```
+validation-reports/YYYY-MM-DD-HHmm-<task-name>.md
+
+## Validation Report: <Task/Feature Name>
+**Date**: YYYY-MM-DD HH:MM
+**Commit**: <git commit hash>
+**Status**: PASSED/FAILED
+
+### Phase 3: Tests
+- Test suite: <test command>
+- Results: X passing, Y failing
+- Coverage: Z%
+- Status: ✓ PASSED / ✗ FAILED
+
+### Phase 4: Code Quality
+- Dead code: None found / <issues>
+- Duplication: None found / <issues>
+- Encapsulation: Well-structured / <issues>
+- Refactorings: <list any refactorings made>
+- Status: ✓ PASSED / ✗ FAILED
+
+### Phase 5: Security Review
+- Dependencies: <tool> - X vulnerabilities (Critical: Y, High: Z)
+- OWASP Top 10: <summary of findings>
+- Anti-patterns: <summary>
+- Fixes applied: <list>
+- Status: ✓ PASSED / ✗ FAILED
+
+### Overall
+- All gates passed: YES/NO
+- Notes: <any additional context>
+```
+
+**Benefits**:
+- Track quality trends over time
+- Document due diligence for audits
+- Identify recurring issues
+- Demonstrate continuous improvement
 
 ### Phase 7: Commit & Complete
 - Mark spec as complete

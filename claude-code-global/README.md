@@ -1,6 +1,6 @@
 # Claude Code Global Config (Ralph Wiggum Methodology)
 
-**Version 1.2.0**
+**Version 1.3.0**
 
 A global `CLAUDE.md` configuration file for Claude Code that implements the Ralph Wiggum autonomous coding methodology—a spec-driven, iterative development workflow with quality gates and fresh context per iteration.
 
@@ -36,6 +36,7 @@ The methodology supports two modes:
 - **Quality Gates**: Enforces tests passing, code quality checks, and security review before marking work complete
 - **Code Quality Pass**: Checks for dead code, duplication, and poor encapsulation
 - **Security Review Pass**: CVE scanning, OWASP top 10 checks, and security anti-pattern detection
+- **Validation Artifacts**: Saves structured validation reports to track quality trends over time
 - **Git Preferences**: Conventional commits, no Co-Authored-By lines, VPN connectivity checks
 - **Project Overrides**: Per-project `CLAUDE.md` files can extend or override defaults
 - **/ralph Command**: Slash command to trigger Loop Mode within an interactive session
@@ -190,6 +191,12 @@ This removes:
 If a backup exists, you'll be prompted to restore it.
 
 ## Changelog
+
+### v1.3.0
+- **Validation Artifacts** - Added workflow rule to save validation results as project artifacts in `validation-reports/`
+- **Phase 6 Enhancement** - Renamed to "Record History & Validation Artifacts" with detailed artifact template
+- **Quality Tracking** - Enables tracking of quality trends over time with structured validation reports
+- **Example Report** - Included comprehensive validation report for v1.2.0 release as reference
 
 ### v1.2.0
 - **Phase 4: Code Quality Refactor Pass** - Added conditional refactoring step to check for dead code, duplication, and poor encapsulation
