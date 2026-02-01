@@ -2,7 +2,6 @@
 Utility functions and shared constants for VPN Toggle
 """
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 
