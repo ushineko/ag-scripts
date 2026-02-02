@@ -1,0 +1,8 @@
+# Development dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.0.0
+
+# Build (optional - for creating standalone exe)
+pyinstaller>=6.0.0
