@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from PyQt6.QtWidgets import (
     QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFrame, QProgressBar, QDialog, QSpinBox, QComboBox, QPushButton, QFormLayout,
-    QDialogButtonBox, QGroupBox, QInputDialog
+    QDialogButtonBox, QInputDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
@@ -304,7 +304,9 @@ class CalibrationDialog(QDialog):
         self.move(x, y)
 
     def setup_ui(self):
-        layout = QVBoxLayout(self)
+        layout = QFormLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
         # Apply dark theme
         self.setStyleSheet("""
@@ -322,22 +324,12 @@ class CalibrationDialog(QDialog):
                 padding: 4px;
                 min-width: 120px;
             }
-            QGroupBox {
-                color: #e0e0e0;
-                border: 1px solid #555;
-                margin-top: 8px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                padding: 0 4px;
-            }
             QPushButton {
                 background-color: #3d3d3d;
                 color: #e0e0e0;
                 border: 1px solid #555;
-                padding: 6px 16px;
-                min-width: 80px;
+                padding: 4px 12px;
+                min-width: 60px;
             }
             QPushButton:hover {
                 background-color: #4d4d4d;
@@ -347,10 +339,6 @@ class CalibrationDialog(QDialog):
             }
         """)
 
-        # Current values display
-        current_group = QGroupBox("Current Values")
-        current_layout = QFormLayout(current_group)
-
         def format_tokens(n):
             if n >= 1000000:
                 return f"{n / 1000000:.1f}M"
@@ -358,48 +346,32 @@ class CalibrationDialog(QDialog):
                 return f"{n / 1000:.1f}k"
             return str(int(n))
 
-        self.current_tokens_lbl = QLabel(f"{format_tokens(self.current_tokens)} tokens")
-        self.current_budget_lbl = QLabel(f"{format_tokens(self.current_budget)} budget")
-        self.current_pct_lbl = QLabel(f"{self.current_percentage}%")
+        # Show current state inline
+        current_lbl = QLabel(f"{format_tokens(self.current_tokens)} / {format_tokens(self.current_budget)} = {self.current_percentage}%")
+        current_lbl.setStyleSheet("color: #888;")
+        layout.addRow("Current:", current_lbl)
 
-        current_layout.addRow("Tokens used:", self.current_tokens_lbl)
-        current_layout.addRow("Budget:", self.current_budget_lbl)
-        current_layout.addRow("Percentage:", self.current_pct_lbl)
-        layout.addWidget(current_group)
-
-        # Calibration input
-        calibrate_group = QGroupBox("Calibrate to Known Value")
-        calibrate_layout = QFormLayout(calibrate_group)
-
+        # Target percentage input
         self.target_spin = QSpinBox()
         self.target_spin.setRange(1, 200)
         self.target_spin.setValue(self.current_percentage if self.current_percentage > 0 else 25)
         self.target_spin.setSuffix("%")
         self.target_spin.valueChanged.connect(self.update_preview)
-        calibrate_layout.addRow("Target percentage:", self.target_spin)
+        layout.addRow("Target %:", self.target_spin)
 
+        # Adjustment mode
         self.adjust_combo = QComboBox()
         self.adjust_combo.addItems([
-            "Adjust budget (recommended)",
-            "Adjust token count (override)"
+            "Adjust budget",
+            "Adjust tokens"
         ])
         self.adjust_combo.currentIndexChanged.connect(self.update_preview)
-        calibrate_layout.addRow("Adjust:", self.adjust_combo)
+        layout.addRow("Method:", self.adjust_combo)
 
-        layout.addWidget(calibrate_group)
-
-        # Preview
-        preview_group = QGroupBox("Preview Result")
-        preview_layout = QFormLayout(preview_group)
-
+        # Preview result
         self.preview_lbl = QLabel("--")
         self.preview_lbl.setStyleSheet("color: #4caf50; font-weight: bold;")
-        preview_layout.addRow("New value:", self.preview_lbl)
-
-        self.preview_pct_lbl = QLabel("--")
-        preview_layout.addRow("Result:", self.preview_pct_lbl)
-
-        layout.addWidget(preview_group)
+        layout.addRow("Result:", self.preview_lbl)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -414,7 +386,7 @@ class CalibrationDialog(QDialog):
         apply_btn.setDefault(True)
         button_layout.addWidget(apply_btn)
 
-        layout.addLayout(button_layout)
+        layout.addRow(button_layout)
 
     def update_preview(self):
         target_pct = self.target_spin.value()
@@ -433,20 +405,16 @@ class CalibrationDialog(QDialog):
                 self.result_budget = new_budget
                 self.result_tokens = None
                 self.preview_lbl.setText(f"Budget → {format_tokens(new_budget)}")
-                self.preview_pct_lbl.setText(f"{format_tokens(self.current_tokens)} / {format_tokens(new_budget)} = {target_pct}%")
             else:
                 self.preview_lbl.setText("Invalid percentage")
-                self.preview_pct_lbl.setText("--")
         else:  # Adjust token count (override)
             if self.current_budget > 0:
                 new_tokens = int(self.current_budget * (target_pct / 100))
                 self.result_budget = None
                 self.result_tokens = new_tokens
                 self.preview_lbl.setText(f"Tokens → {format_tokens(new_tokens)}")
-                self.preview_pct_lbl.setText(f"{format_tokens(new_tokens)} / {format_tokens(self.current_budget)} = {target_pct}%")
             else:
-                self.preview_lbl.setText("Budget is unlimited")
-                self.preview_pct_lbl.setText("Cannot calibrate with unlimited budget")
+                self.preview_lbl.setText("Unlimited budget - can't calibrate")
 
     def get_result(self):
         """Returns (new_budget, token_offset) or (None, None) if cancelled."""
