@@ -1,0 +1,12 @@
+# Core dependencies
+pystray>=0.19.0          # System tray integration
+customtkinter>=5.2.0     # Modern tkinter widgets
+Pillow>=10.0.0           # Image handling for tray icons
+structlog>=24.0.0        # Structured logging
+
+# Standard library (no install needed):
+# - json (config parsing)
+# - pathlib (file paths)
+# - datetime (time calculations)
+# - os (environment variables)
+# - argparse (CLI arguments)
