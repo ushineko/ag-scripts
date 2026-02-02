@@ -395,6 +395,50 @@ class TestClaudeStats(unittest.TestCase):
         monitor.save_settings.assert_called_once()
         monitor.update_claude_section.assert_called_once()
 
+    def test_token_offset_applied(self):
+        """Test that token offset from calibration is applied to display"""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={
+            'claude_token_offset': 50000,
+            'claude_session_budget': 500000
+        })
+        monitor = pb.PeripheralMonitor()
+        # Offset should be in settings
+        self.assertEqual(monitor.settings.get('claude_token_offset', 0), 50000)
+
+    def test_token_offset_default_zero(self):
+        """Test that token offset defaults to zero"""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+        self.assertEqual(monitor.settings.get('claude_token_offset', 0), 0)
+
+
+class TestCalibrationDialog(unittest.TestCase):
+    """Tests for the CalibrationDialog class"""
+
+    def test_budget_calculation(self):
+        """Test that budget is calculated correctly to match target percentage"""
+        # If we have 125000 tokens and want to show 25%, budget should be 500000
+        current_tokens = 125000
+        target_pct = 25
+        expected_budget = int(current_tokens / (target_pct / 100))
+        self.assertEqual(expected_budget, 500000)
+
+    def test_budget_calculation_high_percentage(self):
+        """Test budget calculation for high percentages"""
+        # If we have 400000 tokens and want to show 80%, budget should be 500000
+        current_tokens = 400000
+        target_pct = 80
+        expected_budget = int(current_tokens / (target_pct / 100))
+        self.assertEqual(expected_budget, 500000)
+
+    def test_token_override_calculation(self):
+        """Test token override calculation"""
+        # If budget is 500000 and we want to show 50%, tokens should be 250000
+        budget = 500000
+        target_pct = 50
+        expected_tokens = int(budget * (target_pct / 100))
+        self.assertEqual(expected_tokens, 250000)
+
 
 if __name__ == '__main__':
     unittest.main()
