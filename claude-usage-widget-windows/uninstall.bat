@@ -40,6 +40,6 @@ echo Uninstallation complete.
 echo.
 echo Note: Python dependencies were not removed.
 echo To remove them manually:
-echo   pip uninstall pystray customtkinter Pillow
+echo   pip uninstall pystray customtkinter Pillow structlog
 echo.
 pause
