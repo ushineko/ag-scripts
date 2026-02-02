@@ -178,6 +178,9 @@ Device priority and settings are saved to `~/.config/audio-source-switcher/confi
 
 ## Changelog
 
+### v11.6
+- **Notification Sounds**: Desktop notifications now play a sound (using freedesktop sound theme).
+
 ### v11.5
 - **Microphone Association**: Added context menu option to link specific microphones to output devices.
 - **Smart Mic Switching**: Automatically switches input device when output changes.

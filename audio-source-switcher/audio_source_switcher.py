@@ -1264,7 +1264,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 11.5</b></p>
+            <p><b>Version 11.6</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
@@ -1836,13 +1836,14 @@ class MainWindow(QMainWindow):
             self.sink_list.setEnabled(True)
             self.status_label.setText("Connection successful, but audio device did not appear.")
 
-    def send_notification(self, title, message, icon="audio-card"):
+    def send_notification(self, title, message, icon="audio-card", sound="message-new-instant"):
         try:
             subprocess.run([
-                'notify-send', 
-                '-a', 'Audio Switcher', 
-                '-i', icon, 
-                title, 
+                'notify-send',
+                '-a', 'Audio Switcher',
+                '-i', icon,
+                '-h', f'string:sound-name:{sound}',
+                title,
                 message
             ])
         except Exception:
