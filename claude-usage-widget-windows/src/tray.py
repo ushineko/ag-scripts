@@ -1,7 +1,6 @@
 """System tray integration using pystray."""
 
 import threading
-from pathlib import Path
 from typing import Callable, Optional
 
 import pystray

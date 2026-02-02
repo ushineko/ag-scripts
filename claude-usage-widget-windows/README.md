@@ -16,10 +16,13 @@ A lightweight Windows system tray widget that displays Claude Code CLI usage met
 
 ## Features
 
+- Always-on-top floating widget with progress bar
 - System tray icon with color-coded usage status
 - Real-time token consumption tracking
-- Configurable session windows (1-12 hours)
-- Snap-to-percentage calibration
+- Right-click context menu on widget for quick settings access
+- Configurable budget (100k-2M), window duration (30min-12h), reset hour (0-23)
+- Snap-to-percentage calibration with live preview
+- Structured logging with `--debug` and `--no-gui` modes
 - Lightweight (~5MB dependencies vs ~50MB for PyQt alternatives)
 
 ## Requirements
@@ -50,9 +53,10 @@ python -m src.main           # Normal mode
 python -m src.main --debug   # With debug logging
 ```
 
-1. Run the widget - it appears in the system tray
-2. **Left-click** the tray icon to show/hide the detail popup
-3. **Right-click** for the context menu (settings, calibration, exit)
+1. Run the widget - a floating widget appears on screen with progress bar
+2. **Right-click** the widget for settings menu (Budget, Window Duration, Reset Hour, Calibrate, Exit)
+3. **Drag** the widget to reposition it
+4. System tray icon also available for redundant access to settings
 
 ### Console Mode (troubleshooting)
 
@@ -99,11 +103,13 @@ Settings are stored in `%APPDATA%\claude-usage-widget\config.json`:
 To sync with Claude's actual billing:
 
 1. Run `/usage` in Claude CLI to see your current percentage
-2. Right-click tray icon → **Calibrate...**
-3. Enter the percentage from Claude
+2. Right-click the widget → **Calibrate...**
+3. Use the slider or enter the percentage (1-200% supported)
 4. Choose adjustment mode:
-   - **Adjust Budget**: Recalculates budget to match percentage
-   - **Adjust Offset**: Adds token offset to match percentage
+   - **Adjust Budget** (recommended): Recalculates budget to match percentage
+   - **Adjust Token Count**: Adds token offset to match percentage
+5. Preview shows the calculation before applying
+6. Click **Apply** to save (confirmation shown before closing)
 
 ## Limitations
 
@@ -127,13 +133,15 @@ pyinstaller --onefile --windowed src/main.py
 
 ## Changelog
 
-### v0.1.0 (Unreleased)
+### v0.1.0 (2025-02-02)
 
-- Initial implementation
+- Initial release
+- Always-on-top floating widget with progress bar and drag support
 - System tray integration with color-coded status
-- Detail popup with token metrics
-- Configurable session windows
-- Snap-to-percentage calibration
+- Right-click context menu on widget for all settings
+- Configurable budget (100k-2M), window duration (30min-12h), reset hour (0-23)
+- Calibration dialog with slider (1-200%), live preview, and confirmation feedback
+- Escape key and X button close calibration dialog
 - Structured logging with structlog
 - `--debug` flag for verbose output
 - `--no-gui` mode for console-only troubleshooting
