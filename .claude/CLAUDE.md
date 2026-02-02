@@ -61,8 +61,9 @@ When completing work on a sub-project:
 **Identify and Update Version**:
 - Locate main source file and README in the sub-project
 - Search for version strings using grep (look for `__version__`, `vX.Y`, or text in "About" dialogs)
-- Increment version number (e.g., 1.0 -> 1.1, or 10.0 -> 11.0 for major changes)
-- Update version in BOTH source code AND README
+- Determine the current version and propose a new version (e.g., 1.0 -> 1.1, or 10.0 -> 11.0 for major changes)
+- **ASK THE USER** to approve the proposed version or provide their own version number
+- Update version in BOTH source code AND README only after user approval
 - Verify consistency: version in source must match README
 
 **Update README.md**:
