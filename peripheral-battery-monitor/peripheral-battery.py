@@ -293,6 +293,16 @@ class CalibrationDialog(QDialog):
         self.setup_ui()
         self.update_preview()
 
+        # Ensure dialog fits on screen and is positioned properly
+        self.adjustSize()
+        self.setFixedSize(self.sizeHint())
+
+        # Center on screen (works better than centering on parent for small parent windows)
+        screen = QApplication.primaryScreen().geometry()
+        x = (screen.width() - self.width()) // 2
+        y = (screen.height() - self.height()) // 2
+        self.move(x, y)
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
 
