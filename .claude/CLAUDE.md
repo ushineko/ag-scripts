@@ -52,6 +52,39 @@ If gates fail, fix issues in the current iteration - do NOT proceed with flawed 
 
 ---
 
+## TodoWrite for Workflow Tracking (REQUIRED)
+
+Use the TodoWrite tool to visibly track progress on any multi-phase workflow. This ensures no steps are skipped and provides accountability.
+
+**When to use TodoWrite**:
+- Any workflow with 3+ steps
+- Finalization passes (all steps must be visible)
+- Ralph loop iterations
+- Bug fix batches
+
+**How to use**:
+1. Before starting work, create todos for ALL steps in the workflow
+2. Mark each step `in_progress` when starting it
+3. Mark each step `completed` only when fully done
+4. Never commit until all todos are checked off
+
+**Example for finalization pass**:
+```
+☐ Run tests
+☐ Code quality pass
+☐ Security review
+☐ Update docs & version
+☐ Ensure installer
+☐ Ensure uninstaller
+☐ Update root README
+☐ Create validation report
+☐ Commit changes
+```
+
+**Why this matters**: Visual tracking prevents steps from being skipped. If "Create validation report" is sitting unchecked when you're about to commit, it's an obvious signal that something was missed.
+
+---
+
 ## Finalization Phase
 
 When completing work on a sub-project:
@@ -144,6 +177,7 @@ When completing work on a sub-project:
 | Skipping failing tests | Fix before proceeding |
 | Multi-task iterations | One task per iteration |
 | In-memory state only | Persist state to plan file |
+| Multi-step workflow without TodoWrite | Create visible checklist first |
 
 ---
 
