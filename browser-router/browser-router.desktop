@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Browser Router
+Comment=Routes URLs to Firefox or Vivaldi based on domain
+Exec=EXEC_PATH %u
+Icon=internet-web-browser
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
+Terminal=false
+StartupNotify=false

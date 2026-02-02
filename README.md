@@ -19,6 +19,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | :--- | :--- |
 | [alacritty-maximizer](alacritty-maximizer/) | PyQt6 GUI to launch Alacritty windows fully maximized on specific monitors without titlebars. Manages KWin rules automatically. |
 | [audio-source-switcher](audio-source-switcher/) | Feature-rich audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, and global hotkeys. |
+| [browser-router](browser-router/) | Routes URLs to different browsers based on domain patterns. Workaround for Chromium lacking PipeWire camera support on Wayland. |
 | [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology. |
 | [claude-code-setup](claude-code-setup/) | Setup script for Claude Code CLI. Installs/updates Node.js and `@anthropic-ai/claude-code` globally. |
 | [claude-usage-widget-windows](claude-usage-widget-windows/) | Windows system tray widget displaying Claude Code CLI usage metrics with floating progress bar, calibration, and configurable session windows. |
