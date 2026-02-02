@@ -57,24 +57,55 @@ If gates fail, fix issues in the current iteration - do NOT proceed with flawed 
 When completing work on a sub-project:
 
 ### 1. Update Sub-project Docs & Version
-- Locate main source and README in the sub-project
-- Increment version in source code and README
-- Update README with new features/fixes
+
+**Identify and Update Version**:
+- Locate main source file and README in the sub-project
+- Search for version strings using grep (look for `__version__`, `vX.Y`, or text in "About" dialogs)
+- Increment version number (e.g., 1.0 -> 1.1, or 10.0 -> 11.0 for major changes)
+- Update version in BOTH source code AND README
+- Verify consistency: version in source must match README
+
+**Update README.md**:
+- **Version**: Update any mentions of the version number
+- **Features**: Add bullet points for newly implemented features under "Features" or "Changelog" section
+- **Usage**: Update usage examples if CLI arguments or behavior changed
+- **Changelog**: If the README has a `## Changelog` section, add an entry for the new version
+- **TOC**: All project READMEs should have a Table of Contents after the title/description
+
+**Update Help Text**:
 - Update inline help text, "About" dialogs, or `--help` output if applicable
-- **Update Changelog**: If the README has a `## Changelog` section, add an entry for the new version with a summary of changes
-- **Ensure TOC**: All project READMEs should have a Table of Contents after the title/description
 
 ### 2. Ensure Installer
-- Check if `install.sh` exists in the sub-project
+- Check if `install.sh` (or `install.bat` for Windows) exists in the sub-project
 - If not, create one (even if minimal) for consistency
 
 ### 3. Ensure Uninstaller
-- Check if `uninstall.sh` exists
-- If not, create one that removes desktop files, config entries, etc.
-- If yes, update it to include any new artifacts
+
+**Check for Existing Uninstaller**:
+- Look for `uninstall.sh`, `uninstall.bat`, or `remove.sh` in the project root
+
+**Define Cleanup Scope** (common items to remove):
+- `.desktop` files in `~/.local/share/applications/`
+- KWin rules in `~/.config/kwinrulesrc`
+- Symlinks in `~/bin` or `/usr/local/bin`
+- Systemd user units in `~/.config/systemd/user/`
+- Cron jobs and autostart entries
+- Config files in `~/.config/` or `%APPDATA%`
+
+**Create/Update Script**:
+- If no script exists, create `uninstall.sh` (or `.bat` for Windows)
+- Script should be idempotent (use `rm -f`, check if files exist before deleting)
+- Print clear messages ("Removing X...", "Done.")
+- Make executable: `chmod +x uninstall.sh`
 
 ### 4. Update Global Documentation
-- Update the root `README.md` with table/list of all scripts and descriptions
+
+**Root README.md**:
+- Identify all script files (Python, Shell, etc.) in the repository, including subdirectories
+- Extract a brief description for each script (from docstrings, comments, or --help output)
+- Update the root `README.md` with a "Scripts" or "Projects" section
+- Format as a table or detailed list with columns: Script Name/Path, Description
+- Preserve any existing manual documentation
 
 ### 5. Code Quality Refactor Pass
 **Conditional refactoring** - Only refactor if issues are found:
@@ -121,8 +152,18 @@ Each sub-project should have:
 ```
 sub-project/
 ├── README.md          # Sub-project documentation
-├── install.sh         # Installer script
-├── uninstall.sh       # Uninstaller script
+├── install.sh         # Installer script (install.bat for Windows)
+├── uninstall.sh       # Uninstaller script (uninstall.bat for Windows)
 ├── tests/             # pytest tests
 └── [source files]
 ```
+
+---
+
+## Workflow References
+
+Additional workflow guidance available in `.agent/workflows/`:
+- `update_documentation.md` - Root README update procedures
+- `update_docs_and_version.md` - Sub-project versioning and docs
+- `uninstaller.md` - Uninstaller creation guidelines
+- `base.md` - Core Ralph Wiggum methodology workflow
