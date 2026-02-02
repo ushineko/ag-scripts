@@ -10,6 +10,71 @@ This file establishes default development practices based on the Ralph Wiggum au
 - **Iterative self-correction**: Handle one focused task per cycle
 - **Test-based verification**: Tests enforce quality before marking work complete
 - **Autonomous operation**: Make decisions, don't wait for approval on implementation details
+- **Reversible by default**: Changes should be undoable in minutes without data heroics
+
+---
+
+## Release Safety Principles
+
+AI coding tools let us produce more change per day. That increases release risk unless we build in reversibility.
+
+**The question every release must answer:**
+> "If this causes pain, can we undo it in minutes without data heroics?"
+
+### Parallel Change: Expand, Migrate, Contract
+
+Break risky changes into phases that stay compatible while different versions coexist:
+
+| Phase | Action | Reversibility |
+|-------|--------|---------------|
+| **Expand** | Add new things without removing old ones | Full - just don't use new code |
+| **Migrate** | Backfill and dual-write, then switch reads | Full - flip back to old reads |
+| **Contract** | Remove old paths after confidence is established | Reduced - plan carefully |
+
+**Key insight**: Changes stay additive during Expand and Migrate. Rollback becomes expensive only in Contract phase.
+
+### Feature Flags for Release Control
+
+Deploy code, then control exposure separately:
+- **Deploy** = code is in production (can be instant)
+- **Release** = behavior is enabled (can be gradual)
+
+Use flags for:
+- Behavior changes on existing endpoints
+- Risky migrations during the Migrate phase
+- Progressive rollout (internal → pilot → general)
+
+### Stack-Specific Guidance
+
+#### APIs (DRF/FastAPI/GraphQL)
+- **Add fields, don't rename/remove in-place**. Ship old and new together until migration is complete.
+- **Behavior changes require a flag**. Same endpoint, two behaviors, one rollback lever.
+- **Version only when contracts must diverge**. Otherwise, control exposure with flags.
+
+#### PostgreSQL / Database Migrations
+- **Expand**: Add nullable columns, additive tables, use `CREATE INDEX CONCURRENTLY`
+- **Migrate**: Backfill in batches, dual-write briefly, switch reads behind a flag
+- **Contract**: Enforce constraints later, deprecate later, remove later (or never)
+
+#### Elasticsearch / Search Indices
+- Mappings often can't be changed in place - treat indices as versions
+- Create new versioned index → Reindex → Switch with alias
+- Rollback = flip alias back
+
+#### Kubernetes / Container Deployments
+- Release in rings: internal → pilot tenants → broader cohorts
+- Canary or blue-green for high-risk changes
+- Document the rollback lever: flag off, rollout undo, alias flip
+
+### Concrete Example: Rename a Field
+
+Want to rename `risk_score` to `threat_score`:
+
+1. **Expand**: Add `threat_score` nullable, return both in API, UI reads old field
+2. **Migrate**: Dual-write, backfill, flip reads behind flag (internal → pilot)
+3. **Contract**: Stop dual-write, deprecate old field in future release
+
+**Rollback at any point**: Flip the flag off - old path still works.
 
 ---
 
@@ -130,6 +195,49 @@ When working on features/tasks, follow these phases:
 - When in doubt about a potential vulnerability, err on the side of caution
 - Commit security fixes separately with clear messages (e.g., "security: fix SQL injection in user query")
 
+### Phase 5.5: Release Safety Review
+
+**Reversibility check** - Verify changes can be safely rolled back:
+
+#### For Schema/Database Changes
+- [ ] Uses Expand-Migrate-Contract pattern (or justified exception)
+- [ ] New columns are nullable or have safe defaults
+- [ ] Indexes created with `CONCURRENTLY` where supported
+- [ ] Backfill strategy defined for data migrations
+- [ ] Rollback path documented
+
+#### For API Changes
+- [ ] Additive only (no breaking removals in same release)
+- [ ] Behavior changes behind feature flag (if applicable)
+- [ ] Backward compatible with existing clients
+- [ ] Rollback = disable flag or revert deploy
+
+#### For Search/Index Changes
+- [ ] Using versioned indices with alias strategy
+- [ ] Rollback = flip alias to previous index
+
+#### For Infrastructure/Deployment
+- [ ] Rollout rings defined (internal → pilot → general)
+- [ ] Rollback lever documented (flag, undo, alias flip)
+- [ ] No shared state that prevents independent rollback
+
+#### Rollback Plan Documentation
+Every change must have an answer to: "How do we undo this in minutes?"
+
+| Change Type | Rollback Approach |
+|-------------|-------------------|
+| Code-only | Revert commit, redeploy |
+| Feature flag | Disable flag |
+| Schema (Expand phase) | Ignore new columns |
+| Schema (Migrate phase) | Flip reads to old path |
+| Schema (Contract phase) | ⚠️ May require restore - document carefully |
+| Index change | Flip alias |
+
+**Skip conditions**: This phase can be streamlined for:
+- Documentation-only changes
+- Test-only changes
+- Changes to development tooling
+
 ### Phase 6: Record History & Validation Artifacts
 - Document significant learnings and decisions
 - Update `history/` folder if project uses one
@@ -149,10 +257,15 @@ After completing validation phases (3-5), save results to track quality trends:
 - **For standalone projects**: Place in the repository root `validation-reports/`
 - **Double-check**: After creating a report, confirm it's in the right location before committing
 
-**When to save**:
+**When to save** (MANDATORY for code changes):
+- **ALWAYS** before committing new or modified code
 - After completing all quality gates (Phases 3-5)
-- Before final commit (Phase 7)
 - For significant milestones or releases
+
+**IMPORTANT**: A validation report is REQUIRED before any commit that includes code changes. This ensures:
+- Quality gates were actually run (not just claimed)
+- Audit trail exists for compliance
+- Issues are documented before they reach production
 
 **What to include**:
 ```
@@ -183,6 +296,13 @@ validation-reports/YYYY-MM-DD-HHmm-<task-name>.md
 - Fixes applied: <list>
 - Status: ✓ PASSED / ✗ FAILED
 
+### Phase 5.5: Release Safety
+- Change type: Code-only / Schema / API / Infrastructure
+- Pattern used: Expand-Migrate-Contract / Additive API / Feature flag / N/A
+- Rollback plan: <describe how to undo in minutes>
+- Rollout strategy: Immediate / Ringed (internal → pilot → general)
+- Status: ✓ PASSED / ✗ FAILED / ⊘ SKIPPED (docs/tests only)
+
 ### Overall
 - All gates passed: YES/NO
 - Notes: <any additional context>
@@ -195,9 +315,18 @@ validation-reports/YYYY-MM-DD-HHmm-<task-name>.md
 - Demonstrate continuous improvement
 
 ### Phase 7: Commit & Complete
+
+**Prerequisites** (must be true before committing):
+- [ ] Validation report created and saved to `validation-reports/`
+- [ ] All quality gates passed (Phases 3-5)
+- [ ] Validation report committed alongside code changes
+
+**Actions**:
 - Mark spec as complete
 - Commit with descriptive messages
 - Deploy if applicable
+
+**Note**: Never commit code changes without a corresponding validation report. The report documents that quality gates were actually executed.
 
 ---
 
@@ -220,6 +349,8 @@ Output `<promise>DONE</promise>` only when ALL of these pass:
 - [ ] Tests passing
 - [ ] Code quality refactored (if needed)
 - [ ] Security reviewed and cleared
+- [ ] Release safety reviewed (rollback plan documented)
+- [ ] Validation report created and committed
 - [ ] Changes committed
 - [ ] Spec marked complete
 
@@ -318,6 +449,29 @@ Per-project `CLAUDE.md` files can override these defaults by specifying:
 - Different workflow phases
 - Technology-specific guidelines
 - Autonomy settings (YOLO mode, git autonomy, etc.)
+
+### Customization Policy
+
+**Philosophy**: Strict by default, relaxable by user, security is mandatory.
+
+Use `/ralph-setup` for a guided wizard, or manually create `.claude/CLAUDE.md`.
+
+#### Relaxable Guidelines
+These can be loosened for specific projects:
+- Validation report frequency (every commit → milestones only)
+- Code quality refactor pass (always → skip for hotfixes)
+- Test requirements (must pass → WIP commits allowed)
+- Communication standards (strict → relaxed for docs)
+- Tool installation policy (always ask → auto-approve dev deps)
+- Git standards (partial: connectivity checks can be disabled)
+- Release safety (full checklist → simplified → minimal for prototypes)
+
+#### Non-Relaxable Guidelines (Security)
+These CANNOT be disabled, only extended with additional rules:
+- **Security Review Pass**: OWASP Top 10 checks, CVE scanning
+- **Secrets Detection**: No hardcoded credentials in source
+
+When relaxing guidelines, document the justification in the project config.
 
 ---
 
