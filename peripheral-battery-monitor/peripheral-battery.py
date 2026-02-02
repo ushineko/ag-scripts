@@ -9,7 +9,11 @@ import shutil
 from datetime import datetime, timezone, timedelta
 
 
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QProgressBar
+from PyQt6.QtWidgets import (
+    QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QFrame, QProgressBar, QDialog, QSpinBox, QComboBox, QPushButton, QFormLayout,
+    QDialogButtonBox, QGroupBox, QInputDialog
+)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
@@ -272,6 +276,179 @@ class UpdateThread(QThread):
             log.error("update_failed", error=str(e))
         
         self.data_ready.emit(results)
+
+
+class CalibrationDialog(QDialog):
+    """Dialog for calibrating Claude usage display to match actual billing."""
+
+    def __init__(self, parent, current_tokens, current_budget, current_percentage):
+        super().__init__(parent)
+        self.current_tokens = current_tokens
+        self.current_budget = current_budget
+        self.current_percentage = current_percentage
+        self.result_budget = current_budget
+
+        self.setWindowTitle("Calibrate Claude Usage")
+        self.setModal(True)
+        self.setup_ui()
+        self.update_preview()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Apply dark theme
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+            }
+            QLabel {
+                color: #e0e0e0;
+            }
+            QSpinBox, QComboBox {
+                background-color: #3d3d3d;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                padding: 4px;
+                min-width: 120px;
+            }
+            QGroupBox {
+                color: #e0e0e0;
+                border: 1px solid #555;
+                margin-top: 8px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                padding: 0 4px;
+            }
+            QPushButton {
+                background-color: #3d3d3d;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                padding: 6px 16px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #4d4d4d;
+            }
+            QPushButton:pressed {
+                background-color: #555;
+            }
+        """)
+
+        # Current values display
+        current_group = QGroupBox("Current Values")
+        current_layout = QFormLayout(current_group)
+
+        def format_tokens(n):
+            if n >= 1000000:
+                return f"{n / 1000000:.1f}M"
+            elif n >= 1000:
+                return f"{n / 1000:.1f}k"
+            return str(int(n))
+
+        self.current_tokens_lbl = QLabel(f"{format_tokens(self.current_tokens)} tokens")
+        self.current_budget_lbl = QLabel(f"{format_tokens(self.current_budget)} budget")
+        self.current_pct_lbl = QLabel(f"{self.current_percentage}%")
+
+        current_layout.addRow("Tokens used:", self.current_tokens_lbl)
+        current_layout.addRow("Budget:", self.current_budget_lbl)
+        current_layout.addRow("Percentage:", self.current_pct_lbl)
+        layout.addWidget(current_group)
+
+        # Calibration input
+        calibrate_group = QGroupBox("Calibrate to Known Value")
+        calibrate_layout = QFormLayout(calibrate_group)
+
+        self.target_spin = QSpinBox()
+        self.target_spin.setRange(1, 200)
+        self.target_spin.setValue(self.current_percentage if self.current_percentage > 0 else 25)
+        self.target_spin.setSuffix("%")
+        self.target_spin.valueChanged.connect(self.update_preview)
+        calibrate_layout.addRow("Target percentage:", self.target_spin)
+
+        self.adjust_combo = QComboBox()
+        self.adjust_combo.addItems([
+            "Adjust budget (recommended)",
+            "Adjust token count (override)"
+        ])
+        self.adjust_combo.currentIndexChanged.connect(self.update_preview)
+        calibrate_layout.addRow("Adjust:", self.adjust_combo)
+
+        layout.addWidget(calibrate_group)
+
+        # Preview
+        preview_group = QGroupBox("Preview Result")
+        preview_layout = QFormLayout(preview_group)
+
+        self.preview_lbl = QLabel("--")
+        self.preview_lbl.setStyleSheet("color: #4caf50; font-weight: bold;")
+        preview_layout.addRow("New value:", self.preview_lbl)
+
+        self.preview_pct_lbl = QLabel("--")
+        preview_layout.addRow("Result:", self.preview_pct_lbl)
+
+        layout.addWidget(preview_group)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self.accept)
+        apply_btn.setDefault(True)
+        button_layout.addWidget(apply_btn)
+
+        layout.addLayout(button_layout)
+
+    def update_preview(self):
+        target_pct = self.target_spin.value()
+        adjust_mode = self.adjust_combo.currentIndex()
+
+        def format_tokens(n):
+            if n >= 1000000:
+                return f"{n / 1000000:.1f}M"
+            elif n >= 1000:
+                return f"{n / 1000:.1f}k"
+            return str(int(n))
+
+        if adjust_mode == 0:  # Adjust budget
+            if target_pct > 0:
+                new_budget = int(self.current_tokens / (target_pct / 100))
+                self.result_budget = new_budget
+                self.result_tokens = None
+                self.preview_lbl.setText(f"Budget → {format_tokens(new_budget)}")
+                self.preview_pct_lbl.setText(f"{format_tokens(self.current_tokens)} / {format_tokens(new_budget)} = {target_pct}%")
+            else:
+                self.preview_lbl.setText("Invalid percentage")
+                self.preview_pct_lbl.setText("--")
+        else:  # Adjust token count (override)
+            if self.current_budget > 0:
+                new_tokens = int(self.current_budget * (target_pct / 100))
+                self.result_budget = None
+                self.result_tokens = new_tokens
+                self.preview_lbl.setText(f"Tokens → {format_tokens(new_tokens)}")
+                self.preview_pct_lbl.setText(f"{format_tokens(new_tokens)} / {format_tokens(self.current_budget)} = {target_pct}%")
+            else:
+                self.preview_lbl.setText("Budget is unlimited")
+                self.preview_pct_lbl.setText("Cannot calibrate with unlimited budget")
+
+    def get_result(self):
+        """Returns (new_budget, token_offset) or (None, None) if cancelled."""
+        if self.adjust_combo.currentIndex() == 0:
+            return (self.result_budget, None)
+        else:
+            # Token override: calculate offset from current counted tokens
+            if hasattr(self, 'result_tokens') and self.result_tokens is not None:
+                offset = self.result_tokens - self.current_tokens
+                return (None, offset)
+            return (None, None)
+
 
 class PeripheralMonitor(QWidget):
     def __init__(self):
@@ -623,6 +800,12 @@ class PeripheralMonitor(QWidget):
             toggleAction.triggered.connect(self.toggle_claude_section)
             claudeMenu.addAction(toggleAction)
 
+            calibrateAction = QAction("Calibrate Usage...", self)
+            calibrateAction.triggered.connect(self.show_calibration_dialog)
+            claudeMenu.addAction(calibrateAction)
+
+            claudeMenu.addSeparator()
+
             # Session Budget Submenu
             budgetMenu = claudeMenu.addMenu("Session Budget")
             budget_group = QActionGroup(self)
@@ -650,6 +833,11 @@ class PeripheralMonitor(QWidget):
                     action.setChecked(True)
                 budget_group.addAction(action)
                 budgetMenu.addAction(action)
+
+            budgetMenu.addSeparator()
+            customBudgetAction = QAction("Custom...", self)
+            customBudgetAction.triggered.connect(self.show_custom_budget_dialog)
+            budgetMenu.addAction(customBudgetAction)
 
             # Window Duration Submenu
             windowMenu = claudeMenu.addMenu("Window Duration")
@@ -780,6 +968,63 @@ class PeripheralMonitor(QWidget):
         self.save_settings()
         self.update_claude_section()
 
+    def show_calibration_dialog(self):
+        """Show the calibration dialog to snap usage to a known percentage."""
+        # Get current values
+        window_hours = self.settings.get('claude_window_hours', 4)
+        reset_hour = self.settings.get('claude_reset_hour', 2)
+        window_start, window_end = get_session_window(window_hours, reset_hour)
+        stats = get_claude_stats(window_start, window_end)
+
+        current_tokens = stats['session_tokens'] if stats else 0
+        current_budget = self.settings.get('claude_session_budget', 500000)
+
+        if current_budget > 0:
+            current_percentage = int((current_tokens / current_budget) * 100)
+        else:
+            current_percentage = 0
+
+        # Add any existing token offset
+        token_offset = self.settings.get('claude_token_offset', 0)
+        current_tokens += token_offset
+
+        dialog = CalibrationDialog(self, current_tokens, current_budget, current_percentage)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_budget, token_offset = dialog.get_result()
+
+            if new_budget is not None:
+                self.settings['claude_session_budget'] = new_budget
+                # Clear any previous token offset when adjusting budget
+                self.settings['claude_token_offset'] = 0
+            elif token_offset is not None:
+                # Store offset to apply to counted tokens
+                existing_offset = self.settings.get('claude_token_offset', 0)
+                self.settings['claude_token_offset'] = existing_offset + token_offset
+
+            self.save_settings()
+            self.update_claude_section()
+
+    def show_custom_budget_dialog(self):
+        """Show dialog to enter a custom budget value."""
+        current_budget = self.settings.get('claude_session_budget', 500000)
+
+        # Use QInputDialog for simple integer input
+        value, ok = QInputDialog.getInt(
+            self,
+            "Custom Budget",
+            "Enter token budget (0 for unlimited):",
+            value=current_budget,
+            min=0,
+            max=10000000,
+            step=10000
+        )
+
+        if ok:
+            self.settings['claude_session_budget'] = value
+            self.save_settings()
+            self.update_claude_section()
+
     def setup_timer(self):
         # Update every 30 seconds
         self.timer = QTimer(self)
@@ -846,6 +1091,11 @@ class PeripheralMonitor(QWidget):
                 return str(int(n))
 
         session_tokens = stats['session_tokens']
+        # Apply any calibration offset
+        token_offset = self.settings.get('claude_token_offset', 0)
+        session_tokens += token_offset
+        session_tokens = max(0, session_tokens)  # Don't go negative
+
         api_calls = stats['api_calls']
         budget = self.settings.get('claude_session_budget', 500000)
 
