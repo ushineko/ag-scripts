@@ -74,7 +74,7 @@ function Uninstall-OhMyPosh {
     )
 
     Write-SetupLog "Uninstalling Oh My Posh..." "INFO"
-    winget uninstall --id "JanDeDobbeleer.OhMyPosh" --silent --disable-interactivity
+    Start-Process -FilePath "winget" -ArgumentList "uninstall --id JanDeDobbeleer.OhMyPosh --silent --disable-interactivity" -Wait -WindowStyle Hidden
 
     if ($RemoveConfig -and (Test-Path $script:DestConfigDir)) {
         Remove-Item -Path $script:DestConfigDir -Recurse -Force

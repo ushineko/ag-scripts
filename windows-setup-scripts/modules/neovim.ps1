@@ -77,7 +77,7 @@ function Uninstall-Neovim {
     )
 
     Write-SetupLog "Uninstalling Neovim..." "INFO"
-    winget uninstall --id "Neovim.Neovim" --silent --disable-interactivity
+    Start-Process -FilePath "winget" -ArgumentList "uninstall --id Neovim.Neovim --silent --disable-interactivity" -Wait -WindowStyle Hidden
 
     if ($RemoveConfig) {
         if (Test-Path $script:DestConfigDir) {
