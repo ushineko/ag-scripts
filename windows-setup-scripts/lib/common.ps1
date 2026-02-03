@@ -362,5 +362,4 @@ function Refresh-EnvironmentPath {
     Write-SetupLog "Refreshed PATH environment variable" "INFO"
 }
 
-# Export all functions
-Export-ModuleMember -Function *
+# Note: Functions are automatically available when dot-sourced
