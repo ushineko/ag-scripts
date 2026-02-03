@@ -221,7 +221,8 @@ function Install-WingetPackage {
     Write-SetupLog "Installing $Name via winget..." "INFO"
 
     try {
-        winget install --id $PackageId --exact --silent --accept-package-agreements --accept-source-agreements
+        # --disable-interactivity prevents hangs waiting for user input
+        winget install --id $PackageId --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
 
         if ($LASTEXITCODE -eq 0) {
             Write-SetupLog "$Name installed successfully" "SUCCESS"
