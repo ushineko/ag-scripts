@@ -1,0 +1,27 @@
+{
+  "msys2": {
+    "source": "https://api.github.com/repos/msys2/msys2-installer/releases/latest",
+    "pattern": "msys2-x86_64-*.exe",
+    "description": "MSYS2 installer from GitHub releases"
+  },
+  "miniforge": {
+    "source": "https://api.github.com/repos/conda-forge/miniforge/releases/latest",
+    "pattern": "Miniforge3-Windows-x86_64.exe",
+    "description": "Miniforge3 installer from GitHub releases"
+  },
+  "antigravity": {
+    "source": "https://antigravity.google",
+    "note": "Follow download link on page to get installer",
+    "description": "Antigravity app"
+  },
+  "clockwork-orange": {
+    "source": "https://api.github.com/repos/ushineko/clockwork-orange/releases/latest",
+    "pattern": "clockwork-orange.exe",
+    "description": "clockwork-orange Windows executable from GitHub releases"
+  },
+  "hack-nerd-font": {
+    "source": "https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest",
+    "pattern": "Hack.zip",
+    "description": "Hack Nerd Font from GitHub releases"
+  }
+}
