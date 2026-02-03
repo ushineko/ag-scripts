@@ -25,79 +25,84 @@ function Install-ClockworkOrange {
 
     Write-SetupLog "Checking clockwork-orange..." "INFO"
 
-    if ((Test-ClockworkOrange) -and -not $Force) {
-        Write-SetupLog "clockwork-orange is already installed at $script:InstallDir" "SUCCESS"
-        return $true
-    }
+    $alreadyInstalled = Test-ClockworkOrange
 
-    if ($DryRun) {
+    if ($alreadyInstalled -and -not $Force) {
+        Write-SetupLog "clockwork-orange is already installed at $script:InstallDir" "SUCCESS"
+    } elseif ($DryRun) {
         Write-SetupLog "[DRY RUN] Would download clockwork-orange from GitHub" "INFO"
         return $true
-    }
+    } else {
+        # Need to download and install
+        $tempDir = "$env:TEMP\clockwork-orange-installer"
+        $exePath = "$tempDir\clockwork-orange.exe"
 
-    $tempDir = "$env:TEMP\clockwork-orange-installer"
-    $exePath = "$tempDir\clockwork-orange.exe"
+        try {
+            # Clean up previous temp files
+            if (Test-Path $tempDir) {
+                Remove-Item -Path $tempDir -Recurse -Force
+            }
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-    try {
-        # Clean up previous temp files
-        if (Test-Path $tempDir) {
-            Remove-Item -Path $tempDir -Recurse -Force
-        }
-        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+            # Download from GitHub releases
+            Write-SetupLog "Downloading clockwork-orange from GitHub..." "INFO"
+            $downloaded = Get-GitHubReleaseAsset -Repo "ushineko/clockwork-orange" -Pattern "clockwork-orange.exe" -OutputPath $exePath
 
-        # Download from GitHub releases
-        Write-SetupLog "Downloading clockwork-orange from GitHub..." "INFO"
-        $downloaded = Get-GitHubReleaseAsset -Repo "ushineko/clockwork-orange" -Pattern "clockwork-orange.exe" -OutputPath $exePath
+            if (-not $downloaded) {
+                Write-SetupLog "Failed to download clockwork-orange. No Windows executable found in releases." "ERROR"
+                Write-SetupLog "Please check https://github.com/ushineko/clockwork-orange/releases" "INFO"
+                return $false
+            }
 
-        if (-not $downloaded) {
-            Write-SetupLog "Failed to download clockwork-orange. No Windows executable found in releases." "ERROR"
-            Write-SetupLog "Please check https://github.com/ushineko/clockwork-orange/releases" "INFO"
+            # Create install directory
+            if (Test-Path $script:InstallDir) {
+                if ($Force) {
+                    Backup-Item -Path $script:InstallDir | Out-Null
+                    Remove-Item -Path $script:InstallDir -Recurse -Force
+                }
+            }
+            New-Item -ItemType Directory -Path $script:InstallDir -Force | Out-Null
+
+            # Copy executable to install directory
+            Copy-Item -Path $exePath -Destination "$script:InstallDir\clockwork-orange.exe" -Force
+
+            # Cleanup
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+
+            Write-SetupLog "clockwork-orange installed to $script:InstallDir" "SUCCESS"
+
+        } catch {
+            Write-SetupLog "Failed to install clockwork-orange: $_" "ERROR"
             return $false
         }
+    }
 
-        # Create install directory
-        if (Test-Path $script:InstallDir) {
-            if ($Force) {
-                Backup-Item -Path $script:InstallDir | Out-Null
-                Remove-Item -Path $script:InstallDir -Recurse -Force
-            }
-        }
-        New-Item -ItemType Directory -Path $script:InstallDir -Force | Out-Null
-
-        # Copy executable to install directory
-        Copy-Item -Path $exePath -Destination "$script:InstallDir\clockwork-orange.exe" -Force
-
-        # Cleanup
-        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-
-        Write-SetupLog "clockwork-orange installed to $script:InstallDir" "SUCCESS"
-
-        # Add to PATH (optional - add to user PATH)
+    # Ensure PATH and shortcut are set up (runs even when already installed)
+    if (-not $DryRun) {
+        # Add to PATH if not already there
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
         if ($userPath -notlike "*$script:InstallDir*") {
             [Environment]::SetEnvironmentVariable("Path", "$userPath;$script:InstallDir", "User")
             Write-SetupLog "Added clockwork-orange to user PATH" "INFO"
         }
 
-        # Create Start Menu shortcut
+        # Create Start Menu shortcut if missing
         $startMenuPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
         $shortcutPath = "$startMenuPath\Clockwork Orange.lnk"
         $targetPath = "$script:InstallDir\clockwork-orange.exe"
 
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $targetPath
-        $shortcut.WorkingDirectory = $script:InstallDir
-        $shortcut.Description = "Clockwork Orange"
-        $shortcut.Save()
-        Write-SetupLog "Created Start Menu shortcut" "SUCCESS"
-
-        return $true
-
-    } catch {
-        Write-SetupLog "Failed to install clockwork-orange: $_" "ERROR"
-        return $false
+        if (-not (Test-Path $shortcutPath)) {
+            $shell = New-Object -ComObject WScript.Shell
+            $shortcut = $shell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = $targetPath
+            $shortcut.WorkingDirectory = $script:InstallDir
+            $shortcut.Description = "Clockwork Orange"
+            $shortcut.Save()
+            Write-SetupLog "Created Start Menu shortcut" "SUCCESS"
+        }
     }
+
+    return $true
 }
 
 function Uninstall-ClockworkOrange {

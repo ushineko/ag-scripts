@@ -76,30 +76,19 @@ function Install-OhMyPosh {
     }
 
     # Install PowerShell profile for both PS5 and PS7
-    Write-SetupLog "DEBUG: Documents folder = $script:DocumentsFolder" "INFO"
-    Write-SetupLog "DEBUG: Ps5ProfileDir = $script:Ps5ProfileDir" "INFO"
-    Write-SetupLog "DEBUG: Ps7ProfileDir = $script:Ps7ProfileDir" "INFO"
-    Write-SetupLog "DEBUG: PsProfileSource = $script:PsProfileSource" "INFO"
-    Write-SetupLog "DEBUG: PsProfileSource exists = $(Test-Path $script:PsProfileSource)" "INFO"
-
     if (Test-Path $script:PsProfileSource) {
         foreach ($profileDir in @($script:Ps5ProfileDir, $script:Ps7ProfileDir)) {
             $destProfile = "$profileDir\Microsoft.PowerShell_profile.ps1"
-            Write-SetupLog "DEBUG: Processing profile dir: $profileDir" "INFO"
-            Write-SetupLog "DEBUG: Dest profile: $destProfile" "INFO"
 
             if ($DryRun) {
                 Write-SetupLog "[DRY RUN] Would copy PowerShell profile to $destProfile" "INFO"
             } else {
                 # Create profile directory if needed
                 if (-not (Test-Path $profileDir)) {
-                    Write-SetupLog "DEBUG: Creating profile directory: $profileDir" "INFO"
                     New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
                 }
 
-                Write-SetupLog "DEBUG: Calling Copy-ConfigFile with Force=$Force" "INFO"
-                $copyResult = Copy-ConfigFile -Source $script:PsProfileSource -Destination $destProfile -Force:$Force
-                Write-SetupLog "DEBUG: Copy-ConfigFile result: $copyResult" "INFO"
+                Copy-ConfigFile -Source $script:PsProfileSource -Destination $destProfile -Force:$Force | Out-Null
             }
         }
     } else {

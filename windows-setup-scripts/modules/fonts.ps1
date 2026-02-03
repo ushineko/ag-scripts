@@ -76,6 +76,7 @@ function Install-HackNerdFont {
         # Copy font files
         $fontFiles = Get-ChildItem -Path $tempDir -Filter "*.ttf" -Recurse
         $installed = 0
+        $skipped = 0
 
         foreach ($font in $fontFiles) {
             # Skip Windows Compatible versions if regular exists
@@ -84,17 +85,39 @@ function Install-HackNerdFont {
             }
 
             $destPath = Join-Path $userFontsDir $font.Name
-            Copy-Item -Path $font.FullName -Destination $destPath -Force
 
-            # Register font in user registry
-            $fontRegPath = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
-            $fontName = [System.IO.Path]::GetFileNameWithoutExtension($font.Name) + " (TrueType)"
-            Set-ItemProperty -Path $fontRegPath -Name $fontName -Value $destPath -ErrorAction SilentlyContinue
+            # Check if font already exists and is in use
+            if (Test-Path $destPath) {
+                try {
+                    # Try to open file exclusively to check if it's locked
+                    $fileStream = [System.IO.File]::Open($destPath, 'Open', 'ReadWrite', 'None')
+                    $fileStream.Close()
+                } catch {
+                    # File is locked (in use by another process)
+                    $skipped++
+                    continue
+                }
+            }
 
-            $installed++
+            try {
+                Copy-Item -Path $font.FullName -Destination $destPath -Force -ErrorAction Stop
+
+                # Register font in user registry
+                $fontRegPath = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+                $fontName = [System.IO.Path]::GetFileNameWithoutExtension($font.Name) + " (TrueType)"
+                Set-ItemProperty -Path $fontRegPath -Name $fontName -Value $destPath -ErrorAction SilentlyContinue
+
+                $installed++
+            } catch {
+                $skipped++
+            }
         }
 
-        Write-SetupLog "Installed $installed font files" "SUCCESS"
+        if ($skipped -gt 0) {
+            Write-SetupLog "Installed $installed font files, skipped $skipped (already in use)" "SUCCESS"
+        } else {
+            Write-SetupLog "Installed $installed font files" "SUCCESS"
+        }
 
         # Cleanup
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue

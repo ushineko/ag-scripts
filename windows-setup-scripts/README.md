@@ -199,10 +199,24 @@ windows-setup-scripts/
 
 ## Idempotency
 
-All installation scripts are idempotent:
-- Running twice produces the same result
-- Existing installations are detected and skipped (unless `-Force`)
-- Config files are backed up before overwriting
+All installation scripts are idempotent and safe to re-run:
+
+**Binary/Tool Installation:**
+- Existing installations are detected and skipped
+- Use `-Force` to reinstall/upgrade
+
+**Configuration Files:**
+- Existing config files are **NOT overwritten** by default (preserves user customizations)
+- Re-running without `-Force` shows warnings for each existing config
+- Use `-Force` to overwrite configs (automatic backup created first)
+
+**Example re-run output:**
+```
+[WARNING] File exists (use -Force to overwrite): C:\Users\you\.bashrc
+[WARNING] File exists (use -Force to overwrite): C:\Users\you\.zshrc
+```
+
+This is intentional behavior to prevent losing custom configurations.
 
 ## Backup Strategy
 
@@ -245,6 +259,19 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
 
+### 1.1.0
+- Fixed fonts module: gracefully handle "file in use" errors when fonts already installed
+- Fixed neovim module: no longer shows "config copied" when config already exists
+- Fixed clockwork-orange: PATH and Start Menu shortcut now created even on re-runs
+- Fixed oh-my-posh: robust Documents folder detection (handles OneDrive redirection)
+- Fixed winget calls: use Start-Process with hidden window to prevent hanging
+- Fixed MSYS2: configure HOME to use Windows user profile via nsswitch.conf
+- Fixed package IDs: corrected case-sensitive winget IDs (Atuinsh.Atuin)
+- Added PowerShell profile installation for both PS5 and PS7
+- Added WinGet Links to PATH in shell configs
+- Improved idempotency documentation
+- Removed debug logging statements
+
 ### 1.0.1
 - Fixed GitHub URLs using incorrect username (nverenin -> ushineko)
 
@@ -253,7 +280,7 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Version
 
-1.0.1
+1.1.0
 
 ## License
 
