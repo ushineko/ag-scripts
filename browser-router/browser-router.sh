@@ -20,8 +20,15 @@ if [[ -z "$url" ]]; then
     exit 1
 fi
 
-# Route webcam-dependent sites to Firefox (PipeWire camera support works there)
-if [[ "$url" == *"teams.microsoft.com"* ]] || [[ "$url" == *"teams.live.com"* ]]; then
+# Route Microsoft 365 / Office apps to Firefox (PipeWire camera support works there)
+if [[ "$url" == *"teams.microsoft.com"* ]] || \
+   [[ "$url" == *"teams.live.com"* ]] || \
+   [[ "$url" == *"outlook.office.com"* ]] || \
+   [[ "$url" == *"outlook.office365.com"* ]] || \
+   [[ "$url" == *"outlook.live.com"* ]] || \
+   [[ "$url" == *".sharepoint.com"* ]] || \
+   [[ "$url" == *"onedrive.live.com"* ]] || \
+   [[ "$url" == *"office.com"* ]]; then
     exec firefox "$url"
 else
     exec vivaldi-stable "$url"
