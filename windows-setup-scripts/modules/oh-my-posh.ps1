@@ -6,11 +6,16 @@ $script:OmpConfigDir = "$PSScriptRoot\..\configs\oh-my-posh"
 $script:OmpDestConfigDir = "$env:USERPROFILE\.config\oh-my-posh"
 $script:PsProfileSource = "$PSScriptRoot\..\configs\powershell\Microsoft.PowerShell_profile.ps1"
 
-# Get the actual Documents folder using Shell.Application (handles OneDrive redirection)
-$shell = New-Object -ComObject Shell.Application
-$script:DocumentsFolder = $shell.NameSpace('personal').Self.Path
-if (-not $script:DocumentsFolder) {
-    $script:DocumentsFolder = "$env:USERPROFILE\Documents"
+# Determine PowerShell profile directories
+# Check for OneDrive Documents redirection first
+$oneDriveDocuments = "$env:USERPROFILE\OneDrive\Documents"
+$localDocuments = "$env:USERPROFILE\Documents"
+
+# Use OneDrive path if it exists, otherwise fall back to local Documents
+if (Test-Path $oneDriveDocuments) {
+    $script:DocumentsFolder = $oneDriveDocuments
+} else {
+    $script:DocumentsFolder = $localDocuments
 }
 
 $script:Ps5ProfileDir = "$script:DocumentsFolder\WindowsPowerShell"
