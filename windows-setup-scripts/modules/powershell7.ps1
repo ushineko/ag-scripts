@@ -43,6 +43,6 @@ function Install-PowerShell7 {
 
 function Uninstall-PowerShell7 {
     Write-SetupLog "Uninstalling PowerShell 7..." "INFO"
-    winget uninstall --id "Microsoft.PowerShell" --silent
+    winget uninstall --id "Microsoft.PowerShell" --silent --disable-interactivity
     Write-SetupLog "PowerShell 7 uninstalled" "SUCCESS"
 }
