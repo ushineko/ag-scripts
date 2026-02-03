@@ -74,7 +74,7 @@ function Uninstall-Atuin {
     )
 
     Write-SetupLog "Uninstalling Atuin..." "INFO"
-    winget uninstall --id "atuinsh.atuin" --silent
+    winget uninstall --id "atuinsh.atuin" --silent --disable-interactivity
 
     if ($RemoveConfig -and (Test-Path $script:DestConfigDir)) {
         Remove-Item -Path $script:DestConfigDir -Recurse -Force

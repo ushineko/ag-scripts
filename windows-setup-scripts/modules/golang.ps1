@@ -43,6 +43,6 @@ function Install-Go {
 
 function Uninstall-Go {
     Write-SetupLog "Uninstalling Go..." "INFO"
-    winget uninstall --id "GoLang.Go" --silent
+    winget uninstall --id "GoLang.Go" --silent --disable-interactivity
     Write-SetupLog "Go uninstalled" "SUCCESS"
 }

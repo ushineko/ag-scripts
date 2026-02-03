@@ -43,6 +43,6 @@ function Install-GitForWindows {
 
 function Uninstall-GitForWindows {
     Write-SetupLog "Uninstalling Git for Windows..." "INFO"
-    winget uninstall --id "Git.Git" --silent
+    winget uninstall --id "Git.Git" --silent --disable-interactivity
     Write-SetupLog "Git for Windows uninstalled" "SUCCESS"
 }
