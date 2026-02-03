@@ -2,7 +2,7 @@
 
 Routes URLs to different browsers based on domain patterns. Created to work around Chromium/Vivaldi lacking PipeWire camera support on Wayland.
 
-**Version:** 1.0
+**Version:** 1.1
 
 ## Table of Contents
 
@@ -63,6 +63,12 @@ Edit `~/.local/bin/browser-router` to customize routing patterns.
 Default configuration routes these domains to Firefox:
 - `teams.microsoft.com`
 - `teams.live.com`
+- `outlook.office.com`
+- `outlook.office365.com`
+- `outlook.live.com`
+- `*.sharepoint.com`
+- `onedrive.live.com`
+- `office.com`
 
 Everything else goes to Vivaldi.
 
@@ -100,6 +106,9 @@ fi
 | `uninstall.sh` | Uninstallation script |
 
 ## Changelog
+
+### v1.1 (2026-02-02)
+- Add Office 365 domains: Outlook, SharePoint, OneDrive, office.com
 
 ### v1.0 (2026-02-02)
 - Initial release
