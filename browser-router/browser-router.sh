@@ -20,7 +20,7 @@ if [[ -z "$url" ]]; then
     exit 1
 fi
 
-# Route Microsoft 365 / Office apps to Firefox (PipeWire camera support works there)
+# Route Microsoft 365 / Office apps and Slack to Firefox (PipeWire camera support works there)
 if [[ "$url" == *"teams.microsoft.com"* ]] || \
    [[ "$url" == *"teams.live.com"* ]] || \
    [[ "$url" == *"outlook.office.com"* ]] || \
@@ -28,7 +28,8 @@ if [[ "$url" == *"teams.microsoft.com"* ]] || \
    [[ "$url" == *"outlook.live.com"* ]] || \
    [[ "$url" == *".sharepoint.com"* ]] || \
    [[ "$url" == *"onedrive.live.com"* ]] || \
-   [[ "$url" == *"office.com"* ]]; then
+   [[ "$url" == *"office.com"* ]] || \
+   [[ "$url" == *"app.slack.com"* ]]; then
     exec firefox "$url"
 else
     exec vivaldi-stable "$url"

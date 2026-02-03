@@ -2,7 +2,7 @@
 
 Routes URLs to different browsers based on domain patterns. Created to work around Chromium/Vivaldi lacking PipeWire camera support on Wayland.
 
-**Version:** 1.1
+**Version:** 1.2
 
 ## Table of Contents
 
@@ -69,6 +69,7 @@ Default configuration routes these domains to Firefox:
 - `*.sharepoint.com`
 - `onedrive.live.com`
 - `office.com`
+- `app.slack.com`
 
 Everything else goes to Vivaldi.
 
@@ -106,6 +107,9 @@ fi
 | `uninstall.sh` | Uninstallation script |
 
 ## Changelog
+
+### v1.2 (2026-02-02)
+- Add Slack (app.slack.com) - Electron app has same PipeWire camera issues
 
 ### v1.1 (2026-02-02)
 - Add Office 365 domains: Outlook, SharePoint, OneDrive, office.com
