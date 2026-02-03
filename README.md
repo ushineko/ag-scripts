@@ -12,6 +12,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring. Demonstrates BLE scanning, upower/solaar integration, and KDE Wayland window rules. |
 | [game-desktop-creator](game-desktop-creator/) | PyQt6 GUI for creating start menu launchers for Steam, Epic (via Heroic), and GOG games. Useful for Linux gaming setups. |
 | [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology—spec-driven, iterative development with quality gates and fresh context per iteration. |
+| [windows-setup-scripts](windows-setup-scripts/) | PowerShell scripts to automate Windows dev environment setup. Installs MSYS2, Neovim, Claude Code, Oh My Posh, and more with idempotent, one-liner installation. |
 
 ## Projects
 
@@ -36,6 +37,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [the-great-cachyos-move](the-great-cachyos-move/) | Migration toolkit for moving CachyOS (Btrfs) installations between drives using `btrfs send/receive`. |
 | [ufw-config](ufw-config/) | UFW/iptables configuration documentation and backups for a gateway/router setup with Pi-hole and VPN forwarding. |
 | [vpn-toggle](vpn-toggle/) | VPN manager with integrated monitoring, health checking, auto-reconnect, and persistent PyQt6 GUI for NetworkManager connections. |
+| [windows-setup-scripts](windows-setup-scripts/) | PowerShell scripts to automate Windows dev environment setup. Installs MSYS2, Neovim, Claude Code, Oh My Posh, Miniforge, and more with idempotent installation. |
 
 ## Usage
 
