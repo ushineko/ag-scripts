@@ -6,20 +6,21 @@ $script:OmpConfigDir = "$PSScriptRoot\..\configs\oh-my-posh"
 $script:OmpDestConfigDir = "$env:USERPROFILE\.config\oh-my-posh"
 $script:PsProfileSource = "$PSScriptRoot\..\configs\powershell\Microsoft.PowerShell_profile.ps1"
 
-# Determine PowerShell profile directories
-# Check for OneDrive Documents redirection first
-$oneDriveDocuments = "$env:USERPROFILE\OneDrive\Documents"
-$localDocuments = "$env:USERPROFILE\Documents"
+# Use PowerShell's built-in $PROFILE variable to get the correct path
+# This handles OneDrive redirection, custom Documents locations, etc.
+$script:CurrentProfileDir = Split-Path -Parent $PROFILE
+$script:DocumentsFolder = Split-Path -Parent $script:CurrentProfileDir
 
-# Use OneDrive path if it exists, otherwise fall back to local Documents
-if (Test-Path $oneDriveDocuments) {
-    $script:DocumentsFolder = $oneDriveDocuments
+# Determine if we're running in PS5 or PS7 and set both paths accordingly
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    # Running in PS7, so $PROFILE points to PowerShell folder
+    $script:Ps7ProfileDir = $script:CurrentProfileDir
+    $script:Ps5ProfileDir = Join-Path $script:DocumentsFolder "WindowsPowerShell"
 } else {
-    $script:DocumentsFolder = $localDocuments
+    # Running in PS5, so $PROFILE points to WindowsPowerShell folder
+    $script:Ps5ProfileDir = $script:CurrentProfileDir
+    $script:Ps7ProfileDir = Join-Path $script:DocumentsFolder "PowerShell"
 }
-
-$script:Ps5ProfileDir = "$script:DocumentsFolder\WindowsPowerShell"
-$script:Ps7ProfileDir = "$script:DocumentsFolder\PowerShell"
 
 function Test-OhMyPosh {
     try {
