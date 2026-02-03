@@ -21,7 +21,7 @@
     Show what would be installed without making changes
 .PARAMETER Components
     Specific components to install (comma-separated).
-    Options: prerequisites, powershell7, git, fonts, msys2, oh-my-posh, atuin, neovim, golang, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
+    Options: prerequisites, powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
 .PARAMETER Force
     Overwrite existing installations/configs
 .PARAMETER SkipBackup
@@ -64,6 +64,7 @@ $ScriptRoot = $PSScriptRoot
 . "$ScriptRoot\modules\antigravity.ps1"
 . "$ScriptRoot\modules\clockwork-orange.ps1"
 . "$ScriptRoot\modules\terminal.ps1"
+. "$ScriptRoot\modules\ssh-agent.ps1"
 
 function Show-Banner {
     Write-Host ""
@@ -89,6 +90,7 @@ function Main {
         @{ Name = "prerequisites"; Func = { Install-Prerequisites -DryRun:$DryRun -Force:$Force } }
         @{ Name = "powershell7";   Func = { Install-PowerShell7 -DryRun:$DryRun -Force:$Force } }
         @{ Name = "git";           Func = { Install-GitForWindows -DryRun:$DryRun -Force:$Force } }
+        @{ Name = "ssh-agent";     Func = { Install-SshAgent -DryRun:$DryRun -Force:$Force } }
         @{ Name = "fonts";         Func = { Install-HackNerdFont -DryRun:$DryRun -Force:$Force } }
         @{ Name = "msys2";         Func = { Install-Msys2 -DryRun:$DryRun -Force:$Force } }
         @{ Name = "oh-my-posh";    Func = { Install-OhMyPosh -DryRun:$DryRun -Force:$Force } }

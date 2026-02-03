@@ -98,16 +98,12 @@ function Install-TerminalProfiles {
             $existingProfile = $existingProfiles | Where-Object { $_.guid -eq $customProfile.guid }
 
             if ($existingProfile) {
-                if ($Force) {
-                    # Update existing profile
-                    $index = [array]::IndexOf($existingProfiles, $existingProfile)
-                    foreach ($key in $customProfile.Keys) {
-                        $existingProfiles[$index].$key = $customProfile[$key]
-                    }
-                    Write-SetupLog "Updated profile: $($customProfile.name)" "INFO"
-                } else {
-                    Write-SetupLog "Profile exists (use -Force to update): $($customProfile.name)" "INFO"
+                # Always update existing profile to ensure font and settings are correct
+                $index = [array]::IndexOf($existingProfiles, $existingProfile)
+                foreach ($key in $customProfile.Keys) {
+                    $existingProfiles[$index].$key = $customProfile[$key]
                 }
+                Write-SetupLog "Updated profile: $($customProfile.name)" "SUCCESS"
             } else {
                 # Add new profile
                 $newProfile = [PSCustomObject]$customProfile

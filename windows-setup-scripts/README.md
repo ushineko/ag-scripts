@@ -44,6 +44,7 @@ Preview what would be installed without making changes:
 |-----------|-------------|----------------|
 | PowerShell 7 | Modern cross-platform PowerShell | winget |
 | Git for Windows | Git version control | winget |
+| SSH Agent | Windows OpenSSH agent service | Service config |
 | MSYS2 | Unix-like environment for Windows | GitHub releases |
 | MSYS2 Packages | git, make, vim, zsh | pacman |
 | Oh My Posh | Prompt theme engine | winget |
@@ -72,7 +73,7 @@ Preview what would be installed without making changes:
 .\install.ps1 -Components msys2,neovim,fonts
 ```
 
-Available components: `prerequisites`, `powershell7`, `git`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `miniforge`, `claude-code`, `antigravity`, `clockwork-orange`, `terminal`
+Available components: `prerequisites`, `powershell7`, `git`, `ssh-agent`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `miniforge`, `claude-code`, `antigravity`, `clockwork-orange`, `terminal`
 
 ### Force Reinstallation
 
@@ -119,6 +120,22 @@ Full NvChad configuration with:
 Custom profiles added:
 - **MSYS2** - Zsh shell in MSYS2 environment
 - **Claude Code** - Direct Claude CLI access
+
+### SSH Agent
+
+The installer configures the Windows OpenSSH Authentication Agent service:
+- Service is set to start automatically
+- Service is started immediately
+- Shell configs alias `ssh` and `ssh-add` to Windows OpenSSH binaries
+
+This allows SSH keys to be loaded once and reused across all shells (PowerShell, MSYS2, Git Bash).
+
+**Adding SSH keys:**
+```powershell
+ssh-add ~/.ssh/id_ed25519
+```
+
+**Note:** May require administrator privileges to configure the service on first run.
 
 ## Testing
 
@@ -172,6 +189,7 @@ windows-setup-scripts/
 │   ├── prerequisites.ps1     # Winget, Node.js checks
 │   ├── powershell7.ps1       # PowerShell 7
 │   ├── git.ps1               # Git for Windows
+│   ├── ssh-agent.ps1         # Windows SSH Agent service
 │   ├── fonts.ps1             # Hack Nerd Font
 │   ├── msys2.ps1             # MSYS2 + packages
 │   ├── oh-my-posh.ps1        # Oh My Posh + theme
@@ -259,6 +277,15 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
 
+### 1.2.0
+- Added ssh-agent module: configures Windows OpenSSH Authentication Agent service
+- Shell configs use Windows OpenSSH binaries for consistent SSH key handling across all shells
+
+### 1.1.1
+- Fixed Copy-ConfigFile: empty files are now overwritten (fixes PS7 profile not being populated)
+- Fixed terminal module: profiles are now always updated on re-runs (ensures font settings stay correct)
+- Simplified antigravity module: now only provides manual installation instructions
+
 ### 1.1.0
 - Fixed fonts module: gracefully handle "file in use" errors when fonts already installed
 - Fixed neovim module: no longer shows "config copied" when config already exists
@@ -280,7 +307,7 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Version
 
-1.1.0
+1.2.0
 
 ## License
 
