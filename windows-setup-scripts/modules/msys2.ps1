@@ -68,6 +68,28 @@ function Install-Msys2 {
         Write-SetupLog "MSYS2 is already installed at $script:Msys2Path" "SUCCESS"
     }
 
+    # Configure HOME to use Windows user profile
+    if (-not $DryRun) {
+        $nsswitchPath = "$script:Msys2Path\etc\nsswitch.conf"
+        if (Test-Path $nsswitchPath) {
+            $content = Get-Content -Path $nsswitchPath -Raw
+            if ($content -notmatch "db_home:\s*windows") {
+                # Replace existing db_home line or add it
+                if ($content -match "db_home:") {
+                    $content = $content -replace "db_home:.*", "db_home: windows"
+                } else {
+                    $content += "`ndb_home: windows`n"
+                }
+                Set-Content -Path $nsswitchPath -Value $content -NoNewline
+                Write-SetupLog "Configured MSYS2 to use Windows home directory" "SUCCESS"
+            } else {
+                Write-SetupLog "MSYS2 already configured to use Windows home directory" "SUCCESS"
+            }
+        }
+    } else {
+        Write-SetupLog "[DRY RUN] Would configure MSYS2 to use Windows home directory" "INFO"
+    }
+
     # Update package database and install packages
     if (-not $DryRun) {
         Write-SetupLog "Updating MSYS2 package database..." "INFO"
