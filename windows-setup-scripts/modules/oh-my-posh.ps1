@@ -5,8 +5,16 @@
 $script:OmpConfigDir = "$PSScriptRoot\..\configs\oh-my-posh"
 $script:OmpDestConfigDir = "$env:USERPROFILE\.config\oh-my-posh"
 $script:PsProfileSource = "$PSScriptRoot\..\configs\powershell\Microsoft.PowerShell_profile.ps1"
-$script:Ps5ProfileDir = "$env:USERPROFILE\Documents\WindowsPowerShell"
-$script:Ps7ProfileDir = "$env:USERPROFILE\Documents\PowerShell"
+
+# Get the actual Documents folder using Shell.Application (handles OneDrive redirection)
+$shell = New-Object -ComObject Shell.Application
+$script:DocumentsFolder = $shell.NameSpace('personal').Self.Path
+if (-not $script:DocumentsFolder) {
+    $script:DocumentsFolder = "$env:USERPROFILE\Documents"
+}
+
+$script:Ps5ProfileDir = "$script:DocumentsFolder\WindowsPowerShell"
+$script:Ps7ProfileDir = "$script:DocumentsFolder\PowerShell"
 
 function Test-OhMyPosh {
     try {
@@ -68,19 +76,30 @@ function Install-OhMyPosh {
     }
 
     # Install PowerShell profile for both PS5 and PS7
+    Write-SetupLog "DEBUG: Documents folder = $script:DocumentsFolder" "INFO"
+    Write-SetupLog "DEBUG: Ps5ProfileDir = $script:Ps5ProfileDir" "INFO"
+    Write-SetupLog "DEBUG: Ps7ProfileDir = $script:Ps7ProfileDir" "INFO"
+    Write-SetupLog "DEBUG: PsProfileSource = $script:PsProfileSource" "INFO"
+    Write-SetupLog "DEBUG: PsProfileSource exists = $(Test-Path $script:PsProfileSource)" "INFO"
+
     if (Test-Path $script:PsProfileSource) {
         foreach ($profileDir in @($script:Ps5ProfileDir, $script:Ps7ProfileDir)) {
             $destProfile = "$profileDir\Microsoft.PowerShell_profile.ps1"
+            Write-SetupLog "DEBUG: Processing profile dir: $profileDir" "INFO"
+            Write-SetupLog "DEBUG: Dest profile: $destProfile" "INFO"
 
             if ($DryRun) {
                 Write-SetupLog "[DRY RUN] Would copy PowerShell profile to $destProfile" "INFO"
             } else {
                 # Create profile directory if needed
                 if (-not (Test-Path $profileDir)) {
+                    Write-SetupLog "DEBUG: Creating profile directory: $profileDir" "INFO"
                     New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
                 }
 
-                Copy-ConfigFile -Source $script:PsProfileSource -Destination $destProfile -Force:$Force
+                Write-SetupLog "DEBUG: Calling Copy-ConfigFile with Force=$Force" "INFO"
+                $copyResult = Copy-ConfigFile -Source $script:PsProfileSource -Destination $destProfile -Force:$Force
+                Write-SetupLog "DEBUG: Copy-ConfigFile result: $copyResult" "INFO"
             }
         }
     } else {
