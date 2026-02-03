@@ -19,7 +19,7 @@ PowerShell scripts to automate the setup of a Windows development environment. I
 Run this in PowerShell on a fresh Windows system:
 
 ```powershell
-irm https://raw.githubusercontent.com/nverenin/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/ushineko/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
 ```
 
 ### Local Installation
@@ -84,7 +84,7 @@ Available components: `prerequisites`, `powershell7`, `git`, `fonts`, `msys2`, `
 
 ```powershell
 # Dry run via bootstrap
-irm https://raw.githubusercontent.com/nverenin/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/ushineko/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
 Install-DevEnv -DryRun
 
 # Specific components via bootstrap
@@ -243,9 +243,17 @@ https://www.microsoft.com/store/productId/9NBLGGH4NNS1
 
 Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
+## Changelog
+
+### 1.0.1
+- Fixed GitHub URLs using incorrect username (nverenin -> ushineko)
+
+### 1.0.0
+- Initial release with full development environment setup
+
 ## Version
 
-1.0.0
+1.0.1
 
 ## License
 
