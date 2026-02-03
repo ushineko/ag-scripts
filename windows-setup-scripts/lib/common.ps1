@@ -221,14 +221,15 @@ function Install-WingetPackage {
     Write-SetupLog "Installing $Name via winget..." "INFO"
 
     try {
-        # --disable-interactivity prevents hangs waiting for user input
-        winget install --id $PackageId --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+        # Use Start-Process to avoid output buffering issues when run via irm | iex
+        $wingetArgs = "install --id $PackageId --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
+        $process = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
 
-        if ($LASTEXITCODE -eq 0) {
+        if ($process.ExitCode -eq 0) {
             Write-SetupLog "$Name installed successfully" "SUCCESS"
             return $true
         } else {
-            Write-SetupLog "Failed to install $Name (exit code: $LASTEXITCODE)" "ERROR"
+            Write-SetupLog "Failed to install $Name (exit code: $($process.ExitCode))" "ERROR"
             return $false
         }
     } catch {
