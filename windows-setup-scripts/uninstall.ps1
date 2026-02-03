@@ -9,7 +9,7 @@
     Also remove configuration files (backups will be preserved)
 .PARAMETER Components
     Specific components to uninstall (comma-separated).
-    Options: powershell7, git, fonts, msys2, oh-my-posh, atuin, neovim, golang, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
+    Options: powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
 .PARAMETER Force
     Skip confirmation prompts
 .EXAMPLE
@@ -49,6 +49,7 @@ $ScriptRoot = $PSScriptRoot
 . "$ScriptRoot\modules\antigravity.ps1"
 . "$ScriptRoot\modules\clockwork-orange.ps1"
 . "$ScriptRoot\modules\terminal.ps1"
+. "$ScriptRoot\modules\ssh-agent.ps1"
 
 function Show-Banner {
     Write-Host ""
@@ -73,7 +74,7 @@ function Main {
         $uninstallOrder = @(
             "terminal", "clockwork-orange", "antigravity", "claude-code",
             "miniforge", "neovim", "golang", "atuin", "oh-my-posh",
-            "msys2", "fonts", "git", "powershell7"
+            "msys2", "fonts", "ssh-agent", "git", "powershell7"
         )
 
         foreach ($comp in $uninstallOrder) {
@@ -111,6 +112,7 @@ function Main {
         @{ Name = "oh-my-posh";      Func = { Uninstall-OhMyPosh -RemoveConfig:$RemoveConfigs } }
         @{ Name = "msys2";           Func = { Uninstall-Msys2 -RemoveConfig:$RemoveConfigs } }
         @{ Name = "fonts";           Func = { Uninstall-HackNerdFont } }
+        @{ Name = "ssh-agent";       Func = { Uninstall-SshAgent } }
         @{ Name = "git";             Func = { Uninstall-GitForWindows } }
         @{ Name = "powershell7";     Func = { Uninstall-PowerShell7 } }
     )

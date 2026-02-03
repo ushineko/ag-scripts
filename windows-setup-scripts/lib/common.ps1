@@ -92,11 +92,16 @@ function Copy-ConfigFile {
 
     # Check if destination exists
     if (Test-Path $Destination) {
-        if (-not $Force) {
+        $destFile = Get-Item $Destination
+        $destIsEmpty = (-not $destFile.PSIsContainer) -and ($destFile.Length -eq 0)
+
+        if ($destIsEmpty) {
+            # Empty file - treat as non-existent, overwrite without backup
+            Write-SetupLog "Overwriting empty file: $Destination" "INFO"
+        } elseif (-not $Force) {
             Write-SetupLog "File exists (use -Force to overwrite): $Destination" "WARNING"
             return $false
-        }
-        if (-not $SkipBackup) {
+        } elseif (-not $SkipBackup) {
             Backup-Item -Path $Destination | Out-Null
         }
     }
