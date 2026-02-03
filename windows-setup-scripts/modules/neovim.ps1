@@ -3,8 +3,8 @@
 . "$PSScriptRoot\..\lib\common.ps1"
 
 $script:NvimPath = "$env:ProgramFiles\Neovim\bin\nvim.exe"
-$script:ConfigDir = "$PSScriptRoot\..\configs\nvim"
-$script:DestConfigDir = "$env:LOCALAPPDATA\nvim"
+$script:NvimConfigDir = "$PSScriptRoot\..\configs\nvim"
+$script:NvimDestConfigDir = "$env:LOCALAPPDATA\nvim"
 
 function Test-Neovim {
     return Test-Installation -Path $script:NvimPath -ExpectedType "File"
@@ -42,29 +42,29 @@ function Install-Neovim {
     }
 
     # Copy NvChad configuration
-    if (Test-Path $script:ConfigDir) {
+    if (Test-Path $script:NvimConfigDir) {
         if ($DryRun) {
-            Write-SetupLog "[DRY RUN] Would copy NvChad config to $script:DestConfigDir" "INFO"
+            Write-SetupLog "[DRY RUN] Would copy NvChad config to $script:NvimDestConfigDir" "INFO"
         } else {
             # Backup existing config
-            if (Test-Path $script:DestConfigDir) {
+            if (Test-Path $script:NvimDestConfigDir) {
                 if (-not $Force) {
-                    Write-SetupLog "Neovim config exists (use -Force to overwrite): $script:DestConfigDir" "WARNING"
+                    Write-SetupLog "Neovim config exists (use -Force to overwrite): $script:NvimDestConfigDir" "WARNING"
                 } else {
-                    Backup-Item -Path $script:DestConfigDir | Out-Null
-                    Remove-Item -Path $script:DestConfigDir -Recurse -Force
+                    Backup-Item -Path $script:NvimDestConfigDir | Out-Null
+                    Remove-Item -Path $script:NvimDestConfigDir -Recurse -Force
                 }
             }
 
             # Copy config
-            Copy-Item -Path $script:ConfigDir -Destination $script:DestConfigDir -Recurse -Force
-            Write-SetupLog "NvChad configuration copied to $script:DestConfigDir" "SUCCESS"
+            Copy-Item -Path $script:NvimConfigDir -Destination $script:NvimDestConfigDir -Recurse -Force
+            Write-SetupLog "NvChad configuration copied to $script:NvimDestConfigDir" "SUCCESS"
 
             # Install plugins (first launch will auto-install via lazy.nvim)
             Write-SetupLog "Neovim plugins will be installed on first launch" "INFO"
         }
     } else {
-        Write-SetupLog "NvChad config not found: $script:ConfigDir" "WARNING"
+        Write-SetupLog "NvChad config not found: $script:NvimConfigDir" "WARNING"
     }
 
     Write-SetupLog "Neovim setup complete" "SUCCESS"
@@ -80,8 +80,8 @@ function Uninstall-Neovim {
     Start-Process -FilePath "winget" -ArgumentList "uninstall --id Neovim.Neovim --silent --disable-interactivity" -Wait -WindowStyle Hidden
 
     if ($RemoveConfig) {
-        if (Test-Path $script:DestConfigDir) {
-            Remove-Item -Path $script:DestConfigDir -Recurse -Force
+        if (Test-Path $script:NvimDestConfigDir) {
+            Remove-Item -Path $script:NvimDestConfigDir -Recurse -Force
             Write-SetupLog "Removed Neovim config directory" "SUCCESS"
         }
 

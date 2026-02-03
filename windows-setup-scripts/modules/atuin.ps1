@@ -2,8 +2,8 @@
 
 . "$PSScriptRoot\..\lib\common.ps1"
 
-$script:ConfigDir = "$PSScriptRoot\..\configs\atuin"
-$script:DestConfigDir = "$env:USERPROFILE\.config\atuin"
+$script:AtuinConfigDir = "$PSScriptRoot\..\configs\atuin"
+$script:AtuinDestConfigDir = "$env:USERPROFILE\.config\atuin"
 
 function Test-Atuin {
     try {
@@ -46,16 +46,16 @@ function Install-Atuin {
     }
 
     # Copy config
-    $configFile = "$script:ConfigDir\config.toml"
-    $destConfig = "$script:DestConfigDir\config.toml"
+    $configFile = "$script:AtuinConfigDir\config.toml"
+    $destConfig = "$script:AtuinDestConfigDir\config.toml"
 
     if (Test-Path $configFile) {
         if ($DryRun) {
             Write-SetupLog "[DRY RUN] Would copy Atuin config to $destConfig" "INFO"
         } else {
             # Create config directory
-            if (-not (Test-Path $script:DestConfigDir)) {
-                New-Item -ItemType Directory -Path $script:DestConfigDir -Force | Out-Null
+            if (-not (Test-Path $script:AtuinDestConfigDir)) {
+                New-Item -ItemType Directory -Path $script:AtuinDestConfigDir -Force | Out-Null
             }
 
             Copy-ConfigFile -Source $configFile -Destination $destConfig -Force:$Force
@@ -76,8 +76,8 @@ function Uninstall-Atuin {
     Write-SetupLog "Uninstalling Atuin..." "INFO"
     Start-Process -FilePath "winget" -ArgumentList "uninstall --id atuinsh.atuin --silent --disable-interactivity" -Wait -WindowStyle Hidden
 
-    if ($RemoveConfig -and (Test-Path $script:DestConfigDir)) {
-        Remove-Item -Path $script:DestConfigDir -Recurse -Force
+    if ($RemoveConfig -and (Test-Path $script:AtuinDestConfigDir)) {
+        Remove-Item -Path $script:AtuinDestConfigDir -Recurse -Force
         Write-SetupLog "Removed Atuin config directory" "SUCCESS"
     }
 

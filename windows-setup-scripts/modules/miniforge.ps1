@@ -3,7 +3,7 @@
 . "$PSScriptRoot\..\lib\common.ps1"
 
 $script:MiniforgeDir = "C:\miniforge3"
-$script:ConfigDir = "$PSScriptRoot\..\configs\miniforge"
+$script:MiniforgeConfigDir = "$PSScriptRoot\..\configs\miniforge"
 
 function Test-Miniforge {
     return Test-Installation -Path "$script:MiniforgeDir\Scripts\conda.exe" -ExpectedType "File"
@@ -71,7 +71,7 @@ function Install-Miniforge {
     }
 
     # Copy .condarc
-    $condarcSource = "$script:ConfigDir\.condarc"
+    $condarcSource = "$script:MiniforgeConfigDir\.condarc"
     $condarcDest = "$script:MiniforgeDir\.condarc"
 
     if (Test-Path $condarcSource) {

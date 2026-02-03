@@ -2,7 +2,7 @@
 
 . "$PSScriptRoot\..\lib\common.ps1"
 
-$script:ConfigDir = "$PSScriptRoot\..\configs\terminal"
+$script:TerminalConfigDir = "$PSScriptRoot\..\configs\terminal"
 
 function Get-WindowsTerminalSettingsPath {
     # Find Windows Terminal settings path
@@ -40,7 +40,7 @@ function Install-TerminalProfiles {
 
     Write-SetupLog "Found Windows Terminal settings at: $settingsPath" "INFO"
 
-    $sourceProfilesPath = "$script:ConfigDir\profiles.json"
+    $sourceProfilesPath = "$script:TerminalConfigDir\profiles.json"
     if (-not (Test-Path $sourceProfilesPath)) {
         Write-SetupLog "Source profiles not found: $sourceProfilesPath" "ERROR"
         return $false
