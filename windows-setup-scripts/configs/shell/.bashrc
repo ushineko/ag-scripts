@@ -191,17 +191,27 @@ export HISTIGNORE=$'[ \t]*:&:[fb]g:exit:ls' # Ignore the ls command as well
 HISTFILE=~/.bash_history
 HISTSIZE=1000
 HISTFILESIZE=2000
-# Neovim
+# Add Windows paths
+export PATH="$HOME/AppData/Local/Microsoft/WinGet/Links:$PATH"
+export PATH="$HOME/AppData/Local/Microsoft/WindowsApps:$PATH"
 export PATH="/c/Program Files/Neovim/bin:$PATH"
+export PATH="/c/Go/bin:$PATH"
+
+# Aliases
 alias vi=nvim
 alias vim=nvim
-export PATH=/c/Go/bin:$PATH
+
 # Use Windows OpenSSH (works with Windows ssh-agent service)
 alias ssh='/c/Windows/System32/OpenSSH/ssh.exe'
 alias ssh-add='/c/Windows/System32/OpenSSH/ssh-add.exe'
-. ./.bash-preexec.sh
-eval "$(atuin init bash)"
 
-# Oh My Posh prompt with transient prompt
-export PATH="$HOME/AppData/Local/Microsoft/WindowsApps:$PATH"
-eval "$(oh-my-posh.exe init bash --config ~/.config/oh-my-posh/powerlevel10k_rainbow.omp.json)"
+# Atuin shell history (if available)
+if command -v atuin &> /dev/null; then
+    . ./.bash-preexec.sh
+    eval "$(atuin init bash)"
+fi
+
+# Oh My Posh prompt
+if command -v oh-my-posh.exe &> /dev/null; then
+    eval "$(oh-my-posh.exe init bash --config ~/.config/oh-my-posh/powerlevel10k_rainbow.omp.json)"
+fi

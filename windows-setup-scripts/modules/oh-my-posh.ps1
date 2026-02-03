@@ -4,6 +4,9 @@
 
 $script:OmpConfigDir = "$PSScriptRoot\..\configs\oh-my-posh"
 $script:OmpDestConfigDir = "$env:USERPROFILE\.config\oh-my-posh"
+$script:PsProfileSource = "$PSScriptRoot\..\configs\powershell\Microsoft.PowerShell_profile.ps1"
+$script:Ps5ProfileDir = "$env:USERPROFILE\Documents\WindowsPowerShell"
+$script:Ps7ProfileDir = "$env:USERPROFILE\Documents\PowerShell"
 
 function Test-OhMyPosh {
     try {
@@ -62,6 +65,26 @@ function Install-OhMyPosh {
         }
     } else {
         Write-SetupLog "Theme file not found: $themeFile" "WARNING"
+    }
+
+    # Install PowerShell profile for both PS5 and PS7
+    if (Test-Path $script:PsProfileSource) {
+        foreach ($profileDir in @($script:Ps5ProfileDir, $script:Ps7ProfileDir)) {
+            $destProfile = "$profileDir\Microsoft.PowerShell_profile.ps1"
+
+            if ($DryRun) {
+                Write-SetupLog "[DRY RUN] Would copy PowerShell profile to $destProfile" "INFO"
+            } else {
+                # Create profile directory if needed
+                if (-not (Test-Path $profileDir)) {
+                    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+                }
+
+                Copy-ConfigFile -Source $script:PsProfileSource -Destination $destProfile -Force:$Force
+            }
+        }
+    } else {
+        Write-SetupLog "PowerShell profile source not found: $script:PsProfileSource" "WARNING"
     }
 
     Write-SetupLog "Oh My Posh setup complete" "SUCCESS"
