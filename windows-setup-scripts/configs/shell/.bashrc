@@ -197,6 +197,14 @@ export PATH="$HOME/AppData/Local/Microsoft/WindowsApps:$PATH"
 export PATH="/c/Program Files/Neovim/bin:$PATH"
 export PATH="/c/Go/bin:$PATH"
 
+# Add cargo bin for Rust tools (atuin, etc.)
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# Add atuin to PATH if installed via winget (finds atuin.exe in package folder)
+for dir in "$HOME/AppData/Local/Microsoft/WinGet/Packages"/Atuinsh.Atuin_*/atuin*; do
+    [ -d "$dir" ] && export PATH="$dir:$PATH"
+done
+
 # Aliases
 alias vi=nvim
 alias vim=nvim

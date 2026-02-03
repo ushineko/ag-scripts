@@ -277,6 +277,12 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
 
+### 1.2.1
+- Fixed clockwork-orange: now uses pinned release tag (v2.7.3) instead of latest to avoid dev builds
+- Fixed clockwork-orange: added -Tag parameter support to Get-GitHubReleaseAsset
+- Fixed atuin PATH: added cargo bin and winget package folder paths to shell configs
+- Shell configs now search for atuin in winget package directories
+
 ### 1.2.0
 - Added ssh-agent module: configures Windows OpenSSH Authentication Agent service
 - Shell configs use Windows OpenSSH binaries for consistent SSH key handling across all shells
@@ -307,7 +313,7 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Version
 
-1.2.0
+1.2.1
 
 ## License
 
