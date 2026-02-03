@@ -2,8 +2,8 @@
 
 . "$PSScriptRoot\..\lib\common.ps1"
 
-$script:ConfigDir = "$PSScriptRoot\..\configs\oh-my-posh"
-$script:DestConfigDir = "$env:USERPROFILE\.config\oh-my-posh"
+$script:OmpConfigDir = "$PSScriptRoot\..\configs\oh-my-posh"
+$script:OmpDestConfigDir = "$env:USERPROFILE\.config\oh-my-posh"
 
 function Test-OhMyPosh {
     try {
@@ -46,16 +46,16 @@ function Install-OhMyPosh {
     }
 
     # Copy theme config
-    $themeFile = "$script:ConfigDir\powerlevel10k_rainbow.omp.json"
-    $destTheme = "$script:DestConfigDir\powerlevel10k_rainbow.omp.json"
+    $themeFile = "$script:OmpConfigDir\powerlevel10k_rainbow.omp.json"
+    $destTheme = "$script:OmpDestConfigDir\powerlevel10k_rainbow.omp.json"
 
     if (Test-Path $themeFile) {
         if ($DryRun) {
             Write-SetupLog "[DRY RUN] Would copy Oh My Posh theme to $destTheme" "INFO"
         } else {
             # Create config directory
-            if (-not (Test-Path $script:DestConfigDir)) {
-                New-Item -ItemType Directory -Path $script:DestConfigDir -Force | Out-Null
+            if (-not (Test-Path $script:OmpDestConfigDir)) {
+                New-Item -ItemType Directory -Path $script:OmpDestConfigDir -Force | Out-Null
             }
 
             Copy-ConfigFile -Source $themeFile -Destination $destTheme -Force:$Force
@@ -76,8 +76,8 @@ function Uninstall-OhMyPosh {
     Write-SetupLog "Uninstalling Oh My Posh..." "INFO"
     Start-Process -FilePath "winget" -ArgumentList "uninstall --id JanDeDobbeleer.OhMyPosh --silent --disable-interactivity" -Wait -WindowStyle Hidden
 
-    if ($RemoveConfig -and (Test-Path $script:DestConfigDir)) {
-        Remove-Item -Path $script:DestConfigDir -Recurse -Force
+    if ($RemoveConfig -and (Test-Path $script:OmpDestConfigDir)) {
+        Remove-Item -Path $script:OmpDestConfigDir -Recurse -Force
         Write-SetupLog "Removed Oh My Posh config directory" "SUCCESS"
     }
 

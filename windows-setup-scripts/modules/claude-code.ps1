@@ -3,8 +3,8 @@
 . "$PSScriptRoot\..\lib\common.ps1"
 
 $script:ClaudePath = "$env:USERPROFILE\.local\bin\claude.exe"
-$script:ConfigDir = "$PSScriptRoot\..\configs\claude"
-$script:DestConfigDir = "$env:USERPROFILE\.claude"
+$script:ClaudeConfigDir = "$PSScriptRoot\..\configs\claude"
+$script:ClaudeDestConfigDir = "$env:USERPROFILE\.claude"
 
 function Test-ClaudeCode {
     # Check if claude is available in PATH or in the expected location
@@ -67,16 +67,16 @@ function Install-ClaudeCode {
     }
 
     # Copy CLAUDE.md
-    $claudeMdSource = "$script:ConfigDir\CLAUDE.md"
-    $claudeMdDest = "$script:DestConfigDir\CLAUDE.md"
+    $claudeMdSource = "$script:ClaudeConfigDir\CLAUDE.md"
+    $claudeMdDest = "$script:ClaudeDestConfigDir\CLAUDE.md"
 
     if (Test-Path $claudeMdSource) {
         if ($DryRun) {
             Write-SetupLog "[DRY RUN] Would copy CLAUDE.md to $claudeMdDest" "INFO"
         } else {
             # Create .claude directory
-            if (-not (Test-Path $script:DestConfigDir)) {
-                New-Item -ItemType Directory -Path $script:DestConfigDir -Force | Out-Null
+            if (-not (Test-Path $script:ClaudeDestConfigDir)) {
+                New-Item -ItemType Directory -Path $script:ClaudeDestConfigDir -Force | Out-Null
             }
 
             Copy-ConfigFile -Source $claudeMdSource -Destination $claudeMdDest -Force:$Force
@@ -101,15 +101,15 @@ function Uninstall-ClaudeCode {
         Write-SetupLog "Failed to uninstall Claude Code: $_" "WARNING"
     }
 
-    if ($RemoveConfig -and (Test-Path $script:DestConfigDir)) {
+    if ($RemoveConfig -and (Test-Path $script:ClaudeDestConfigDir)) {
         # Only remove CLAUDE.md, not credentials
-        $claudeMd = "$script:DestConfigDir\CLAUDE.md"
+        $claudeMd = "$script:ClaudeDestConfigDir\CLAUDE.md"
         if (Test-Path $claudeMd) {
             Remove-Item -Path $claudeMd -Force
             Write-SetupLog "Removed CLAUDE.md" "SUCCESS"
         }
 
         # Warn about credentials
-        Write-SetupLog "Note: Claude credentials in $script:DestConfigDir were preserved" "INFO"
+        Write-SetupLog "Note: Claude credentials in $script:ClaudeDestConfigDir were preserved" "INFO"
     }
 }
