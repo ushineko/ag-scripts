@@ -79,6 +79,19 @@ function Install-ClockworkOrange {
             Write-SetupLog "Added clockwork-orange to user PATH" "INFO"
         }
 
+        # Create Start Menu shortcut
+        $startMenuPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+        $shortcutPath = "$startMenuPath\Clockwork Orange.lnk"
+        $targetPath = "$script:InstallDir\clockwork-orange.exe"
+
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $targetPath
+        $shortcut.WorkingDirectory = $script:InstallDir
+        $shortcut.Description = "Clockwork Orange"
+        $shortcut.Save()
+        Write-SetupLog "Created Start Menu shortcut" "SUCCESS"
+
         return $true
 
     } catch {
@@ -99,6 +112,13 @@ function Uninstall-ClockworkOrange {
         $newPath = ($userPath -split ';' | Where-Object { $_ -ne $script:InstallDir }) -join ';'
         [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
         Write-SetupLog "Removed clockwork-orange from PATH" "INFO"
+
+        # Remove Start Menu shortcut
+        $shortcutPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Clockwork Orange.lnk"
+        if (Test-Path $shortcutPath) {
+            Remove-Item -Path $shortcutPath -Force
+            Write-SetupLog "Removed Start Menu shortcut" "INFO"
+        }
     } else {
         Write-SetupLog "clockwork-orange is not installed" "INFO"
     }
