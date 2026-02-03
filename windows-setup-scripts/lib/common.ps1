@@ -194,8 +194,9 @@ function Test-WingetPackage {
     )
 
     try {
-        $result = winget list --id $PackageId 2>$null
-        return $LASTEXITCODE -eq 0
+        # Use Start-Process with Hidden window to avoid output buffering issues
+        $process = Start-Process -FilePath "winget" -ArgumentList "list --id $PackageId --disable-interactivity" -Wait -PassThru -WindowStyle Hidden
+        return $process.ExitCode -eq 0
     } catch {
         return $false
     }
@@ -226,7 +227,7 @@ function Install-WingetPackage {
         Write-SetupLog "DEBUG: Running winget with args: $wingetArgs" "INFO"
         Write-SetupLog "DEBUG: Starting winget process..." "INFO"
 
-        $process = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
+        $process = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -Wait -PassThru -WindowStyle Hidden
 
         Write-SetupLog "DEBUG: winget process completed with exit code: $($process.ExitCode)" "INFO"
 
