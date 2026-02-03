@@ -31,7 +31,7 @@ function Install-Atuin {
         if ($DryRun) {
             Write-SetupLog "[DRY RUN] Would install Atuin via winget" "INFO"
         } else {
-            $result = Install-WingetPackage -PackageId "atuinsh.atuin" -Name "Atuin" -Force:$Force
+            $result = Install-WingetPackage -PackageId "Atuinsh.Atuin" -Name "Atuin" -Force:$Force
 
             if (-not $result) {
                 Write-SetupLog "Failed to install Atuin" "ERROR"
@@ -74,7 +74,7 @@ function Uninstall-Atuin {
     )
 
     Write-SetupLog "Uninstalling Atuin..." "INFO"
-    Start-Process -FilePath "winget" -ArgumentList "uninstall --id atuinsh.atuin --silent --disable-interactivity" -Wait -WindowStyle Hidden
+    Start-Process -FilePath "winget" -ArgumentList "uninstall --id Atuinsh.Atuin --silent --disable-interactivity" -Wait -WindowStyle Hidden
 
     if ($RemoveConfig -and (Test-Path $script:AtuinDestConfigDir)) {
         Remove-Item -Path $script:AtuinDestConfigDir -Recurse -Force
