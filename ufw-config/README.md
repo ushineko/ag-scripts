@@ -1,4 +1,6 @@
-# UFW/iptables Configuration for njv-cachyos
+# UFW/iptables Configuration for gateway-host
+
+> **Note**: `gateway-host` is a placeholder for the actual hostname. Replace with your machine's hostname as needed.
 
 This documents the firewall configuration for the main workstation, which acts as:
 - A gateway/router for a Windows VM (192.168.86.0/24 subnet)
@@ -12,7 +14,7 @@ Internet
     |
 [Router/Gateway 192.168.86.1]
     |
-[eno2: 192.168.86.32] <-- This machine (njv-cachyos)
+[eno2: 192.168.86.32] <-- This machine (gateway-host)
     |
     +-- Docker networks (172.17.0.0/16, 172.18.0.0/16, 172.19.0.0/16)
     |       +-- Pi-hole (172.19.0.2) - DNS on port 53, Web UI on 18080
