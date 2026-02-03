@@ -107,7 +107,7 @@ function Uninstall-Prerequisites {
 
     if ($RemoveNodeJs) {
         Write-SetupLog "Uninstalling Node.js..." "INFO"
-        winget uninstall --id "OpenJS.NodeJS.LTS" --silent --disable-interactivity
+        Start-Process -FilePath "winget" -ArgumentList "uninstall --id OpenJS.NodeJS.LTS --silent --disable-interactivity" -Wait -WindowStyle Hidden
         Write-SetupLog "Node.js uninstalled" "SUCCESS"
     }
 
