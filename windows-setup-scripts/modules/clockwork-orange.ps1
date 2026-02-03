@@ -3,6 +3,13 @@
 . "$PSScriptRoot\..\lib\common.ps1"
 
 $script:InstallDir = "$env:LOCALAPPDATA\Programs\clockwork-orange"
+$script:ReleaseTag = $null
+
+# Load release tag from download-urls.json if available
+$downloadUrls = Get-DownloadUrls
+if ($downloadUrls -and $downloadUrls.'clockwork-orange'.tag) {
+    $script:ReleaseTag = $downloadUrls.'clockwork-orange'.tag
+}
 
 function Test-ClockworkOrange {
     # Check for any executable in the install directory
@@ -44,9 +51,14 @@ function Install-ClockworkOrange {
             }
             New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-            # Download from GitHub releases
-            Write-SetupLog "Downloading clockwork-orange from GitHub..." "INFO"
-            $downloaded = Get-GitHubReleaseAsset -Repo "ushineko/clockwork-orange" -Pattern "clockwork-orange.exe" -OutputPath $exePath
+            # Download from GitHub releases (use pinned tag if configured)
+            if ($script:ReleaseTag) {
+                Write-SetupLog "Downloading clockwork-orange $script:ReleaseTag from GitHub..." "INFO"
+                $downloaded = Get-GitHubReleaseAsset -Repo "ushineko/clockwork-orange" -Pattern "clockwork-orange.exe" -OutputPath $exePath -Tag $script:ReleaseTag
+            } else {
+                Write-SetupLog "Downloading clockwork-orange (latest) from GitHub..." "INFO"
+                $downloaded = Get-GitHubReleaseAsset -Repo "ushineko/clockwork-orange" -Pattern "clockwork-orange.exe" -OutputPath $exePath
+            }
 
             if (-not $downloaded) {
                 Write-SetupLog "Failed to download clockwork-orange. No Windows executable found in releases." "ERROR"
@@ -54,16 +66,13 @@ function Install-ClockworkOrange {
                 return $false
             }
 
-            # Create install directory
-            if (Test-Path $script:InstallDir) {
-                if ($Force) {
-                    Backup-Item -Path $script:InstallDir | Out-Null
-                    Remove-Item -Path $script:InstallDir -Recurse -Force
-                }
+            # Create install directory (backup existing if -Force specified)
+            if ((Test-Path $script:InstallDir) -and $Force) {
+                Backup-Item -Path $script:InstallDir | Out-Null
             }
             New-Item -ItemType Directory -Path $script:InstallDir -Force | Out-Null
 
-            # Copy executable to install directory
+            # Copy executable to install directory (always overwrite)
             Copy-Item -Path $exePath -Destination "$script:InstallDir\clockwork-orange.exe" -Force
 
             # Cleanup

@@ -248,9 +248,10 @@ function Install-WingetPackage {
 function Get-GitHubReleaseAsset {
     <#
     .SYNOPSIS
-        Downloads an asset from the latest GitHub release
+        Downloads an asset from a GitHub release
     .DESCRIPTION
-        Uses GitHub API to find the latest release and download matching asset
+        Uses GitHub API to find a release and download matching asset.
+        Can fetch latest release or a specific tagged release.
     #>
     param(
         [Parameter(Mandatory)]
@@ -258,14 +259,22 @@ function Get-GitHubReleaseAsset {
         [Parameter(Mandatory)]
         [string]$Pattern,  # Glob pattern to match asset name
         [Parameter(Mandatory)]
-        [string]$OutputPath
+        [string]$OutputPath,
+        [string]$Tag  # Optional: specific release tag (e.g., "v1.0.0")
     )
 
-    $apiUrl = "https://api.github.com/repos/$Repo/releases/latest"
+    if ($Tag) {
+        $apiUrl = "https://api.github.com/repos/$Repo/releases/tags/$Tag"
+        Write-SetupLog "Fetching release $Tag from $Repo..." "INFO"
+    } else {
+        $apiUrl = "https://api.github.com/repos/$Repo/releases/latest"
+        Write-SetupLog "Fetching latest release from $Repo..." "INFO"
+    }
 
     try {
-        Write-SetupLog "Fetching latest release from $Repo..." "INFO"
         $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "Windows-Setup-Scripts" }
+
+        Write-SetupLog "Found release: $($release.tag_name)" "INFO"
 
         # Find matching asset
         $asset = $release.assets | Where-Object { $_.name -like $Pattern } | Select-Object -First 1
