@@ -46,22 +46,24 @@ function Install-Neovim {
         if ($DryRun) {
             Write-SetupLog "[DRY RUN] Would copy NvChad config to $script:NvimDestConfigDir" "INFO"
         } else {
-            # Backup existing config
+            # Check if config already exists
             if (Test-Path $script:NvimDestConfigDir) {
                 if (-not $Force) {
-                    Write-SetupLog "Neovim config exists (use -Force to overwrite): $script:NvimDestConfigDir" "WARNING"
+                    Write-SetupLog "Neovim config exists (use -Force to overwrite): $script:NvimDestConfigDir" "INFO"
+                    # Skip copying, config already exists
                 } else {
                     Backup-Item -Path $script:NvimDestConfigDir | Out-Null
                     Remove-Item -Path $script:NvimDestConfigDir -Recurse -Force
+                    Copy-Item -Path $script:NvimConfigDir -Destination $script:NvimDestConfigDir -Recurse -Force
+                    Write-SetupLog "NvChad configuration copied to $script:NvimDestConfigDir" "SUCCESS"
+                    Write-SetupLog "Neovim plugins will be installed on first launch" "INFO"
                 }
+            } else {
+                # No existing config, copy fresh
+                Copy-Item -Path $script:NvimConfigDir -Destination $script:NvimDestConfigDir -Recurse -Force
+                Write-SetupLog "NvChad configuration copied to $script:NvimDestConfigDir" "SUCCESS"
+                Write-SetupLog "Neovim plugins will be installed on first launch" "INFO"
             }
-
-            # Copy config
-            Copy-Item -Path $script:NvimConfigDir -Destination $script:NvimDestConfigDir -Recurse -Force
-            Write-SetupLog "NvChad configuration copied to $script:NvimDestConfigDir" "SUCCESS"
-
-            # Install plugins (first launch will auto-install via lazy.nvim)
-            Write-SetupLog "Neovim plugins will be installed on first launch" "INFO"
         }
     } else {
         Write-SetupLog "NvChad config not found: $script:NvimConfigDir" "WARNING"
