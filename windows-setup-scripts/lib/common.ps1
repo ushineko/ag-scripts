@@ -223,7 +223,12 @@ function Install-WingetPackage {
     try {
         # Use Start-Process to avoid output buffering issues when run via irm | iex
         $wingetArgs = "install --id $PackageId --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
+        Write-SetupLog "DEBUG: Running winget with args: $wingetArgs" "INFO"
+        Write-SetupLog "DEBUG: Starting winget process..." "INFO"
+
         $process = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
+
+        Write-SetupLog "DEBUG: winget process completed with exit code: $($process.ExitCode)" "INFO"
 
         if ($process.ExitCode -eq 0) {
             Write-SetupLog "$Name installed successfully" "SUCCESS"
@@ -233,6 +238,7 @@ function Install-WingetPackage {
             return $false
         }
     } catch {
+        Write-SetupLog "DEBUG: Exception caught: $_" "ERROR"
         Write-SetupLog "Exception installing $Name : $_" "ERROR"
         return $false
     }

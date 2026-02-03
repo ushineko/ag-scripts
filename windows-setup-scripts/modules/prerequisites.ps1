@@ -63,14 +63,20 @@ function Install-Prerequisites {
     }
 
     # Check/install Node.js
-    if (-not (Test-NodeJs) -or $Force) {
+    Write-SetupLog "DEBUG: Checking if Node.js is installed..." "INFO"
+    $nodeInstalled = Test-NodeJs
+    Write-SetupLog "DEBUG: Node.js installed = $nodeInstalled, Force = $Force" "INFO"
+
+    if (-not $nodeInstalled -or $Force) {
         if ($DryRun) {
             Write-SetupLog "[DRY RUN] Would install Node.js LTS via winget" "INFO"
             return $true
         }
 
         Write-SetupLog "Installing Node.js LTS..." "INFO"
+        Write-SetupLog "DEBUG: About to call Install-WingetPackage..." "INFO"
         $result = Install-WingetPackage -PackageId "OpenJS.NodeJS.LTS" -Name "Node.js LTS" -Force:$Force
+        Write-SetupLog "DEBUG: Install-WingetPackage returned: $result" "INFO"
 
         if (-not $result) {
             Write-SetupLog "Failed to install Node.js" "ERROR"
@@ -78,6 +84,7 @@ function Install-Prerequisites {
         }
 
         # Refresh PATH to pick up npm
+        Write-SetupLog "DEBUG: Refreshing environment PATH..." "INFO"
         Refresh-EnvironmentPath
     } else {
         $nodeVersion = (node --version 2>$null)
