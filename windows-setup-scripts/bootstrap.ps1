@@ -4,19 +4,19 @@
     Bootstrap script for remote installation of Windows development environment
 .DESCRIPTION
     Downloads the windows-setup-scripts project from GitHub and runs the installer.
-    Can be executed directly via: irm https://raw.githubusercontent.com/nverenin/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
+    Can be executed directly via: irm https://raw.githubusercontent.com/ushineko/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
 .EXAMPLE
     # Basic installation
-    irm https://raw.githubusercontent.com/nverenin/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
+    irm https://raw.githubusercontent.com/ushineko/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex
 
     # Dry run
-    irm https://raw.githubusercontent.com/nverenin/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex; Install-DevEnv -DryRun
+    irm https://raw.githubusercontent.com/ushineko/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex; Install-DevEnv -DryRun
 
     # Install specific components
-    irm https://raw.githubusercontent.com/nverenin/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex; Install-DevEnv -Components msys2,neovim
+    irm https://raw.githubusercontent.com/ushineko/ag-scripts/main/windows-setup-scripts/bootstrap.ps1 | iex; Install-DevEnv -Components msys2,neovim
 #>
 
-$script:RepoUrl = "https://github.com/nverenin/ag-scripts/archive/refs/heads/main.zip"
+$script:RepoUrl = "https://github.com/ushineko/ag-scripts/archive/refs/heads/main.zip"
 $script:TempDir = "$env:TEMP\windows-setup-scripts-bootstrap"
 $script:ExtractDir = "$script:TempDir\ag-scripts-main\windows-setup-scripts"
 
