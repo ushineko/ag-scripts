@@ -277,6 +277,12 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
 
+### 1.3.0
+- Added git user configuration: prompts for user.name and user.email during setup (if not already configured)
+- Added git SSH configuration: automatically configures git to use Windows OpenSSH (core.sshCommand)
+- Fixed miniforge PATH: now adds Miniforge3 directories to system PATH after installation
+- Miniforge PATH directories added: `C:\miniforge3`, `C:\miniforge3\Scripts`, `C:\miniforge3\Library\bin`
+
 ### 1.2.1
 - Fixed clockwork-orange: now uses pinned release tag (v2.7.3) instead of latest to avoid dev builds
 - Fixed clockwork-orange: added -Tag parameter support to Get-GitHubReleaseAsset
@@ -313,7 +319,7 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Version
 
-1.2.1
+1.3.0
 
 ## License
 
