@@ -57,6 +57,36 @@ function Install-Miniforge {
                 # Cleanup installer
                 Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 
+                # Add miniforge to system PATH
+                $miniPaths = @(
+                    $script:MiniforgeDir,
+                    "$script:MiniforgeDir\Scripts",
+                    "$script:MiniforgeDir\Library\bin"
+                )
+
+                $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+                $pathsToAdd = @()
+
+                foreach ($p in $miniPaths) {
+                    if ($currentPath -notlike "*$p*") {
+                        $pathsToAdd += $p
+                    }
+                }
+
+                if ($pathsToAdd.Count -gt 0) {
+                    $newPath = ($pathsToAdd -join ";") + ";" + $currentPath
+                    try {
+                        [Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
+                        Write-SetupLog "Added Miniforge3 to system PATH" "SUCCESS"
+                    } catch {
+                        Write-SetupLog "Failed to update system PATH (may need admin): $_" "WARNING"
+                        Write-SetupLog "You may need to manually add $script:MiniforgeDir to PATH" "INFO"
+                    }
+                }
+
+                # Refresh PATH in current session
+                Refresh-EnvironmentPath
+
                 Write-SetupLog "Miniforge3 installed successfully" "SUCCESS"
 
             } catch {
