@@ -11,6 +11,11 @@ PowerShell scripts to automate the setup of a Windows development environment. I
 - [Testing](#testing)
 - [Uninstallation](#uninstallation)
 - [Project Structure](#project-structure)
+- [Idempotency](#idempotency)
+- [Backup Strategy](#backup-strategy)
+- [Requirements](#requirements)
+- [Troubleshooting](#troubleshooting)
+- [Changelog](#changelog)
 
 ## Quick Start
 
