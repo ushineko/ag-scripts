@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.3.2
+Version 1.3.3
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
 
@@ -107,6 +107,11 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.3.3
+- Fixed Logitech mouse battery not updating properly after state transitions (charging to discharging)
+- Now always pings device before reading battery to ensure fresh state
+- UI clears cached battery levels when status changes between charging/discharging states
 
 ### v1.3.2
 - Expanded reset hour menu to show all 24 hours (previously only showed every 2 hours)

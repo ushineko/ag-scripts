@@ -131,29 +131,28 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
 
 def _extract_battery(dev) -> Optional[BatteryInfo]:
     try:
+        # Always ping before reading battery to ensure fresh device state.
+        # This is especially important after state transitions (charging -> discharging)
+        # where the device object may have stale internal state.
+        try:
+            dev.ping()
+        except Exception:
+            pass
+
         if not dev.online:
-             # Try to ping to wake it up if possible, but might not help if really offline
-             try:
-                 dev.ping()
-             except Exception:
-                 pass
-        
-        # Double check online after ping
-        # Note: solaar objects might not update .online property immediately without re-query
-        # but calling battery() usually tries to fetch.
-        
+            log.debug("device_offline_after_ping", device=dev.name if hasattr(dev, 'name') else 'unknown')
+            return None
+
         bat = dev.battery()
         if bat:
-            # bat.level is usually a NamedInt or int.
-            # bat.status is an enum
             return BatteryInfo(
                 level=int(bat.level),
                 status=str(bat.status),
                 voltage=bat.voltage,
                 device_name=dev.name
             )
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("battery_extraction_failed", error=str(e))
     return None
 
 
