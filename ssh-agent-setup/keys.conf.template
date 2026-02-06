@@ -1,0 +1,8 @@
+# SSH keys to load on login (one per line)
+# Lines starting with # are ignored
+# Paths can use ~ for home directory
+
+# Example keys (uncomment and edit as needed):
+# ~/.ssh/id_rsa
+# ~/.ssh/id_ed25519
+# ~/.ssh/work_key
