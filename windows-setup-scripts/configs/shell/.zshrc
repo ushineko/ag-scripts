@@ -33,8 +33,21 @@ done
 # Aliases
 alias vi=nvim
 alias vim=nvim
-alias dir="/bin/ls --color -al"
-alias ls="/bin/ls --color -al"
+
+# eza aliases (modern ls replacement)
+if command -v eza &> /dev/null; then
+    alias ls='eza --color=always --group-directories-first --icons'
+    alias ll='eza --color=always --group-directories-first --icons -la'
+    alias la='eza --color=always --group-directories-first --icons -a'
+    alias lt='eza --color=always --group-directories-first --icons -T'
+    alias l='eza --color=always --group-directories-first --icons -l'
+    alias dir='eza --color=always --group-directories-first --icons -la'
+    alias tree='eza --color=always --group-directories-first --icons -T'
+else
+    # Fallback to standard ls if eza not installed
+    alias dir="/bin/ls --color -al"
+    alias ls="/bin/ls --color -al"
+fi
 
 # Use Windows OpenSSH (works with Windows ssh-agent service)
 alias ssh='/c/Windows/System32/OpenSSH/ssh.exe'

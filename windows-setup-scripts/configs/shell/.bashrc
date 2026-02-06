@@ -209,6 +209,16 @@ done
 alias vi=nvim
 alias vim=nvim
 
+# eza aliases (modern ls replacement)
+if command -v eza &> /dev/null; then
+    alias ls='eza --color=always --group-directories-first --icons'
+    alias ll='eza --color=always --group-directories-first --icons -la'
+    alias la='eza --color=always --group-directories-first --icons -a'
+    alias lt='eza --color=always --group-directories-first --icons -T'
+    alias l='eza --color=always --group-directories-first --icons -l'
+    alias tree='eza --color=always --group-directories-first --icons -T'
+fi
+
 # Use Windows OpenSSH (works with Windows ssh-agent service)
 alias ssh='/c/Windows/System32/OpenSSH/ssh.exe'
 alias ssh-add='/c/Windows/System32/OpenSSH/ssh-add.exe'
