@@ -35,6 +35,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [plasmashell-restart](plasmashell-restart/) | Restarts or refreshes the KDE Plasma 6 shell via systemd or D-Bus. |
 | [qbittorrent-vpn-wrapper](qbittorrent-vpn-wrapper/) | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and status dashboard. |
 | [set-rgb](set-rgb/) | Controls RGB lighting on hardware devices via OpenRGB, liquidctl, and ckb-next. |
+| [ssh-agent-setup](ssh-agent-setup/) | Automatic SSH key loading on Plasma desktop login using KWallet for secure passphrase storage. |
 | [the-great-cachyos-move](the-great-cachyos-move/) | Migration toolkit for moving CachyOS (Btrfs) installations between drives using `btrfs send/receive`. |
 | [ufw-config](ufw-config/) | UFW/iptables configuration documentation and backups for a gateway/router setup with Pi-hole and VPN forwarding. |
 | [vpn-toggle](vpn-toggle/) | VPN manager with integrated monitoring, health checking, auto-reconnect, and persistent PyQt6 GUI for NetworkManager connections. |

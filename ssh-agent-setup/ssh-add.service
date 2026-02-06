@@ -1,0 +1,15 @@
+[Unit]
+Description=SSH Key Agent Loader
+Documentation=https://github.com/nverenin/ag-scripts/tree/main/ssh-agent-setup
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+Environment=SSH_ASKPASS=ksshaskpass
+Environment=SSH_ASKPASS_REQUIRE=prefer
+Environment=DISPLAY=:0
+ExecStart=%h/.local/bin/ssh-agent-load.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical-session.target
