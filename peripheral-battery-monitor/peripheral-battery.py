@@ -22,7 +22,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_PROJECTS_PATH = os.path.expanduser("~/.claude/projects")
@@ -1135,11 +1135,36 @@ class PeripheralMonitor(QWidget):
     def update_single_device(self, ui_dict, func_to_call, use_offline_cache=True):
         try:
             current_info = func_to_call()
-            
+            last_known = ui_dict.get('last_info')
+
+            # Detect status change (e.g., Charging -> Discharging).
+            # When status changes, invalidate the cached level because the battery
+            # situation has fundamentally changed and old levels may be stale.
+            status_changed = False
+            if current_info and last_known:
+                current_status = current_info.status.lower() if current_info.status else ""
+                last_status = last_known.status.lower() if last_known.status else ""
+
+                # Check for meaningful status transitions
+                charging_states = {"charging", "full", "recharging"}
+                discharging_states = {"discharging", "slow discharging"}
+
+                current_is_charging = any(s in current_status for s in charging_states)
+                last_is_charging = any(s in last_status for s in charging_states)
+                current_is_discharging = any(s in current_status for s in discharging_states)
+                last_is_discharging = any(s in last_status for s in discharging_states)
+
+                # Status changed if we went from charging to discharging or vice versa
+                if (current_is_charging and last_is_discharging) or (current_is_discharging and last_is_charging):
+                    status_changed = True
+                    # Clear cached info on status transition to force fresh display
+                    ui_dict['last_info'] = None
+                    last_known = None
+
             # Smart Fallback Logic for "Connected" but "--%" (Level -1)
+            # Only use merged level if status hasn't changed
             if current_info and current_info.level == -1 and current_info.status == "Connected":
-                 last_known = ui_dict.get('last_info')
-                 if last_known and last_known.level >= 0:
+                 if last_known and last_known.level >= 0 and not status_changed:
                      # Create a merged info object
                      merged = battery_reader.BatteryInfo(
                          level=last_known.level,
@@ -1149,25 +1174,25 @@ class PeripheralMonitor(QWidget):
                          details=last_known.details
                      )
                      current_info = merged
-            
-            # If we got info, update last known.
+
+            # If we got info with valid level, update last known.
             if current_info and current_info.level >= 0:
                 ui_dict['last_info'] = current_info
-            
+
             # Decide what info to pass to display logic
             display_info = current_info
-            last_valid = ui_dict['last_info']
-            
+            last_valid = ui_dict.get('last_info')
+
             if use_offline_cache:
                 display_info = current_info or last_valid
-            
+
             self._update_label_block(
-                ui_dict['name_lbl'], 
-                ui_dict['val_lbl'], 
+                ui_dict['name_lbl'],
+                ui_dict['val_lbl'],
                 ui_dict['stat_lbl'],
-                ui_dict['icon_lbl'], 
-                display_info, 
-                last_valid if use_offline_cache else None, 
+                ui_dict['icon_lbl'],
+                display_info,
+                last_valid if use_offline_cache else None,
                 ui_dict['default_name']
             )
         except Exception as e:
