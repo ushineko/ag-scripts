@@ -11,6 +11,7 @@
     - Atuin (shell history)
     - Neovim with NvChad
     - Go
+    - eza (modern ls replacement)
     - Miniforge3 (Conda)
     - Claude Code CLI
     - Antigravity
@@ -21,7 +22,7 @@
     Show what would be installed without making changes
 .PARAMETER Components
     Specific components to install (comma-separated).
-    Options: prerequisites, powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
+    Options: prerequisites, powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
 .PARAMETER Force
     Overwrite existing installations/configs
 .PARAMETER SkipBackup
@@ -63,6 +64,7 @@ $ScriptRoot = $PSScriptRoot
 . "$ScriptRoot\modules\claude-code.ps1"
 . "$ScriptRoot\modules\antigravity.ps1"
 . "$ScriptRoot\modules\clockwork-orange.ps1"
+. "$ScriptRoot\modules\eza.ps1"
 . "$ScriptRoot\modules\terminal.ps1"
 . "$ScriptRoot\modules\ssh-agent.ps1"
 
@@ -96,6 +98,7 @@ function Main {
         @{ Name = "oh-my-posh";    Func = { Install-OhMyPosh -DryRun:$DryRun -Force:$Force } }
         @{ Name = "atuin";         Func = { Install-Atuin -DryRun:$DryRun -Force:$Force } }
         @{ Name = "golang";        Func = { Install-Go -DryRun:$DryRun -Force:$Force } }
+        @{ Name = "eza";           Func = { Install-Eza -DryRun:$DryRun -Force:$Force } }
         @{ Name = "neovim";        Func = { Install-Neovim -DryRun:$DryRun -Force:$Force } }
         @{ Name = "miniforge";     Func = { Install-Miniforge -DryRun:$DryRun -Force:$Force } }
         @{ Name = "claude-code";   Func = { Install-ClaudeCode -DryRun:$DryRun -Force:$Force } }

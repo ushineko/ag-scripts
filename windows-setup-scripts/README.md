@@ -52,6 +52,7 @@ Preview what would be installed without making changes:
 | Neovim | Text editor | winget |
 | NvChad | Neovim configuration framework | Config copy |
 | Go | Go programming language | winget |
+| eza | Modern ls replacement | winget |
 | Miniforge3 | Conda distribution (conda-forge) | GitHub releases |
 | Claude Code | AI coding assistant CLI | npm |
 | Antigravity | Application | antigravity.google |
@@ -73,7 +74,7 @@ Preview what would be installed without making changes:
 .\install.ps1 -Components msys2,neovim,fonts
 ```
 
-Available components: `prerequisites`, `powershell7`, `git`, `ssh-agent`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `miniforge`, `claude-code`, `antigravity`, `clockwork-orange`, `terminal`
+Available components: `prerequisites`, `powershell7`, `git`, `ssh-agent`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `eza`, `miniforge`, `claude-code`, `antigravity`, `clockwork-orange`, `terminal`
 
 ### Force Reinstallation
 
@@ -196,6 +197,7 @@ windows-setup-scripts/
 │   ├── atuin.ps1             # Atuin + config
 │   ├── neovim.ps1            # Neovim + NvChad
 │   ├── golang.ps1            # Go
+│   ├── eza.ps1               # eza (ls replacement)
 │   ├── miniforge.ps1         # Miniforge3
 │   ├── claude-code.ps1       # Claude Code CLI
 │   ├── antigravity.ps1       # Antigravity app
@@ -277,6 +279,11 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
 
+### 1.4.0
+- Added eza: modern ls replacement with icons, colors, and tree view
+- New eza aliases in all shells: `ls`, `ll`, `la`, `lt`, `l`, `tree`
+- zsh includes fallback to standard ls if eza not installed
+
 ### 1.3.0
 - Added git user configuration: prompts for user.name and user.email during setup (if not already configured)
 - Added git SSH configuration: automatically configures git to use Windows OpenSSH (core.sshCommand)
@@ -319,7 +326,7 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Version
 
-1.3.0
+1.4.0
 
 ## License
 

@@ -9,7 +9,7 @@
     Also remove configuration files (backups will be preserved)
 .PARAMETER Components
     Specific components to uninstall (comma-separated).
-    Options: powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
+    Options: powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
 .PARAMETER Force
     Skip confirmation prompts
 .EXAMPLE
@@ -48,6 +48,7 @@ $ScriptRoot = $PSScriptRoot
 . "$ScriptRoot\modules\claude-code.ps1"
 . "$ScriptRoot\modules\antigravity.ps1"
 . "$ScriptRoot\modules\clockwork-orange.ps1"
+. "$ScriptRoot\modules\eza.ps1"
 . "$ScriptRoot\modules\terminal.ps1"
 . "$ScriptRoot\modules\ssh-agent.ps1"
 
@@ -73,7 +74,7 @@ function Main {
 
         $uninstallOrder = @(
             "terminal", "clockwork-orange", "antigravity", "claude-code",
-            "miniforge", "neovim", "golang", "atuin", "oh-my-posh",
+            "miniforge", "neovim", "eza", "golang", "atuin", "oh-my-posh",
             "msys2", "fonts", "ssh-agent", "git", "powershell7"
         )
 
@@ -107,6 +108,7 @@ function Main {
         @{ Name = "claude-code";     Func = { Uninstall-ClaudeCode -RemoveConfig:$RemoveConfigs } }
         @{ Name = "miniforge";       Func = { Uninstall-Miniforge -RemoveEnvs:$RemoveConfigs } }
         @{ Name = "neovim";          Func = { Uninstall-Neovim -RemoveConfig:$RemoveConfigs } }
+        @{ Name = "eza";             Func = { Uninstall-Eza } }
         @{ Name = "golang";          Func = { Uninstall-Go } }
         @{ Name = "atuin";           Func = { Uninstall-Atuin -RemoveConfig:$RemoveConfigs } }
         @{ Name = "oh-my-posh";      Func = { Uninstall-OhMyPosh -RemoveConfig:$RemoveConfigs } }
