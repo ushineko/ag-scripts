@@ -1,5 +1,5 @@
 """
-GUI for VPN Toggle v2.0
+GUI for VPN Toggle v2.1
 """
 import logging
 from datetime import datetime
@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QTextCursor
 
 from .config import ConfigManager
 from .vpn_manager import VPNManager
@@ -387,6 +387,8 @@ class SettingsDialog(QDialog):
 class VPNToggleMainWindow(QMainWindow):
     """Main window for VPN Toggle application"""
 
+    MAX_LOG_LINES = 500
+
     def __init__(self, config_manager: ConfigManager, vpn_manager: VPNManager):
         super().__init__()
         self.config_manager = config_manager
@@ -394,7 +396,7 @@ class VPNToggleMainWindow(QMainWindow):
         self.monitor_thread = None
         self.vpn_widgets: Dict[str, VPNWidget] = {}
 
-        self.setWindowTitle("VPN Monitor v2.0")
+        self.setWindowTitle("VPN Monitor v2.1")
         self.setup_ui()
         self.setup_monitor()
         self.restore_geometry()
@@ -570,9 +572,21 @@ class VPNToggleMainWindow(QMainWindow):
             widget.update_status()
 
     def append_log(self, message: str):
-        """Append message to activity log"""
+        """Append message to activity log, pruning oldest lines beyond MAX_LOG_LINES"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
+
+        # Prune oldest lines if over the limit
+        doc = self.log_text.document()
+        excess = doc.blockCount() - self.MAX_LOG_LINES
+        if excess > 0:
+            cursor = QTextCursor(doc)
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            for _ in range(excess):
+                cursor.movePosition(QTextCursor.MoveOperation.Down, QTextCursor.MoveMode.KeepAnchor)
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            cursor.deleteChar()  # Remove the trailing newline
 
         # Auto-scroll to bottom
         scrollbar = self.log_text.verticalScrollBar()
