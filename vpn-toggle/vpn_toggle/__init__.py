@@ -5,4 +5,4 @@ A PyQt6 application for managing NetworkManager VPN connections with integrated
 monitoring and assert-based health checking.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"

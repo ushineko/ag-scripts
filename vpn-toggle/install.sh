@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Installation script for VPN Toggle v2.0
+# Installation script for VPN Toggle v2.1
 #
 
 set -e
@@ -8,8 +8,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons"
 
-echo "Installing VPN Toggle v2.0..."
+echo "Installing VPN Toggle v2.1..."
 
 # Check dependencies
 echo "Checking dependencies..."
@@ -48,6 +49,11 @@ ln -sf "$SCRIPT_DIR/vpn_toggle_v2.py" "$INSTALL_DIR/vpn-toggle-v2"
 # Make sure it's executable
 chmod +x "$SCRIPT_DIR/vpn_toggle_v2.py"
 
+# Install icon
+echo "Installing icon..."
+mkdir -p "$ICON_DIR"
+cp "$SCRIPT_DIR/vpn_toggle/icon.svg" "$ICON_DIR/vpn-toggle-v2.svg"
+
 # Create desktop file
 echo "Creating desktop launcher..."
 mkdir -p "$DESKTOP_DIR"
@@ -55,10 +61,10 @@ mkdir -p "$DESKTOP_DIR"
 cat > "$DESKTOP_DIR/vpn-toggle-v2.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=VPN Toggle v2.0
+Name=VPN Toggle v2.1
 Comment=VPN Manager with integrated monitoring
 Exec=$INSTALL_DIR/vpn-toggle-v2
-Icon=network-vpn
+Icon=$ICON_DIR/vpn-toggle-v2.svg
 Terminal=false
 Categories=Network;System;
 Keywords=vpn;network;monitor;

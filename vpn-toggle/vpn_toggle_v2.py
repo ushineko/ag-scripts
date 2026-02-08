@@ -7,7 +7,12 @@ Main entry point for the application.
 import sys
 import argparse
 
+from pathlib import Path
+
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtSvg import QSvgRenderer
 
 from vpn_toggle import __version__
 from vpn_toggle.config import ConfigManager
@@ -68,6 +73,21 @@ def main():
         app = QApplication(sys.argv)
         app.setApplicationName("VPN Toggle")
         app.setApplicationVersion(__version__)
+        app.setDesktopFileName("vpn-toggle-v2")
+
+        # Set application icon - render SVG to pixmaps for reliable display
+        icon_path = Path(__file__).parent / "vpn_toggle" / "icon.svg"
+        if icon_path.exists():
+            icon = QIcon()
+            renderer = QSvgRenderer(str(icon_path))
+            for size in (16, 24, 32, 48, 64, 128):
+                pixmap = QPixmap(QSize(size, size))
+                pixmap.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(pixmap)
+                renderer.render(painter)
+                painter.end()
+                icon.addPixmap(pixmap)
+            app.setWindowIcon(icon)
 
         window = VPNToggleMainWindow(config_manager, vpn_manager)
         window.show()

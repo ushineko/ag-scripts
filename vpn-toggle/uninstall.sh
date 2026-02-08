@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# Uninstallation script for VPN Toggle v2.0
+# Uninstallation script for VPN Toggle v2.1
 #
 
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons"
 CONFIG_DIR="$HOME/.config/vpn-toggle"
 
-echo "Uninstalling VPN Toggle v2.0..."
+echo "Uninstalling VPN Toggle v2.1..."
 
 # Remove symlink
 if [ -L "$INSTALL_DIR/vpn-toggle-v2" ]; then
@@ -24,6 +25,12 @@ if [ -f "$DESKTOP_DIR/vpn-toggle-v2.desktop" ]; then
     if command -v update-desktop-database &> /dev/null; then
         update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
     fi
+fi
+
+# Remove icon
+if [ -f "$ICON_DIR/vpn-toggle-v2.svg" ]; then
+    echo "Removing icon..."
+    rm "$ICON_DIR/vpn-toggle-v2.svg"
 fi
 
 # Ask about configuration

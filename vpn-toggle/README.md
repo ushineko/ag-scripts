@@ -170,6 +170,12 @@ Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
 
+### v2.1.0
+- **Application Icon**: Custom SVG shield icon for window title bar and desktop launcher
+- **Log Line Limiting**: Activity log capped at 500 lines to prevent unbounded memory growth
+- **Installer/Uninstaller**: Updated to install and clean up the custom icon
+- GUI tests added for log limiting behavior (70 total tests)
+
 ### v2.0.0
 - **Major rewrite**: Python + PyQt6 GUI application
 - **Monitor Mode**: Integrated health checking with auto-reconnect
