@@ -35,6 +35,41 @@ def clear_default_monitor() -> None:
     save_config(config)
 
 
+def is_autostart_enabled() -> bool:
+    return load_config().get("autostart", False)
+
+
+def set_autostart(enabled: bool) -> None:
+    config = load_config()
+    config["autostart"] = enabled
+    save_config(config)
+
+
+AUTOSTART_DIR = Path.home() / ".config" / "autostart"
+AUTOSTART_FILE = AUTOSTART_DIR / "alacritty-maximizer.desktop"
+
+
+def install_autostart_entry(main_script_path: str) -> None:
+    AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
+    content = (
+        "[Desktop Entry]\n"
+        "Name=Alacritty Maximizer (Autostart)\n"
+        "Comment=Auto-launch Alacritty on saved default monitor\n"
+        f"Exec=python3 {main_script_path} --autostart\n"
+        "Icon=utilities-terminal\n"
+        "Type=Application\n"
+        "Categories=Utility;Terminal;\n"
+        "Terminal=false\n"
+        "X-KDE-autostart-phase=2\n"
+    )
+    AUTOSTART_FILE.write_text(content)
+
+
+def remove_autostart_entry() -> None:
+    if AUTOSTART_FILE.exists():
+        AUTOSTART_FILE.unlink()
+
+
 def remove_config() -> None:
     if CONFIG_FILE.exists():
         CONFIG_FILE.unlink()

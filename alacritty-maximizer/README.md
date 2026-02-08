@@ -1,12 +1,13 @@
-# Alacritty Maximizer (v2.0.0)
+# Alacritty Maximizer (v2.1.0)
 
-A simple tool to launch Alacritty either normally or maximized on a specific monitor, with optional auto-launch to a saved default.
+A simple tool to launch Alacritty either normally or maximized on a specific monitor, with optional auto-launch to a saved default and KDE session autostart.
 
 ## Table of Contents
 - [Why?](#why)
 - [Features](#features)
 - [How it works](#how-it-works)
 - [Auto-Launch (Default Monitor)](#auto-launch-default-monitor)
+- [Session Autostart](#session-autostart)
 - [Installation](#installation)
 - [Uninstallation](#uninstallation)
 - [CLI Options](#cli-options)
@@ -24,6 +25,7 @@ Sometimes you want to open a terminal dedicated to a specific screen without dra
 - **Robustness**: Uses screen coordinates to identify monitors, ensuring the "Left" monitor is always the "Left" monitor even if system indices change.
 - **Movable**: Although maximized initially, windows can be moved or resized (e.g., using Taskbar r-click, or **Alt+LeftClick** drag in KWin).
 - **Auto-Launch**: Save a default monitor and skip the GUI on subsequent launches.
+- **Session Autostart**: Launch Alacritty on your default monitor automatically at KDE login.
 
 ## How it works
 1.  **Selection**: You choose a monitor or "Normal Start" from the GUI.
@@ -54,6 +56,19 @@ If the saved monitor is no longer connected, the GUI is shown automatically.
 
 Config is stored at `~/.config/alacritty-maximizer/config.json`.
 
+## Session Autostart
+
+To have Alacritty launch on your default monitor at every KDE login:
+
+1. Open the launcher GUI (run with `--choose` if a default is already set)
+2. Select a monitor and check **"Save as default"**
+3. Check **"Launch on login (KDE autostart)"**
+4. Click **Launch**
+
+This installs a `.desktop` entry in `~/.config/autostart/` that runs `main.py --autostart` at login. The `--autostart` flag silently exits if no default monitor is saved, so it won't pop up the GUI unexpectedly.
+
+**Replacing KDE session restore**: If KDE's session restore is opening plain alacritty windows (bypassing the KWin positioning rules), switch KDE to "Start with an empty session" (System Settings > Startup and Shutdown > Desktop Session) and use this autostart feature instead.
+
 ## Installation
 
 1.  Run the install script:
@@ -64,6 +79,7 @@ Config is stored at `~/.config/alacritty-maximizer/config.json`.
     - Update your `~/.config/kwinrulesrc` with the necessary rules.
     - Reload KWin.
     - Install a desktop entry `Alacritty Maximizer` to your applications menu.
+    - Install an autostart entry (inactive until you enable it in the GUI).
 
 ## Uninstallation
 To remove the tool and its rules:
@@ -77,6 +93,7 @@ python3 main.py [OPTIONS]
 
   --choose          Show monitor selection GUI even if a default is saved
   --clear-default   Clear the saved default monitor and exit
+  --autostart       Session autostart mode: launch default silently, exit if none saved
   --version         Show version and exit
 ```
 
@@ -87,13 +104,20 @@ python3 main.py [OPTIONS]
 - Alacritty
 
 ## Files
-- `main.py`: The PyQt GUI launcher with auto-launch support.
-- `config.py`: Configuration persistence (default monitor).
+- `main.py`: The PyQt GUI launcher with auto-launch and autostart support.
+- `config.py`: Configuration persistence (default monitor, autostart).
 - `install_kwin_rules.py`: Script to inject KWin rules.
 - `install.sh`: Master installation script.
 - `uninstall.sh`: Removal script.
 
 ## Changelog
+
+### v2.1.0
+- Added KDE session autostart support (`--autostart` flag)
+- Installer places autostart `.desktop` entry in `~/.config/autostart/`
+- GUI checkbox to toggle "Launch on login (KDE autostart)"
+- `--autostart` silently exits if no default monitor is saved
+- Uninstaller removes autostart entry
 
 ### v2.0.0
 - Added saved default monitor config with auto-launch (skip GUI)

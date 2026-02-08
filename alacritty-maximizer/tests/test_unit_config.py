@@ -13,8 +13,12 @@ import config
 def temp_config(tmp_path, monkeypatch):
     config_dir = tmp_path / "alacritty-maximizer"
     config_file = config_dir / "config.json"
+    autostart_dir = tmp_path / "autostart"
+    autostart_file = autostart_dir / "alacritty-maximizer.desktop"
     monkeypatch.setattr(config, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(config, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(config, "AUTOSTART_DIR", autostart_dir)
+    monkeypatch.setattr(config, "AUTOSTART_FILE", autostart_file)
     return config_file
 
 
@@ -106,3 +110,49 @@ class TestRemoveConfig:
         config.remove_config()
         assert not temp_config.exists()
         assert temp_config.parent.exists()
+
+
+class TestAutostart:
+    def test_disabled_by_default(self):
+        assert config.is_autostart_enabled() is False
+
+    def test_enable_autostart(self):
+        config.set_autostart(True)
+        assert config.is_autostart_enabled() is True
+
+    def test_disable_autostart(self):
+        config.set_autostart(True)
+        config.set_autostart(False)
+        assert config.is_autostart_enabled() is False
+
+    def test_preserves_other_config(self):
+        config.set_default_monitor("pos-0_0")
+        config.set_autostart(True)
+        assert config.get_default_monitor() == "pos-0_0"
+        assert config.is_autostart_enabled() is True
+
+
+class TestAutostartEntry:
+    def test_install_creates_desktop_file(self):
+        config.install_autostart_entry("/path/to/main.py")
+        assert config.AUTOSTART_FILE.exists()
+        content = config.AUTOSTART_FILE.read_text()
+        assert "--autostart" in content
+        assert "/path/to/main.py" in content
+        assert "X-KDE-autostart-phase=2" in content
+
+    def test_remove_deletes_desktop_file(self):
+        config.install_autostart_entry("/path/to/main.py")
+        assert config.AUTOSTART_FILE.exists()
+        config.remove_autostart_entry()
+        assert not config.AUTOSTART_FILE.exists()
+
+    def test_remove_noop_when_no_file(self):
+        config.remove_autostart_entry()
+
+    def test_install_overwrites_existing(self):
+        config.install_autostart_entry("/old/path/main.py")
+        config.install_autostart_entry("/new/path/main.py")
+        content = config.AUTOSTART_FILE.read_text()
+        assert "/new/path/main.py" in content
+        assert "/old/path/main.py" not in content
