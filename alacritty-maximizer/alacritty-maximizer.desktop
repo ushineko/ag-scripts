@@ -3,8 +3,13 @@ Name=Alacritty Maximizer
 Comment=Launch Alacritty on a specific monitor
 # EXEC_PATH will be replaced by install.sh with the absolute path to main.py
 Exec=python3 EXEC_PATH
-# ICON_PATH can be replaced, or we can use a standard icon name
 Icon=utilities-terminal
 Type=Application
 Categories=Utility;Terminal;
 Terminal=false
+Actions=settings;
+
+[Desktop Action settings]
+Name=Settings
+Exec=python3 EXEC_PATH --choose
+Icon=preferences-system
