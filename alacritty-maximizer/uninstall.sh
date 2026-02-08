@@ -18,4 +18,13 @@ else
     echo "Desktop file not found."
 fi
 
+# 3. Remove config directory
+CONFIG_DIR="$HOME/.config/alacritty-maximizer"
+if [ -d "$CONFIG_DIR" ]; then
+    rm -rf "$CONFIG_DIR"
+    echo "Removed config directory $CONFIG_DIR"
+else
+    echo "Config directory not found."
+fi
+
 echo "Uninstallation complete."
