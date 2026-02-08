@@ -18,7 +18,16 @@ else
     echo "Desktop file not found."
 fi
 
-# 3. Remove config directory
+# 3. Remove Autostart Entry
+AUTOSTART_FILE="$HOME/.config/autostart/alacritty-maximizer.desktop"
+if [ -f "$AUTOSTART_FILE" ]; then
+    rm "$AUTOSTART_FILE"
+    echo "Removed autostart entry $AUTOSTART_FILE"
+else
+    echo "Autostart entry not found."
+fi
+
+# 4. Remove config directory
 CONFIG_DIR="$HOME/.config/alacritty-maximizer"
 if [ -d "$CONFIG_DIR" ]; then
     rm -rf "$CONFIG_DIR"

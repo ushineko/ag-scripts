@@ -2,14 +2,17 @@ import argparse
 import sys
 import subprocess
 import shutil
+from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton,
                              QLabel, QListWidget, QListWidgetItem, QMessageBox,
                              QCheckBox, QHBoxLayout)
 from PyQt6.QtCore import Qt
 
-from config import get_default_monitor, set_default_monitor, clear_default_monitor
+from config import (get_default_monitor, set_default_monitor, clear_default_monitor,
+                     is_autostart_enabled, set_autostart, install_autostart_entry,
+                     remove_autostart_entry)
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 
 def get_screen_positions(app: QApplication) -> list[dict]:
@@ -104,6 +107,10 @@ class AlacrittyLauncher(QWidget):
         self.default_checkbox = QCheckBox("Save as default (auto-launch next time)")
         layout.addWidget(self.default_checkbox)
 
+        self.autostart_checkbox = QCheckBox("Launch on login (KDE autostart)")
+        self.autostart_checkbox.setChecked(is_autostart_enabled())
+        layout.addWidget(self.autostart_checkbox)
+
         btn_layout = QHBoxLayout()
 
         launch_btn = QPushButton("Launch")
@@ -147,6 +154,16 @@ class AlacrittyLauncher(QWidget):
                 clear_default_monitor()
                 print("Cleared default monitor (normal mode selected)")
 
+        main_script = str(Path(__file__).resolve())
+        if self.autostart_checkbox.isChecked():
+            set_autostart(True)
+            install_autostart_entry(main_script)
+            print("Autostart enabled")
+        else:
+            set_autostart(False)
+            remove_autostart_entry()
+            print("Autostart disabled")
+
         if not launch_alacritty(position_id):
             QMessageBox.critical(self, "Error", "Could not find 'alacritty' in PATH.\nPlease ensure it is installed.")
             return
@@ -166,6 +183,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Alacritty Maximizer - launch Alacritty on a specific monitor")
     parser.add_argument("--choose", action="store_true", help="Show monitor selection GUI even if a default is saved")
     parser.add_argument("--clear-default", action="store_true", help="Clear the saved default monitor and exit")
+    parser.add_argument("--autostart", action="store_true", help="Session autostart mode: launch default monitor silently, exit if none saved")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser.parse_args()
 
@@ -178,6 +196,16 @@ def main():
     if args.clear_default:
         clear_default_monitor()
         print("Default monitor cleared.")
+        return
+
+    if args.autostart:
+        default = get_default_monitor()
+        if not default:
+            return
+        screens = get_screen_positions(app)
+        valid_ids = {s["position_id"] for s in screens}
+        if default in valid_ids:
+            launch_alacritty(default)
         return
 
     if not args.choose:
