@@ -1,10 +1,11 @@
 #!/bin/bash
 # bluetooth-reset.sh - Reset Linux Bluetooth stack when it becomes unresponsive
-# Version: 1.0.0
+# Version: 2.0.0
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="2.0.0"
+DEFAULT_SCAN_TIMEOUT=30
 SCRIPT_NAME="$(basename "$0")"
 
 # Colors (disabled if not a terminal)
@@ -28,19 +29,24 @@ BlueZ can get stuck after extended uptime or frequent device connect/disconnect 
 Usage: ${SCRIPT_NAME} [OPTIONS]
 
 Options:
-    -h, --help      Show this help message
-    -v, --version   Show version
-    -s, --status    Show current bluetooth status (no restart)
-    -c, --check     Check if bluetooth appears stuck (scan test)
-    -H, --hard      Hard reset: rfkill toggle + service restart
-    -y, --yes       Skip confirmation prompt
-    -q, --quiet     Minimal output
+    -h, --help                  Show this help message
+    -v, --version               Show version
+    -s, --status                Show current bluetooth status (no restart)
+    -c, --check                 Check if bluetooth appears stuck (scan test)
+    -H, --hard                  Hard reset: rfkill toggle + service restart
+    -r, --reconnect PATTERN     Hard reset + scan + pair + connect device by name
+    -t, --scan-timeout SECONDS  Scan timeout for --reconnect (default: ${DEFAULT_SCAN_TIMEOUT})
+    -y, --yes                   Skip confirmation prompt
+    -q, --quiet                 Minimal output
 
 Examples:
-    ${SCRIPT_NAME}              # Restart bluetooth service
-    ${SCRIPT_NAME} --status     # Show status only
-    ${SCRIPT_NAME} --check      # Test if scanning works
-    ${SCRIPT_NAME} --hard       # Aggressive reset
+    ${SCRIPT_NAME}                              # Restart bluetooth service
+    ${SCRIPT_NAME} --status                     # Show status only
+    ${SCRIPT_NAME} --check                      # Test if scanning works
+    ${SCRIPT_NAME} --hard                       # Aggressive reset
+    ${SCRIPT_NAME} -r "Keychron K4 HE"          # Reconnect keyboard
+    ${SCRIPT_NAME} -r Keychron                   # Partial name match
+    ${SCRIPT_NAME} -r Keychron -t 60             # Longer scan timeout
 EOF
 }
 
@@ -168,11 +174,149 @@ do_restart() {
     return 0
 }
 
+remove_stale_pairings() {
+    local pattern="$1"
+    local quiet=${2:-false}
+    local removed=0
+
+    while IFS= read -r line; do
+        local mac name
+        mac=$(echo "$line" | awk '{print $2}')
+        name=$(echo "$line" | cut -d' ' -f3-)
+        if [[ -n "$mac" && "$name" == *"$pattern"* ]]; then
+            [[ "$quiet" != "true" ]] && log_info "  Removing stale pairing: $name ($mac)"
+            bluetoothctl remove "$mac" &>/dev/null || true
+            ((++removed)) || true
+        fi
+    done < <(bluetoothctl devices Paired 2>/dev/null)
+
+    if [[ $removed -gt 0 && "$quiet" != "true" ]]; then
+        log_info "  Removed $removed stale pairing(s)."
+    fi
+}
+
+scan_for_device() {
+    local pattern="$1"
+    local scan_timeout="$2"
+    local quiet=${3:-false}
+
+    [[ "$quiet" != "true" ]] && log_info "Scanning for '$pattern' (${scan_timeout}s timeout)..."
+
+    # Start scanning in background
+    bluetoothctl scan on &>/dev/null &
+    local scan_pid=$!
+
+    local elapsed=0
+    local found_mac=""
+    while [[ $elapsed -lt $scan_timeout ]]; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+
+        # Check all known devices for a name match
+        while IFS= read -r line; do
+            local mac name
+            mac=$(echo "$line" | awk '{print $2}')
+            name=$(echo "$line" | cut -d' ' -f3-)
+            if [[ "$name" == *"$pattern"* ]]; then
+                found_mac="$mac"
+                break 2
+            fi
+        done < <(bluetoothctl devices 2>/dev/null)
+
+        [[ "$quiet" != "true" ]] && printf "\r  %ds / %ds..." "$elapsed" "$scan_timeout"
+    done
+
+    # Stop scanning
+    kill "$scan_pid" 2>/dev/null || true
+    bluetoothctl scan off &>/dev/null || true
+    [[ "$quiet" != "true" ]] && echo
+
+    if [[ -z "$found_mac" ]]; then
+        log_error "Device matching '$pattern' not found within ${scan_timeout}s."
+        log_error "Ensure the device is in pairing mode and try again."
+        return 1
+    fi
+
+    local found_name
+    found_name=$(bluetoothctl devices 2>/dev/null | grep "$found_mac" | cut -d' ' -f3-)
+    [[ "$quiet" != "true" ]] && log_success "  Found: $found_name ($found_mac)"
+    echo "$found_mac"
+}
+
+pair_and_connect() {
+    local mac="$1"
+    local quiet=${2:-false}
+
+    [[ "$quiet" != "true" ]] && log_info "Pairing with $mac..."
+    if ! bluetoothctl pair "$mac" 2>&1 | tail -1 | grep -qi "successful\|already"; then
+        log_error "Pairing failed for $mac."
+        return 1
+    fi
+    [[ "$quiet" != "true" ]] && log_success "  Paired."
+
+    [[ "$quiet" != "true" ]] && log_info "Trusting $mac..."
+    bluetoothctl trust "$mac" &>/dev/null || true
+    [[ "$quiet" != "true" ]] && log_success "  Trusted."
+
+    [[ "$quiet" != "true" ]] && log_info "Connecting to $mac..."
+    if ! bluetoothctl connect "$mac" 2>&1 | tail -1 | grep -qi "successful\|already"; then
+        log_error "Connection failed for $mac."
+        return 1
+    fi
+    [[ "$quiet" != "true" ]] && log_success "  Connected."
+    return 0
+}
+
+do_reconnect() {
+    local device_pattern="$1"
+    local scan_timeout="$2"
+    local quiet=${3:-false}
+
+    [[ "$quiet" != "true" ]] && echo "Bluetooth Reconnect - '$device_pattern'"
+    [[ "$quiet" != "true" ]] && echo
+
+    # Step 1: Hard reset
+    [[ "$quiet" != "true" ]] && log_info "Step 1/4: Hard reset bluetooth adapter..."
+    if ! do_restart true "$quiet"; then
+        log_error "Hard reset failed."
+        return 1
+    fi
+
+    # Step 2: Remove stale pairings
+    [[ "$quiet" != "true" ]] && log_info "Step 2/4: Cleaning stale pairings..."
+    remove_stale_pairings "$device_pattern" "$quiet"
+
+    # Step 3: Scan for device
+    [[ "$quiet" != "true" ]] && log_info "Step 3/4: Scanning for device..."
+    local mac
+    # scan_for_device prints the MAC as its last line of stdout
+    mac=$(scan_for_device "$device_pattern" "$scan_timeout" "$quiet" | tail -1) || return 1
+
+    if [[ -z "$mac" || ! "$mac" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
+        log_error "Could not determine device MAC address."
+        return 1
+    fi
+
+    # Step 4: Pair and connect
+    [[ "$quiet" != "true" ]] && log_info "Step 4/4: Pairing and connecting..."
+    if ! pair_and_connect "$mac" "$quiet"; then
+        return 1
+    fi
+
+    [[ "$quiet" != "true" ]] && echo
+    local device_name
+    device_name=$(bluetoothctl info "$mac" 2>/dev/null | grep "Name:" | cut -d' ' -f2- | xargs)
+    [[ "$quiet" != "true" ]] && log_success "Reconnected: ${device_name:-$mac}"
+    return 0
+}
+
 main() {
     local mode="restart"
     local hard=false
     local skip_confirm=false
     local quiet=false
+    local reconnect_pattern=""
+    local scan_timeout="$DEFAULT_SCAN_TIMEOUT"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -195,6 +339,24 @@ main() {
             -H|--hard)
                 hard=true
                 shift
+                ;;
+            -r|--reconnect)
+                mode="reconnect"
+                if [[ $# -lt 2 || "$2" =~ ^- ]]; then
+                    log_error "Error: --reconnect requires a device name pattern."
+                    log_error "Example: ${SCRIPT_NAME} --reconnect Keychron"
+                    exit 1
+                fi
+                reconnect_pattern="$2"
+                shift 2
+                ;;
+            -t|--scan-timeout)
+                if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+                    log_error "Error: --scan-timeout requires a number (seconds)."
+                    exit 1
+                fi
+                scan_timeout="$2"
+                shift 2
                 ;;
             -y|--yes)
                 skip_confirm=true
@@ -222,6 +384,13 @@ main() {
         check)
             check_bluetooth
             exit $?
+            ;;
+        reconnect)
+            if do_reconnect "$reconnect_pattern" "$scan_timeout" "$quiet"; then
+                exit 0
+            else
+                exit 1
+            fi
             ;;
         restart)
             if [[ "$quiet" != "true" ]]; then

@@ -57,7 +57,40 @@ else
     fail "Invalid option should return error"
 fi
 
-# Test 5: Status flag works (if bluetooth available)
+# Test 5: --reconnect without pattern shows error
+echo "Test: --reconnect requires pattern"
+if ! "$SCRIPT" --reconnect 2>/dev/null; then
+    pass "--reconnect without pattern returns error"
+else
+    fail "--reconnect without pattern should return error"
+fi
+
+# Test 6: --scan-timeout without value shows error
+echo "Test: --scan-timeout requires number"
+if ! "$SCRIPT" --scan-timeout 2>/dev/null; then
+    pass "--scan-timeout without value returns error"
+else
+    fail "--scan-timeout without value should return error"
+fi
+
+# Test 7: --scan-timeout with non-number shows error
+echo "Test: --scan-timeout rejects non-number"
+if ! "$SCRIPT" --scan-timeout abc 2>/dev/null; then
+    pass "--scan-timeout rejects non-number"
+else
+    fail "--scan-timeout should reject non-number"
+fi
+
+# Test 8: Help text includes reconnect option
+echo "Test: Help text includes reconnect"
+output=$("$SCRIPT" --help)
+if echo "$output" | grep -q "\-r, --reconnect"; then
+    pass "Help text includes --reconnect"
+else
+    fail "Help text missing --reconnect"
+fi
+
+# Test 9: Status flag works (if bluetooth available)
 echo "Test: --status flag"
 if systemctl list-unit-files bluetooth.service &>/dev/null; then
     output=$("$SCRIPT" --status)
@@ -70,7 +103,7 @@ else
     echo "  SKIP: bluetooth.service not available"
 fi
 
-# Test 6: Quiet status works
+# Test 10: Quiet status works
 echo "Test: --status --quiet flag"
 if systemctl list-unit-files bluetooth.service &>/dev/null; then
     output=$("$SCRIPT" --status --quiet)
