@@ -1,6 +1,6 @@
 # Claude Code Global Config (Ralph Wiggum Methodology)
 
-**Version 1.3.0**
+**Version 1.3.1**
 
 A global `CLAUDE.md` configuration file for Claude Code that implements the Ralph Wiggum autonomous coding methodology—a spec-driven, iterative development workflow with quality gates and fresh context per iteration.
 
@@ -191,6 +191,11 @@ This removes:
 If a backup exists, you'll be prompted to restore it.
 
 ## Changelog
+
+### v1.3.1
+- **Bugfix: ralph-loop.sh empty specs loop** - Fixed `find_incomplete_specs` outputting a phantom newline when no incomplete specs exist, causing infinite loop until max iterations
+- **Bugfix: ralph-loop.sh set -e crash** - Fixed `((iteration++))` post-increment from 0 being falsy, which killed the script on first iteration with `set -e`
+- **Cleanup** - Removed unused `PROMPT_FILE` temp file and dead `get_spec_number()` function
 
 ### v1.3.0
 - **Validation Artifacts** - Added workflow rule to save validation results as project artifacts in `validation-reports/`

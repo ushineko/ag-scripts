@@ -7,7 +7,7 @@
 #
 # Usage: ralph-loop.sh [project_dir] [--max-iterations N] [--dry-run]
 #
-# Version: 1.0.0
+# Version: 1.3.1
 
 set -e
 
@@ -80,18 +80,15 @@ find_incomplete_specs() {
             incomplete+=("$spec")
         fi
     done
-    printf '%s\n' "${incomplete[@]}"
-}
-
-# Function to get spec number for sorting
-get_spec_number() {
-    basename "$1" | grep -oE '^[0-9]+' || echo "999"
+    if [[ ${#incomplete[@]} -gt 0 ]]; then
+        printf '%s\n' "${incomplete[@]}"
+    fi
 }
 
 # Main loop
 iteration=0
 while [[ $iteration -lt $MAX_ITERATIONS ]]; do
-    ((iteration++))
+    ((++iteration))
 
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BLUE}Iteration $iteration / $MAX_ITERATIONS${NC}"
@@ -141,10 +138,6 @@ INSTRUCTIONS:
 
 Do NOT output DONE until ALL acceptance criteria are checked and the spec is marked complete."
 
-    # Create a temporary file for the prompt
-    PROMPT_FILE=$(mktemp)
-    echo "$PROMPT" > "$PROMPT_FILE"
-
     # Run Claude Code and capture output
     echo -e "${BLUE}Launching Claude Code...${NC}"
     echo ""
@@ -169,7 +162,7 @@ Do NOT output DONE until ALL acceptance criteria are checked and the spec is mar
     fi
 
     # Cleanup temp files
-    rm -f "$PROMPT_FILE" "$OUTPUT_FILE"
+    rm -f "$OUTPUT_FILE"
 
     echo ""
 
