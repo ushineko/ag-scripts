@@ -27,6 +27,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [claude-usage-widget-windows](claude-usage-widget-windows/) | Windows system tray widget displaying Claude Code CLI usage metrics with floating progress bar, calibration, and configurable session windows. |
 | [docker-setup](docker-setup/) | Sets up Docker for the current user. Installs Docker if missing, enables the service, and adds user to the `docker` group. |
 | [fake-screensaver](fake-screensaver/) | PyQt-based fake screensaver that keeps the mouse cursor visible, plus a simple HTML blank page fallback. |
+| [foghorn-leghorn](foghorn-leghorn/) | Always-on-top countdown timer with system tray integration, desktop notifications, and attention-grabbing alarm sounds (foghorn, Wilhelm scream, air horn). |
 | [game-desktop-creator](game-desktop-creator/) | PyQt6 GUI for creating start menu launchers for Steam, Epic, and GOG games. Discovers games from Steam and Heroic Games Launcher. |
 | [kvm-setup](kvm-setup/) | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions. |
 | [misc](misc/) | General utilities for NTFS mount fixing and fstab generation during Windows-to-Linux migration. |
