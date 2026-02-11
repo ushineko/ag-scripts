@@ -141,47 +141,27 @@ class ConfigManager:
 # ---------------------------------------------------------------------------
 
 class SoundPlayer:
-    """Play alarm sounds. Tries QMediaPlayer first, falls back to paplay."""
-
-    def __init__(self):
-        self._qplayer = None
-        self._audio_output = None
-        self._init_qt_media()
-
-    def _init_qt_media(self):
-        try:
-            from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
-            from PyQt6.QtCore import QUrl
-            self._qplayer = QMediaPlayer()
-            self._audio_output = QAudioOutput()
-            self._qplayer.setAudioOutput(self._audio_output)
-            self._QUrl = QUrl
-        except (ImportError, RuntimeError):
-            self._qplayer = None
+    """Play alarm sounds via paplay (PipeWire/PulseAudio) or aplay (ALSA)."""
 
     def play(self, sound_path: str | Path):
         path = Path(sound_path)
         if not path.exists():
             return
-        if self._qplayer is not None:
-            self._qplayer.setSource(self._QUrl.fromLocalFile(str(path)))
-            self._qplayer.play()
-        else:
+        try:
+            subprocess.Popen(
+                ["paplay", str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
             try:
                 subprocess.Popen(
-                    ["paplay", str(path)],
+                    ["aplay", str(path)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
             except FileNotFoundError:
-                try:
-                    subprocess.Popen(
-                        ["aplay", str(path)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                except FileNotFoundError:
-                    pass
+                pass
 
 
 # ---------------------------------------------------------------------------
