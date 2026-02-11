@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from foghorn_leghorn import (
     ConfigManager,
     MainWindow,
+    SCRIPT_DIR,
     TimerData,
     TimerEngine,
     SoundPlayer,
@@ -292,6 +293,12 @@ class TestSoundPlayer:
 
 class TestBundledSounds:
     """Verify bundled sound files are present and valid WAV."""
+
+    def test_script_dir_resolves_through_symlinks(self):
+        """SCRIPT_DIR uses resolve() so symlinks point to actual source."""
+        assert SCRIPT_DIR.is_absolute()
+        assert not SCRIPT_DIR.is_symlink()
+        assert (SCRIPT_DIR / "sounds").exists()
 
     def test_sounds_dir_exists(self):
         assert SOUNDS_DIR.exists()

@@ -45,7 +45,8 @@ from PyQt6.QtWidgets import (
 
 __version__ = "1.0.0"
 
-SOUNDS_DIR = Path(__file__).parent / "sounds"
+SCRIPT_DIR = Path(__file__).resolve().parent
+SOUNDS_DIR = SCRIPT_DIR / "sounds"
 CONFIG_DIR = Path.home() / ".config" / "foghorn-leghorn"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
@@ -439,6 +440,7 @@ class MainWindow(QMainWindow):
         self._quitting = False
 
         self.setWindowTitle(f"Foghorn Leghorn v{__version__}")
+        self.setWindowIcon(QIcon.fromTheme("chronometer"))
         self.setWindowFlags(
             Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
         )
@@ -824,6 +826,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Foghorn Leghorn")
     app.setApplicationVersion(__version__)
+    app.setDesktopFileName("foghorn-leghorn")
+    app.setWindowIcon(QIcon.fromTheme("chronometer"))
     app.setQuitOnLastWindowClosed(False)
 
     config = ConfigManager()

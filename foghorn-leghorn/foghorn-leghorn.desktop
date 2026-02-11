@@ -7,3 +7,4 @@ Icon=chronometer
 Terminal=false
 Categories=Utility;Clock;
 Keywords=timer;countdown;alarm;reminder;
+StartupWMClass=foghorn-leghorn
