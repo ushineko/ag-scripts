@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from foghorn_leghorn import (
     ConfigManager,
+    MainWindow,
     TimerData,
     TimerEngine,
     SoundPlayer,
@@ -18,6 +19,7 @@ from foghorn_leghorn import (
     DEFAULT_CONFIG,
     BUILTIN_SOUNDS,
     SOUNDS_DIR,
+    __version__,
 )
 
 
@@ -254,30 +256,34 @@ class TestTimerEngine:
 class TestSoundPlayer:
     """Tests for SoundPlayer."""
 
-    @pytest.fixture
-    def player(self):
-        """Create SoundPlayer with Qt multimedia disabled."""
-        with patch.object(SoundPlayer, "_init_qt_media"):
-            sp = SoundPlayer()
-        sp._qplayer = None
-        return sp
-
-    def test_play_nonexistent_file_no_crash(self, player):
-        player.play("/nonexistent/path/sound.wav")
+    def test_play_nonexistent_file_no_crash(self):
+        sp = SoundPlayer()
+        sp.play("/nonexistent/path/sound.wav")
 
     def test_builtin_sounds_exist(self):
         for name, path in BUILTIN_SOUNDS.items():
             assert path.exists(), f"Missing bundled sound: {name} at {path}"
 
-    def test_play_with_subprocess_fallback(self, player, tmp_path):
+    def test_play_calls_paplay(self, tmp_path):
+        sp = SoundPlayer()
         dummy = tmp_path / "test.wav"
         dummy.write_bytes(b"RIFF" + b"\x00" * 40)
         with patch("foghorn_leghorn.subprocess.Popen") as mock_popen:
-            player.play(str(dummy))
+            sp.play(str(dummy))
             mock_popen.assert_called_once()
             args = mock_popen.call_args[0][0]
             assert args[0] == "paplay"
             assert args[1] == str(dummy)
+
+    def test_play_falls_back_to_aplay(self, tmp_path):
+        sp = SoundPlayer()
+        dummy = tmp_path / "test.wav"
+        dummy.write_bytes(b"RIFF" + b"\x00" * 40)
+        with patch("foghorn_leghorn.subprocess.Popen", side_effect=[FileNotFoundError, None]) as mock_popen:
+            sp.play(str(dummy))
+            assert mock_popen.call_count == 2
+            args = mock_popen.call_args_list[1][0][0]
+            assert args[0] == "aplay"
 
 
 # ---------------------------------------------------------------------------
@@ -304,3 +310,112 @@ class TestBundledSounds:
                 assert wf.getsampwidth() == 2
                 assert wf.getframerate() == 44100
                 assert wf.getnframes() > 0
+
+
+# ---------------------------------------------------------------------------
+# GUI startup smoke tests
+# ---------------------------------------------------------------------------
+
+class TestGUIStartup:
+    """Smoke tests to verify the GUI initializes without errors."""
+
+    def test_main_window_creates(self, qapp, tmp_path):
+        """MainWindow initializes without exceptions."""
+        config = ConfigManager(tmp_path / "config.json")
+        engine = TimerEngine()
+        sound_player = SoundPlayer()
+        window = MainWindow(config, engine, sound_player)
+        assert window.windowTitle() == f"Foghorn Leghorn v{__version__}"
+        window.close()
+
+    def test_main_window_has_always_on_top(self, qapp, tmp_path):
+        """Window has the stay-on-top flag set."""
+        from PyQt6.QtCore import Qt
+        config = ConfigManager(tmp_path / "config.json")
+        engine = TimerEngine()
+        window = MainWindow(config, engine, SoundPlayer())
+        flags = window.windowFlags()
+        assert flags & Qt.WindowType.WindowStaysOnTopHint
+        window.close()
+
+    def test_main_window_shows_and_hides(self, qapp, tmp_path):
+        """Window can show and hide without errors."""
+        config = ConfigManager(tmp_path / "config.json")
+        engine = TimerEngine()
+        window = MainWindow(config, engine, SoundPlayer())
+        window.show()
+        assert window.isVisible()
+        window.hide()
+        assert not window.isVisible()
+        window.close()
+
+    def test_add_timer_via_engine(self, qapp, tmp_path):
+        """Adding a timer to the engine and rebuilding works."""
+        config = ConfigManager(tmp_path / "config.json")
+        engine = TimerEngine()
+        window = MainWindow(config, engine, SoundPlayer())
+        td = TimerData(name="Smoke", duration_seconds=60, remaining_seconds=60, is_running=True)
+        engine.add_timer(td)
+        window._add_row(td)
+        assert window.list_widget.count() == 1
+        window.close()
+
+    def test_timer_tick_updates_display(self, qapp, tmp_path):
+        """A tick updates the display without errors."""
+        config = ConfigManager(tmp_path / "config.json")
+        engine = TimerEngine()
+        window = MainWindow(config, engine, SoundPlayer())
+        td = TimerData(name="Ticking", duration_seconds=10, remaining_seconds=5, is_running=True)
+        engine.add_timer(td)
+        window._add_row(td)
+        engine._tick()
+        assert td.remaining_seconds == 4
+        window.close()
+
+    def test_timer_expiry_fires_notification(self, qapp, tmp_path):
+        """An expiring timer triggers notification without crash."""
+        config = ConfigManager(tmp_path / "config.json")
+        engine = TimerEngine()
+        window = MainWindow(config, engine, SoundPlayer())
+        td = TimerData(name="Expiry", duration_seconds=1, remaining_seconds=1, is_running=True)
+        engine.add_timer(td)
+        window._add_row(td)
+        with patch("foghorn_leghorn.subprocess.Popen"):
+            engine._tick()
+        assert td.remaining_seconds == 0
+        assert not td.is_running
+        window.close()
+
+    def test_save_and_restore_timers(self, qapp, tmp_path):
+        """Timers persist through config save/load cycle."""
+        config_path = tmp_path / "config.json"
+        config = ConfigManager(config_path)
+        engine = TimerEngine()
+        window = MainWindow(config, engine, SoundPlayer())
+        td = TimerData(name="Persist", duration_seconds=120, remaining_seconds=90, is_running=True)
+        engine.add_timer(td)
+        window._add_row(td)
+        window._save_state()
+        window.close()
+
+        config2 = ConfigManager(config_path)
+        loaded = config2.load_timers()
+        assert len(loaded) == 1
+        assert loaded[0].name == "Persist"
+        assert loaded[0].remaining_seconds == 90
+
+    def test_geometry_persists(self, qapp, tmp_path):
+        """Window geometry is saved to config."""
+        config_path = tmp_path / "config.json"
+        config = ConfigManager(config_path)
+        engine = TimerEngine()
+        window = MainWindow(config, engine, SoundPlayer())
+        window.setGeometry(200, 150, 600, 500)
+        window._save_state()
+        window.close()
+
+        config2 = ConfigManager(config_path)
+        assert config2.get("window_x") == 200
+        assert config2.get("window_y") == 150
+        assert config2.get("window_width") == 600
+        assert config2.get("window_height") == 500
