@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Foghorn Leghorn
+Comment=Always-on-top countdown timer with alarm sounds
+Exec=foghorn-leghorn
+Icon=chronometer
+Terminal=false
+Categories=Utility;Clock;
+Keywords=timer;countdown;alarm;reminder;
