@@ -12,7 +12,7 @@ from config import (get_default_monitor, set_default_monitor, clear_default_moni
                      is_autostart_enabled, set_autostart, install_autostart_entry,
                      remove_autostart_entry)
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 
 def get_screen_positions(app: QApplication) -> list[dict]:
@@ -20,12 +20,25 @@ def get_screen_positions(app: QApplication) -> list[dict]:
     indexed_screens = list(enumerate(screens))
     indexed_screens.sort(key=lambda s: s[1].geometry().x())
 
-    xs = [s[1].geometry().x() for s in indexed_screens]
+    # Deduplicate mirrored monitors: when multiple screens share the same
+    # position, keep the one with the largest area (highest resolution).
+    seen_positions: dict[str, tuple[int, object]] = {}
+    for _i, screen in indexed_screens:
+        geo = screen.geometry()
+        pos_key = f"pos-{geo.x()}_{geo.y()}"
+        area = geo.width() * geo.height()
+        if pos_key not in seen_positions or area > seen_positions[pos_key][0]:
+            seen_positions[pos_key] = (area, screen)
+
+    unique_screens = [screen for (_area, screen) in seen_positions.values()]
+    unique_screens.sort(key=lambda s: s.geometry().x())
+
+    xs = [s.geometry().x() for s in unique_screens]
     min_x = min(xs) if xs else 0
     max_x = max(xs) if xs else 0
 
     result = []
-    for _i, screen in indexed_screens:
+    for screen in unique_screens:
         size = screen.size()
         width = size.width()
         height = size.height()
@@ -37,7 +50,7 @@ def get_screen_positions(app: QApplication) -> list[dict]:
         y = geo.y()
 
         pos_desc = ""
-        if len(screens) > 1:
+        if len(unique_screens) > 1:
             if x == min_x:
                 pos_desc = " (Left)"
             elif x == max_x:
