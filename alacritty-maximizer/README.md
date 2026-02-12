@@ -1,4 +1,4 @@
-# Alacritty Maximizer (v2.1.0)
+# Alacritty Maximizer (v2.1.1)
 
 A simple tool to launch Alacritty either normally or maximized on a specific monitor, with optional auto-launch to a saved default and KDE session autostart.
 
@@ -111,6 +111,11 @@ python3 main.py [OPTIONS]
 - `uninstall.sh`: Removal script.
 
 ## Changelog
+
+### v2.1.1
+- Fixed mirrored monitors showing duplicate entries in the GUI
+- When monitors share the same position (mirrored/cloned), only one entry is shown (keeping the higher resolution)
+- Position labels (Left/Right/Center) now reflect the actual number of unique display positions
 
 ### v2.1.0
 - Added KDE session autostart support (`--autostart` flag)
