@@ -417,12 +417,12 @@ class TestGUIStartup:
         config = ConfigManager(config_path)
         engine = TimerEngine()
         window = MainWindow(config, engine, SoundPlayer())
-        window.setGeometry(200, 150, 600, 500)
+        window.setGeometry(200, 150, 800, 500)
         window._save_state()
         window.close()
 
         config2 = ConfigManager(config_path)
         assert config2.get("window_x") == 200
         assert config2.get("window_y") == 150
-        assert config2.get("window_width") == 600
+        assert config2.get("window_width") == 800
         assert config2.get("window_height") == 500

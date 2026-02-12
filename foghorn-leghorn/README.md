@@ -122,6 +122,12 @@ Select "Custom..." in the sound picker when adding/editing a timer, then browse 
 
 ## Changelog
 
+### v1.0.1
+- **Fix**: Sound playback now works when launched via symlink (resolve symlinks in path lookup)
+- **Fix**: Window and taskbar icons now display correctly (chronometer theme icon)
+- **Fix**: Default window width increased to 750px to fit all timer controls without horizontal scrolling
+- **Fix**: Window enforces minimum width of 650px
+
 ### v1.0.0
 - Initial release
 - Always-on-top countdown timer window

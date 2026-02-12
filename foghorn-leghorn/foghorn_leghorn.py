@@ -43,7 +43,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SOUNDS_DIR = SCRIPT_DIR / "sounds"
@@ -53,7 +53,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULT_CONFIG = {
     "window_x": 100,
     "window_y": 100,
-    "window_width": 520,
+    "window_width": 750,
     "window_height": 400,
     "font_size": 48,
     "sound_enabled": True,
@@ -441,6 +441,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"Foghorn Leghorn v{__version__}")
         self.setWindowIcon(QIcon.fromTheme("chronometer"))
+        self.setMinimumWidth(650)
         self.setWindowFlags(
             Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
         )
@@ -533,10 +534,10 @@ class MainWindow(QMainWindow):
     # -- Geometry persistence --
 
     def _restore_geometry(self):
-        x = self.config.get("window_x", 100)
-        y = self.config.get("window_y", 100)
-        w = self.config.get("window_width", 520)
-        h = self.config.get("window_height", 400)
+        x = self.config.get("window_x", DEFAULT_CONFIG["window_x"])
+        y = self.config.get("window_y", DEFAULT_CONFIG["window_y"])
+        w = self.config.get("window_width", DEFAULT_CONFIG["window_width"])
+        h = self.config.get("window_height", DEFAULT_CONFIG["window_height"])
         self.setGeometry(x, y, w, h)
 
     def _save_geometry(self):
