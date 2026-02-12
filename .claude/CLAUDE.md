@@ -195,6 +195,32 @@ sub-project/
 
 ---
 
+## KDE Plasma / Wayland Patterns
+
+### Always-on-Top Windows
+
+`Qt.WindowType.WindowStaysOnTopHint` is NOT reliably honored on KDE Plasma Wayland (QTBUG-73456). Use the belt-and-suspenders approach:
+
+1. Set the Qt hint in the constructor (works as fallback on non-KDE)
+2. Ship an `install_kwin_rule.py` that writes to `~/.config/kwinrulesrc`:
+   - `above=true` / `aboverule=2` (Force keep-above at compositor level)
+   - Match by `wmclass` (set via `app.setDesktopFileName()`)
+3. Trigger reload: `qdbus6 org.kde.KWin /KWin reconfigure`
+4. Uninstaller removes the rule with `--uninstall` flag
+
+Reference implementations: `peripheral-battery-monitor/install_kwin_rule.py`, `alacritty-maximizer/install_kwin_rules.py`, `foghorn-leghorn/install_kwin_rule.py`
+
+### KWin Rule Values
+
+- `2` = Force (compositor enforces regardless of app behavior)
+- `4` = Apply Initially (set on window creation, user can override)
+
+### Tools That Do NOT Work on Wayland
+
+`xdotool`, `wmctrl`, `xprop`, `xwininfo` - all X11 only. Use KWin rules or D-Bus instead.
+
+---
+
 ## Workflow References
 
 Additional workflow guidance available in `.agent/workflows/`:
