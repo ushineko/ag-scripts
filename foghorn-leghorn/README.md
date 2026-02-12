@@ -122,6 +122,11 @@ Select "Custom..." in the sound picker when adding/editing a timer, then browse 
 
 ## Changelog
 
+### v1.0.2
+- **Fix**: Always-on-top now works on KDE Plasma Wayland via KWin rule (Qt's WindowStaysOnTopHint is not honored by the Wayland compositor)
+- **New**: `install_kwin_rule.py` installs/uninstalls the KWin keep-above rule
+- **Update**: `install.sh` and `uninstall.sh` now manage the KWin rule automatically
+
 ### v1.0.1
 - **Fix**: Sound playback now works when launched via symlink (resolve symlinks in path lookup)
 - **Fix**: Window and taskbar icons now display correctly (chronometer theme icon)

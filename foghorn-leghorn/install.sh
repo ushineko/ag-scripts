@@ -38,5 +38,9 @@ echo "  Desktop entry: $DESKTOP_DIR/$APP_NAME.desktop"
 # Update desktop database
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 
+# Install KWin rule for always-on-top (Wayland does not honor Qt window hints)
+echo "  Installing KWin always-on-top rule..."
+python3 "$SCRIPT_DIR/install_kwin_rule.py"
+
 echo "Installation complete!"
 echo "Run with: $APP_NAME"
