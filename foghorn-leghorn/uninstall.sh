@@ -23,6 +23,13 @@ fi
 # Update desktop database
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 
+# Remove KWin always-on-top rule
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/install_kwin_rule.py" ]; then
+    echo "  Removing KWin always-on-top rule..."
+    python3 "$SCRIPT_DIR/install_kwin_rule.py" --uninstall
+fi
+
 # Optionally remove config
 if [ -d "$CONFIG_DIR" ]; then
     read -rp "Remove configuration and saved timers at $CONFIG_DIR? (y/N): " response

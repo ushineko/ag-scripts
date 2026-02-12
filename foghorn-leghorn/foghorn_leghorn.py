@@ -43,7 +43,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SOUNDS_DIR = SCRIPT_DIR / "sounds"
