@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional
 
 from .utils import get_config_file
 
@@ -34,6 +34,12 @@ DEFAULT_CONFIG = {
     "logging": {
         "level": "INFO",
         "file": "~/.config/vpn-toggle/vpn-toggle.log"
+    },
+    "startup": {
+        "autostart": False,
+        "start_minimized": False,
+        "restore_connections": False,
+        "restore_vpns": []
     }
 }
 
@@ -57,7 +63,7 @@ class ConfigManager:
         self._lock = threading.RLock()  # Use RLock for reentrant locking
         self.load_config()
 
-    def load_config(self) -> Dict[str, Any]:
+    def load_config(self) -> dict[str, Any]:
         """
         Load configuration from file.
 
@@ -107,7 +113,7 @@ class ConfigManager:
             except IOError as e:
                 logger.error(f"Failed to save config to {self.config_path}: {e}")
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """
         Get the full configuration dictionary.
 
@@ -117,7 +123,7 @@ class ConfigManager:
         with self._lock:
             return copy.deepcopy(self.config) if self.config else copy.deepcopy(DEFAULT_CONFIG)
 
-    def get_monitor_settings(self) -> Dict[str, Any]:
+    def get_monitor_settings(self) -> dict[str, Any]:
         """
         Get monitor configuration.
 
@@ -145,7 +151,7 @@ class ConfigManager:
 
             self.save_config()
 
-    def get_vpn_config(self, vpn_name: str) -> Optional[Dict[str, Any]]:
+    def get_vpn_config(self, vpn_name: str) -> Optional[dict[str, Any]]:
         """
         Get configuration for a specific VPN.
 
@@ -162,7 +168,7 @@ class ConfigManager:
                     return vpn.copy()
             return None
 
-    def get_all_vpns(self) -> List[Dict[str, Any]]:
+    def get_all_vpns(self) -> list[dict[str, Any]]:
         """
         Get all VPN configurations.
 
@@ -172,7 +178,7 @@ class ConfigManager:
         with self._lock:
             return [vpn.copy() for vpn in self.config.get('vpns', [])]
 
-    def update_vpn_config(self, vpn_name: str, vpn_config: Dict[str, Any]) -> None:
+    def update_vpn_config(self, vpn_name: str, vpn_config: dict[str, Any]) -> None:
         """
         Update or add a VPN configuration.
 
@@ -246,7 +252,7 @@ class ConfigManager:
             logger.debug(f"Updated window geometry: {x},{y} {width}x{height}")
             self.save_config()
 
-    def get_window_geometry(self) -> Dict[str, Optional[int]]:
+    def get_window_geometry(self) -> dict[str, Optional[int]]:
         """
         Get window geometry settings.
 
@@ -256,7 +262,46 @@ class ConfigManager:
         with self._lock:
             return self.config.get('window', {}).get('geometry', DEFAULT_CONFIG['window']['geometry']).copy()
 
-    def _merge_with_defaults(self, loaded_config: Dict[str, Any]) -> Dict[str, Any]:
+    def get_startup_settings(self) -> dict[str, Any]:
+        with self._lock:
+            return self.config.get('startup', DEFAULT_CONFIG['startup']).copy()
+
+    def update_startup_settings(self, **kwargs) -> None:
+        with self._lock:
+            if 'startup' not in self.config:
+                self.config['startup'] = copy.deepcopy(DEFAULT_CONFIG['startup'])
+
+            for key, value in kwargs.items():
+                if key in self.config['startup']:
+                    self.config['startup'][key] = value
+                    logger.debug(f"Updated startup setting: {key}={value}")
+
+            self.save_config()
+
+    def get_restore_vpns(self) -> list[str]:
+        with self._lock:
+            return list(self.config.get('startup', {}).get('restore_vpns', []))
+
+    def add_restore_vpn(self, vpn_name: str) -> None:
+        with self._lock:
+            if 'startup' not in self.config:
+                self.config['startup'] = copy.deepcopy(DEFAULT_CONFIG['startup'])
+
+            restore_list = self.config['startup'].setdefault('restore_vpns', [])
+            if vpn_name not in restore_list:
+                restore_list.append(vpn_name)
+                logger.debug(f"Added VPN to restore list: {vpn_name}")
+                self.save_config()
+
+    def remove_restore_vpn(self, vpn_name: str) -> None:
+        with self._lock:
+            restore_list = self.config.get('startup', {}).get('restore_vpns', [])
+            if vpn_name in restore_list:
+                restore_list.remove(vpn_name)
+                logger.debug(f"Removed VPN from restore list: {vpn_name}")
+                self.save_config()
+
+    def _merge_with_defaults(self, loaded_config: dict[str, Any]) -> dict[str, Any]:
         """
         Merge loaded configuration with defaults to handle missing fields.
 

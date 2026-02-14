@@ -1,19 +1,22 @@
 """
-GUI for VPN Toggle v3.1
+GUI for VPN Toggle v3.2
 """
 import logging
+import shutil
 from datetime import datetime
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QCheckBox, QTextEdit,
     QScrollArea, QFrame, QMessageBox, QSpinBox,
     QGroupBox, QDialog, QDialogButtonBox, QFormLayout,
-    QLineEdit, QComboBox, QSplitter
+    QLineEdit, QComboBox, QSplitter, QSystemTrayIcon,
+    QMenu, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtGui import QFont, QTextCursor, QIcon, QAction
 
 from .config import ConfigManager
 from .vpn_manager import VPNManager
@@ -132,6 +135,8 @@ class VPNWidget(QFrame):
                     self.vpn_manager.get_connection_timestamp(self.vpn_name)
                     or datetime.now()
                 )
+                # Track as active in restore list
+                self.config_manager.add_restore_vpn(self.vpn_name)
             self.update_connection_time()
 
             # Get assert status if monitor is running
@@ -204,8 +209,10 @@ class VPNWidget(QFrame):
         logger.info(f"Connecting to {self.vpn_name}")
         success, message = self.vpn_manager.connect_vpn(self.vpn_name)
 
-        if success and self.monitor_thread:
-            self.monitor_thread.reset_vpn_state(self.vpn_name)
+        if success:
+            if self.monitor_thread:
+                self.monitor_thread.reset_vpn_state(self.vpn_name)
+            self.config_manager.add_restore_vpn(self.vpn_name)
 
         self.update_status()
 
@@ -213,6 +220,7 @@ class VPNWidget(QFrame):
         """Handle disconnect button click"""
         logger.info(f"Disconnecting from {self.vpn_name}")
         self.vpn_manager.disconnect_vpn(self.vpn_name)
+        self.config_manager.remove_restore_vpn(self.vpn_name)
         self.update_status()
 
     def on_bounce(self):
@@ -253,7 +261,7 @@ class VPNConfigDialog(QDialog):
         self.setMinimumWidth(500)
         self.setup_ui()
 
-    def _find_assert_by_type(self, vpn_config: Dict, assert_type: str) -> Optional[Dict]:
+    def _find_assert_by_type(self, vpn_config: dict, assert_type: str) -> Optional[dict]:
         """
         Find an assert configuration by type.
 
@@ -361,7 +369,7 @@ class VPNConfigDialog(QDialog):
 
         self.setLayout(layout)
 
-    def get_config(self) -> Dict:
+    def get_config(self) -> dict:
         """Get the configured VPN settings"""
         asserts = []
 
@@ -392,56 +400,133 @@ class VPNConfigDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    """Dialog for configuring monitor settings"""
+    """Dialog for configuring monitor and startup settings"""
+
+    AUTOSTART_DIR = Path.home() / ".config" / "autostart"
+    AUTOSTART_FILE = AUTOSTART_DIR / "vpn-toggle-v2.desktop"
 
     def __init__(self, config_manager: ConfigManager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
-        self.setWindowTitle("Monitor Settings")
+        self.setWindowTitle("Settings")
         self.setup_ui()
 
     def setup_ui(self):
         """Setup dialog UI"""
-        layout = QFormLayout()
+        layout = QVBoxLayout()
 
-        # Get current settings
+        # Monitor settings group
+        monitor_group = QGroupBox("Monitor Settings")
+        monitor_layout = QFormLayout()
+
         monitor_settings = self.config_manager.get_monitor_settings()
 
-        # Check interval
         self.interval_spinbox = QSpinBox()
         self.interval_spinbox.setRange(30, 600)
         self.interval_spinbox.setValue(monitor_settings.get('check_interval_seconds', 120))
         self.interval_spinbox.setSuffix(" seconds")
-        layout.addRow("Check Interval:", self.interval_spinbox)
+        monitor_layout.addRow("Check Interval:", self.interval_spinbox)
 
-        # Grace period
         self.grace_spinbox = QSpinBox()
         self.grace_spinbox.setRange(5, 60)
         self.grace_spinbox.setValue(monitor_settings.get('grace_period_seconds', 15))
         self.grace_spinbox.setSuffix(" seconds")
-        layout.addRow("Grace Period:", self.grace_spinbox)
+        monitor_layout.addRow("Grace Period:", self.grace_spinbox)
 
-        # Failure threshold
         self.threshold_spinbox = QSpinBox()
         self.threshold_spinbox.setRange(1, 10)
         self.threshold_spinbox.setValue(monitor_settings.get('failure_threshold', 3))
-        layout.addRow("Failure Threshold:", self.threshold_spinbox)
+        monitor_layout.addRow("Failure Threshold:", self.threshold_spinbox)
+
+        monitor_group.setLayout(monitor_layout)
+        layout.addWidget(monitor_group)
+
+        # Startup settings group
+        startup_group = QGroupBox("Startup Settings")
+        startup_layout = QVBoxLayout()
+
+        startup_settings = self.config_manager.get_startup_settings()
+
+        self.autostart_checkbox = QCheckBox("Start VPN Toggle on login")
+        self.autostart_checkbox.setChecked(startup_settings.get('autostart', False))
+        startup_layout.addWidget(self.autostart_checkbox)
+
+        self.minimized_checkbox = QCheckBox("Start minimized to system tray")
+        self.minimized_checkbox.setChecked(startup_settings.get('start_minimized', False))
+        self.minimized_checkbox.setEnabled(startup_settings.get('autostart', False))
+        startup_layout.addWidget(self.minimized_checkbox)
+
+        self.autostart_checkbox.stateChanged.connect(
+            lambda state: self.minimized_checkbox.setEnabled(state == Qt.CheckState.Checked.value)
+        )
+
+        self.restore_checkbox = QCheckBox("Restore VPN connections on startup")
+        self.restore_checkbox.setChecked(startup_settings.get('restore_connections', False))
+        startup_layout.addWidget(self.restore_checkbox)
+
+        startup_group.setLayout(startup_layout)
+        layout.addWidget(startup_group)
 
         # Buttons
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
-        layout.addRow(button_box)
+        layout.addWidget(button_box)
 
         self.setLayout(layout)
 
-    def get_settings(self) -> Dict:
-        """Get the configured settings"""
+    def get_settings(self) -> dict:
+        """Get the configured monitor settings"""
         return {
             'check_interval_seconds': self.interval_spinbox.value(),
             'grace_period_seconds': self.grace_spinbox.value(),
             'failure_threshold': self.threshold_spinbox.value()
         }
+
+    def get_startup_settings(self) -> dict:
+        """Get the configured startup settings"""
+        return {
+            'autostart': self.autostart_checkbox.isChecked(),
+            'start_minimized': self.minimized_checkbox.isChecked(),
+            'restore_connections': self.restore_checkbox.isChecked(),
+        }
+
+    def apply_autostart(self) -> None:
+        """Create or remove the XDG autostart desktop file."""
+        if self.autostart_checkbox.isChecked():
+            self._create_autostart_file()
+        else:
+            self._remove_autostart_file()
+
+    def _create_autostart_file(self) -> None:
+        vpn_toggle_bin = shutil.which("vpn-toggle-v2")
+        if not vpn_toggle_bin:
+            vpn_toggle_bin = "vpn-toggle-v2"
+
+        exec_line = vpn_toggle_bin
+        if self.minimized_checkbox.isChecked():
+            exec_line += " --minimized"
+
+        content = (
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=VPN Toggle\n"
+            "Comment=VPN connection manager and health monitor\n"
+            f"Exec={exec_line}\n"
+            "Icon=vpn-toggle-v2\n"
+            "Terminal=false\n"
+            "Categories=Network;\n"
+            "X-GNOME-Autostart-enabled=true\n"
+        )
+
+        self.AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
+        self.AUTOSTART_FILE.write_text(content)
+        logger.info(f"Created autostart file: {self.AUTOSTART_FILE}")
+
+    def _remove_autostart_file(self) -> None:
+        if self.AUTOSTART_FILE.exists():
+            self.AUTOSTART_FILE.unlink()
+            logger.info(f"Removed autostart file: {self.AUTOSTART_FILE}")
 
 
 class VPNToggleMainWindow(QMainWindow):
@@ -449,19 +534,25 @@ class VPNToggleMainWindow(QMainWindow):
 
     MAX_LOG_LINES = 500
 
-    def __init__(self, config_manager: ConfigManager, vpn_manager: VPNManager):
+    def __init__(self, config_manager: ConfigManager, vpn_manager: VPNManager,
+                 app_icon: Optional[QIcon] = None, start_minimized: bool = False):
         super().__init__()
         self.config_manager = config_manager
         self.vpn_manager = vpn_manager
         self.monitor_thread = None
-        self.vpn_widgets: Dict[str, VPNWidget] = {}
+        self.vpn_widgets: dict[str, VPNWidget] = {}
         self.metrics_collector = MetricsCollector()
         self.graph_widget = None
+        self._app_icon = app_icon or QIcon()
+        self._tray_available = False
+        self._quitting = False
 
-        self.setWindowTitle("VPN Monitor v3.1")
+        self.setWindowTitle("VPN Monitor v3.2")
         self.setup_ui()
         self.setup_monitor()
+        self.setup_tray()
         self.restore_geometry()
+        self._restore_vpn_connections()
 
         # Setup status update timer
         self.status_timer = QTimer()
@@ -496,6 +587,11 @@ class VPNToggleMainWindow(QMainWindow):
         settings_btn = QPushButton("Settings")
         settings_btn.clicked.connect(self.on_settings_clicked)
         control_layout.addWidget(settings_btn)
+
+        # Quit button
+        quit_btn = QPushButton("Quit")
+        quit_btn.clicked.connect(self.quit_application)
+        control_layout.addWidget(quit_btn)
 
         main_layout.addLayout(control_layout)
 
@@ -599,6 +695,108 @@ class VPNToggleMainWindow(QMainWindow):
             self.monitor_thread.start()
             self.append_log("Monitor thread started")
 
+    def setup_tray(self):
+        """Setup system tray icon and context menu."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            logger.info("System tray not available, close-to-tray disabled")
+            self._tray_available = False
+            return
+
+        self._tray_available = True
+        self.tray_icon = QSystemTrayIcon(self._app_icon, self)
+        self.tray_icon.setToolTip("VPN Monitor")
+        self.tray_icon.activated.connect(self._on_tray_activated)
+
+        # Context menu
+        tray_menu = QMenu()
+
+        self._tray_show_action = QAction("Hide", self)
+        self._tray_show_action.triggered.connect(self._toggle_window_visibility)
+        tray_menu.addAction(self._tray_show_action)
+
+        self._tray_monitor_action = QAction("Monitor Mode", self)
+        self._tray_monitor_action.setCheckable(True)
+        self._tray_monitor_action.setChecked(self.monitor_checkbox.isChecked())
+        self._tray_monitor_action.toggled.connect(self.monitor_checkbox.setChecked)
+        self.monitor_checkbox.toggled.connect(self._tray_monitor_action.setChecked)
+        tray_menu.addAction(self._tray_monitor_action)
+
+        tray_menu.addSeparator()
+
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self.quit_application)
+        tray_menu.addAction(quit_action)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.show()
+        self._update_tray_tooltip()
+
+    def _on_tray_activated(self, reason):
+        """Handle tray icon activation (click)."""
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._toggle_window_visibility()
+
+    def _toggle_window_visibility(self):
+        """Toggle main window show/hide."""
+        if self.isVisible():
+            self.save_geometry()
+            self.hide()
+            self._tray_show_action.setText("Show")
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            self._tray_show_action.setText("Hide")
+
+    def _update_tray_tooltip(self):
+        """Update the tray icon tooltip with current status."""
+        if not self._tray_available:
+            return
+        active_count = sum(
+            1 for w in self.vpn_widgets.values()
+            if self.vpn_manager.is_vpn_active(w.vpn_name)
+        )
+        self.tray_icon.setToolTip(f"VPN Monitor - {active_count} VPN(s) active")
+
+    def _restore_vpn_connections(self):
+        """Restore VPN connections from the saved restore list on startup."""
+        startup = self.config_manager.get_startup_settings()
+        if not startup.get('restore_connections', False):
+            return
+
+        restore_list = self.config_manager.get_restore_vpns()
+        if not restore_list:
+            return
+
+        self.append_log(f"Restoring {len(restore_list)} VPN connection(s)...")
+        for vpn_name in restore_list:
+            if self.vpn_manager.is_vpn_active(vpn_name):
+                self.append_log(f"Restoring VPN: {vpn_name}... Already active")
+                continue
+
+            success, message = self.vpn_manager.connect_vpn(vpn_name)
+            if success:
+                self.append_log(f"Restoring VPN: {vpn_name}... Connected")
+                if self.monitor_thread:
+                    self.monitor_thread.reset_vpn_state(vpn_name)
+            else:
+                self.append_log(f"Restoring VPN: {vpn_name}... Failed: {message}")
+
+    def quit_application(self):
+        """Fully quit the application (stop monitor, save geometry, exit process)."""
+        self._quitting = True
+        self.save_geometry()
+
+        if self.monitor_thread and self.monitor_thread.isRunning():
+            self.monitor_thread.stop()
+            logger.info("Monitor thread stopped")
+
+        if self._tray_available:
+            self.tray_icon.hide()
+
+        QApplication.quit()
+
     def on_monitor_toggled(self, state):
         """Handle monitor toggle"""
         enabled = state == Qt.CheckState.Checked.value
@@ -619,7 +817,12 @@ class VPNToggleMainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             settings = dialog.get_settings()
             self.config_manager.update_monitor_settings(**settings)
-            self.append_log(f"Settings updated: {settings}")
+
+            startup_settings = dialog.get_startup_settings()
+            self.config_manager.update_startup_settings(**startup_settings)
+            dialog.apply_autostart()
+
+            self.append_log(f"Settings updated")
 
             # Notify monitor of config change
             if self.monitor_thread and self.monitor_thread.isRunning():
@@ -692,6 +895,7 @@ class VPNToggleMainWindow(QMainWindow):
         """Update status for all VPN widgets"""
         for widget in self.vpn_widgets.values():
             widget.update_status()
+        self._update_tray_tooltip()
 
     def append_log(self, message: str):
         """Append message to activity log, pruning oldest lines beyond MAX_LOG_LINES"""
@@ -732,13 +936,17 @@ class VPNToggleMainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        """Handle window close event"""
-        # Save geometry
-        self.save_geometry()
-
-        # Stop monitor thread
-        if self.monitor_thread and self.monitor_thread.isRunning():
-            self.monitor_thread.stop()
-            logger.info("Monitor thread stopped")
-
-        event.accept()
+        """Handle window close event — hide to tray if available, otherwise quit."""
+        if self._tray_available and not self._quitting:
+            self.save_geometry()
+            self.hide()
+            self._tray_show_action.setText("Show")
+            event.ignore()
+        else:
+            self.save_geometry()
+            if self.monitor_thread and self.monitor_thread.isRunning():
+                self.monitor_thread.stop()
+                logger.info("Monitor thread stopped")
+            if self._tray_available:
+                self.tray_icon.hide()
+            event.accept()

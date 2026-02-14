@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VPN Toggle v2.0 - Integrated VPN Manager and Monitor
+VPN Toggle v3.2 - Integrated VPN Manager and Monitor
 
 Main entry point for the application.
 """
@@ -42,6 +42,11 @@ def main():
         action='version',
         version=f'VPN Toggle v{__version__}'
     )
+    parser.add_argument(
+        '--minimized',
+        action='store_true',
+        help='Start minimized to system tray (window hidden)'
+    )
     # Legacy compatibility: accept VPN name argument but ignore it
     parser.add_argument(
         'vpn_name',
@@ -76,9 +81,9 @@ def main():
         app.setDesktopFileName("vpn-toggle-v2")
 
         # Set application icon - render SVG to pixmaps for reliable display
+        icon = QIcon()
         icon_path = Path(__file__).parent / "vpn_toggle" / "icon.svg"
         if icon_path.exists():
-            icon = QIcon()
             renderer = QSvgRenderer(str(icon_path))
             for size in (16, 24, 32, 48, 64, 128):
                 pixmap = QPixmap(QSize(size, size))
@@ -89,10 +94,14 @@ def main():
                 icon.addPixmap(pixmap)
             app.setWindowIcon(icon)
 
-        window = VPNToggleMainWindow(config_manager, vpn_manager)
-        window.show()
+        window = VPNToggleMainWindow(
+            config_manager, vpn_manager, app_icon=icon,
+            start_minimized=args.minimized,
+        )
+        if not args.minimized:
+            window.show()
 
-        logger.info("VPN Toggle v2.0 started")
+        logger.info("VPN Toggle v3.2 started")
         sys.exit(app.exec())
 
     except RuntimeError as e:
