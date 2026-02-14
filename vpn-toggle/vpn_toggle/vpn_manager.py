@@ -201,6 +201,37 @@ class VPNManager:
 
         return False
 
+    def get_connection_timestamp(self, vpn_name: str) -> Optional[datetime]:
+        """
+        Get the timestamp when the VPN connection was last activated.
+
+        Uses nmcli's connection.timestamp field which records the epoch time
+        of the last successful activation.
+
+        Args:
+            vpn_name: Name of the VPN connection
+
+        Returns:
+            datetime of last activation, or None if unavailable
+        """
+        success, output = self._run_nmcli(
+            ['-t', '-f', 'connection.timestamp', 'connection', 'show', vpn_name]
+        )
+        if not success or not output:
+            return None
+
+        for line in output.split('\n'):
+            if 'connection.timestamp' in line:
+                parts = line.split(':', 1)
+                if len(parts) >= 2:
+                    try:
+                        ts = int(parts[1].strip())
+                        if ts > 0:
+                            return datetime.fromtimestamp(ts)
+                    except (ValueError, OSError):
+                        pass
+        return None
+
     def connect_vpn(self, vpn_name: str) -> Tuple[bool, str]:
         """
         Connect to a VPN.

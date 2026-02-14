@@ -11,6 +11,8 @@ from unittest.mock import patch, MagicMock
 
 from PyQt6.QtWidgets import QApplication
 
+import pyqtgraph as pg
+
 from vpn_toggle.metrics import MetricsCollector, DataPoint, AssertDetail
 from vpn_toggle.graph import MetricsGraphWidget, VPN_COLORS
 
@@ -147,3 +149,28 @@ class TestHistoricalDataLoad:
         widget = MetricsGraphWidget(collector)
 
         assert "historical-vpn" in widget._vpn_lines
+
+
+class TestDateAxisItem:
+
+    def test_bottom_axis_is_date_axis(self, graph_widget):
+        """X-axis uses DateAxisItem for human-readable time labels."""
+        bottom_axis = graph_widget._plot_widget.getAxis('bottom')
+        assert isinstance(bottom_axis, pg.DateAxisItem)
+
+    def test_x_values_are_epoch_seconds(self, graph_widget, collector):
+        """Data points are plotted using Unix epoch timestamps, not relative offsets."""
+        p1 = _make_point(timestamp="2026-02-12T14:00:00")
+        p2 = _make_point(timestamp="2026-02-12T14:02:00")
+        collector.record(p1)
+        collector.record(p2)
+        graph_widget.add_data_point(p1)
+        graph_widget.add_data_point(p2)
+
+        line = graph_widget._vpn_lines["test-vpn"]
+        x_data, _ = line.getData()
+
+        # X values should be epoch timestamps (large numbers), not small offsets
+        from datetime import datetime
+        expected_first = datetime.fromisoformat("2026-02-12T14:00:00").timestamp()
+        assert abs(x_data[0] - expected_first) < 1.0

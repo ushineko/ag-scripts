@@ -2,6 +2,7 @@
 Tests for GUI components
 """
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 import tempfile
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 
 from vpn_toggle.config import ConfigManager
-from vpn_toggle.gui import VPNToggleMainWindow
+from vpn_toggle.gui import VPNToggleMainWindow, VPNWidget
 
 
 @pytest.fixture(scope="session")
@@ -109,3 +110,53 @@ class TestAppendLog:
         assert hasattr(VPNToggleMainWindow, 'MAX_LOG_LINES')
         assert VPNToggleMainWindow.MAX_LOG_LINES > 0
         assert VPNToggleMainWindow.MAX_LOG_LINES <= 10000
+
+
+class TestConnectionTime:
+    """Test suite for VPN connection time counter."""
+
+    @pytest.fixture
+    def vpn_widget(self, qapp, config_manager):
+        """Create a VPNWidget with mocked VPN manager."""
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='/usr/bin/nmcli\n')
+            from vpn_toggle.vpn_manager import VPNManager
+            vm = VPNManager()
+
+        with patch.object(vm, 'is_vpn_active', return_value=False):
+            with patch.object(vm, 'get_connection_timestamp', return_value=None):
+                widget = VPNWidget("test-vpn", "Test VPN", vm, config_manager)
+        return widget
+
+    def test_connection_time_label_exists(self, vpn_widget):
+        """VPN widget has a connection time label."""
+        assert hasattr(vpn_widget, 'connection_time_label')
+        assert vpn_widget.connection_time_label.text() == ""
+
+    def test_connection_time_shows_elapsed(self, vpn_widget):
+        """Connection time label shows DD:HH:MM:SS format when connected."""
+        vpn_widget._connected_since = datetime.now() - timedelta(
+            days=1, hours=2, minutes=33, seconds=45
+        )
+        vpn_widget.update_connection_time()
+
+        text = vpn_widget.connection_time_label.text()
+        assert text == "01:02:33:45"
+
+    def test_connection_time_clears_when_disconnected(self, vpn_widget):
+        """Connection time clears when _connected_since is None."""
+        vpn_widget._connected_since = datetime.now() - timedelta(hours=1)
+        vpn_widget.update_connection_time()
+        assert vpn_widget.connection_time_label.text() != ""
+
+        vpn_widget._connected_since = None
+        vpn_widget.update_connection_time()
+        assert vpn_widget.connection_time_label.text() == ""
+
+    def test_connection_time_zero(self, vpn_widget):
+        """Fresh connection shows 00:00:00:00."""
+        vpn_widget._connected_since = datetime.now()
+        vpn_widget.update_connection_time()
+
+        text = vpn_widget.connection_time_label.text()
+        assert text == "00:00:00:00"
