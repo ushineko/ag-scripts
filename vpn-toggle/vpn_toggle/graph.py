@@ -66,9 +66,11 @@ class MetricsGraphWidget(QWidget):
         header.addWidget(self._clear_btn)
         layout.addLayout(header)
 
-        # pyqtgraph plot widget
+        # pyqtgraph plot widget with time-of-day X axis
         pg.setConfigOptions(antialias=True)
-        self._plot_widget = pg.PlotWidget(title="Probe Latency")
+        date_axis = pg.DateAxisItem(orientation='bottom')
+        self._plot_widget = pg.PlotWidget(title="Probe Latency",
+                                          axisItems={'bottom': date_axis})
         self._plot_widget.setLabel('left', 'Latency', units='ms')
         self._plot_widget.setLabel('bottom', 'Time')
         self._plot_widget.setBackground('#1e1e1e')
@@ -127,15 +129,14 @@ class MetricsGraphWidget(QWidget):
         if not points:
             return
 
-        # Convert timestamps to sequential x values (seconds from first point)
-        base_time = self._parse_ts(points[0].timestamp)
+        # Convert timestamps to Unix epoch seconds for DateAxisItem
         x_vals = []
         y_vals = []
         pass_x, pass_y = [], []
         fail_x, fail_y = [], []
 
         for p in points:
-            t = (self._parse_ts(p.timestamp) - base_time).total_seconds()
+            t = self._parse_ts(p.timestamp).timestamp()
             x_vals.append(t)
             y_vals.append(p.latency_ms)
             if p.success:
@@ -154,7 +155,7 @@ class MetricsGraphWidget(QWidget):
 
         # Clear old bounce markers and re-add all
         self._clear_bounce_markers()
-        self._add_bounce_markers(points, base_time, y_arr)
+        self._add_bounce_markers(points, y_arr)
 
         # Auto-scroll to show latest data
         if len(x_vals) > self.visible_points:
@@ -163,7 +164,7 @@ class MetricsGraphWidget(QWidget):
             padding = (x_max - x_min) * 0.05
             self._plot_widget.setXRange(x_min - padding, x_max + padding)
 
-    def _add_bounce_markers(self, points: list[DataPoint], base_time: datetime,
+    def _add_bounce_markers(self, points: list[DataPoint],
                             y_arr: np.ndarray) -> None:
         """Add vertical dashed lines for bounce events."""
         y_max = float(y_arr.max()) if len(y_arr) > 0 else 1000.0
@@ -171,7 +172,7 @@ class MetricsGraphWidget(QWidget):
         for p in points:
             if not p.bounce_triggered:
                 continue
-            t = (self._parse_ts(p.timestamp) - base_time).total_seconds()
+            t = self._parse_ts(p.timestamp).timestamp()
 
             line = pg.InfiniteLine(
                 pos=t, angle=90,

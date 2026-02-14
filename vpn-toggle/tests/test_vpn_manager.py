@@ -243,6 +243,49 @@ class TestVPNManager:
         assert status.ip_address is None
 
     @patch('subprocess.run')
+    def test_get_connection_timestamp_returns_datetime(self, mock_run):
+        """Test that a valid epoch timestamp is returned as datetime"""
+        from datetime import datetime
+
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout='/usr/bin/nmcli\n'),
+            MagicMock(returncode=0, stdout='connection.timestamp:1739371200\n', stderr='')
+        ]
+
+        manager = VPNManager()
+        ts = manager.get_connection_timestamp('test_vpn')
+
+        assert ts is not None
+        assert isinstance(ts, datetime)
+        assert ts == datetime.fromtimestamp(1739371200)
+
+    @patch('subprocess.run')
+    def test_get_connection_timestamp_returns_none_when_zero(self, mock_run):
+        """Test that a zero timestamp returns None (never connected)"""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout='/usr/bin/nmcli\n'),
+            MagicMock(returncode=0, stdout='connection.timestamp:0\n', stderr='')
+        ]
+
+        manager = VPNManager()
+        ts = manager.get_connection_timestamp('test_vpn')
+
+        assert ts is None
+
+    @patch('subprocess.run')
+    def test_get_connection_timestamp_returns_none_on_failure(self, mock_run):
+        """Test that nmcli failure returns None"""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout='/usr/bin/nmcli\n'),
+            MagicMock(returncode=1, stdout='', stderr='Error')
+        ]
+
+        manager = VPNManager()
+        ts = manager.get_connection_timestamp('test_vpn')
+
+        assert ts is None
+
+    @patch('subprocess.run')
     def test_run_nmcli_timeout(self, mock_run):
         """Test nmcli command timeout"""
         import subprocess

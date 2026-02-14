@@ -1,5 +1,5 @@
 """
-GUI for VPN Toggle v3.0
+GUI for VPN Toggle v3.1
 """
 import logging
 from datetime import datetime
@@ -38,6 +38,8 @@ class VPNWidget(QFrame):
         self.monitor_thread = monitor_thread
         self.metrics_collector = metrics_collector
 
+        self._connected_since: Optional[datetime] = None
+
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setup_ui()
         self.update_status()
@@ -66,6 +68,13 @@ class VPNWidget(QFrame):
         # Status text
         self.status_label = QLabel("Disconnected")
         header_layout.addWidget(self.status_label)
+
+        # Connection time counter (DD:HH:MM:SS)
+        self.connection_time_label = QLabel("")
+        self.connection_time_label.setStyleSheet(
+            "color: #aaaaaa; font-size: 10px; font-family: monospace;"
+        )
+        header_layout.addWidget(self.connection_time_label)
 
         layout.addLayout(header_layout)
 
@@ -117,6 +126,14 @@ class VPNWidget(QFrame):
             self.disconnect_btn.setEnabled(True)
             self.bounce_btn.setEnabled(True)
 
+            # Track connection start time (fetch from NM once, then cache)
+            if self._connected_since is None:
+                self._connected_since = (
+                    self.vpn_manager.get_connection_timestamp(self.vpn_name)
+                    or datetime.now()
+                )
+            self.update_connection_time()
+
             # Get assert status if monitor is running
             if self.monitor_thread:
                 monitor_status = self.monitor_thread.get_vpn_status(self.vpn_name)
@@ -162,6 +179,25 @@ class VPNWidget(QFrame):
             self.bounce_btn.setEnabled(False)
             self.info_label.setText("")
             self.stats_label.setText("")
+            self._connected_since = None
+            self.connection_time_label.setText("")
+
+    def update_connection_time(self):
+        """Update the connection time counter display (DD:HH:MM:SS)."""
+        if self._connected_since is None:
+            self.connection_time_label.setText("")
+            return
+
+        total_seconds = int((datetime.now() - self._connected_since).total_seconds())
+        if total_seconds < 0:
+            total_seconds = 0
+        days = total_seconds // 86400
+        hours = (total_seconds % 86400) // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        self.connection_time_label.setText(
+            f"{days:02d}:{hours:02d}:{minutes:02d}:{seconds:02d}"
+        )
 
     def on_connect(self):
         """Handle connect button click"""
@@ -422,7 +458,7 @@ class VPNToggleMainWindow(QMainWindow):
         self.metrics_collector = MetricsCollector()
         self.graph_widget = None
 
-        self.setWindowTitle("VPN Monitor v3.0")
+        self.setWindowTitle("VPN Monitor v3.1")
         self.setup_ui()
         self.setup_monitor()
         self.restore_geometry()
@@ -431,6 +467,11 @@ class VPNToggleMainWindow(QMainWindow):
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.update_all_vpn_status)
         self.status_timer.start(5000)  # Update every 5 seconds
+
+        # 1-second timer for real-time connection time counters
+        self.connection_time_timer = QTimer()
+        self.connection_time_timer.timeout.connect(self._update_connection_times)
+        self.connection_time_timer.start(1000)
 
     def setup_ui(self):
         """Setup the main window UI with horizontal split (VPN list | Graph)"""
@@ -641,6 +682,11 @@ class VPNToggleMainWindow(QMainWindow):
         # Update the VPN widget stats
         if vpn_name in self.vpn_widgets:
             self.vpn_widgets[vpn_name].update_status()
+
+    def _update_connection_times(self):
+        """Tick all VPN connection time counters (called every second)."""
+        for widget in self.vpn_widgets.values():
+            widget.update_connection_time()
 
     def update_all_vpn_status(self):
         """Update status for all VPN widgets"""

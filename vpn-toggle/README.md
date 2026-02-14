@@ -3,6 +3,7 @@
 A comprehensive VPN management tool with integrated monitoring and health checking for NetworkManager connections.
 
 ## Table of Contents
+- [Version 3.1 (UX Improvements)](#version-31-ux-improvements)
 - [Version 3.0 (Metrics Dashboard)](#version-30-metrics-dashboard)
 - [Version 2.0 (Monitor Mode)](#version-20-monitor-mode)
 - [Features](#features-v20)
@@ -11,6 +12,23 @@ A comprehensive VPN management tool with integrated monitoring and health checki
 - [Configuration](#configuration)
 - [Version 1.0 (Legacy)](#version-10-legacy)
 - [Changelog](#changelog)
+
+## Version 3.1 (UX Improvements)
+
+VPN Toggle v3.1 improves the metrics dashboard with human-readable time labels and adds real-time connection duration tracking.
+
+### Graph Time Axis
+
+- **Real Clock Time**: X-axis now displays actual time of day (e.g., 17:00, 17:05) instead of seconds-since-start offset
+- Uses pyqtgraph's `DateAxisItem` which auto-scales labels based on zoom level (HH:MM for hours, HH:MM:SS when zoomed in)
+
+### Connection Time Counter
+
+- **Live Duration Display**: Each connected VPN shows a real-time `DD:HH:MM:SS` counter in the header row
+- Fetches actual activation timestamp from NetworkManager on first detection, so the counter is accurate even if the app starts after the VPN connected
+- Updates every second; clears automatically on disconnect
+
+---
 
 ## Version 3.0 (Metrics Dashboard)
 
@@ -212,6 +230,12 @@ The original bash script is still available as `toggle_vpn.sh` for backward comp
 Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
+
+### v3.1.0
+
+- **Graph Time Axis**: X-axis shows real clock time (HH:MM) via `DateAxisItem` instead of seconds-since-start offset
+- **Connection Time Counter**: Live `DD:HH:MM:SS` duration display per VPN, fetches activation time from NetworkManager
+- 119 total tests
 
 ### v3.0.0
 - **Metrics Dashboard**: Real-time time-series graph of probe latency using pyqtgraph
