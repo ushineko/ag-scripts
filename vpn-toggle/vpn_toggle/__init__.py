@@ -6,4 +6,4 @@ monitoring, assert-based health checking, real-time metrics graphing, and system
 tray integration.
 """
 
-__version__ = "3.2.0"
+__version__ = "3.2.1"

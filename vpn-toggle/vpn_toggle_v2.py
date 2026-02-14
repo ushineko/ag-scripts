@@ -13,12 +13,15 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 from vpn_toggle import __version__
 from vpn_toggle.config import ConfigManager
 from vpn_toggle.vpn_manager import VPNManager
 from vpn_toggle.gui import VPNToggleMainWindow
 from vpn_toggle.utils import setup_logging
+
+SINGLE_INSTANCE_SOCKET = "vpn-toggle-v2"
 
 
 def main():
@@ -80,12 +83,31 @@ def main():
         app.setApplicationVersion(__version__)
         app.setDesktopFileName("vpn-toggle-v2")
 
+        # Single-instance guard: check if already running
+        socket = QLocalSocket()
+        socket.connectToServer(SINGLE_INSTANCE_SOCKET)
+        if socket.waitForConnected(500):
+            socket.write(b"show")
+            socket.waitForBytesWritten(1000)
+            socket.disconnectFromServer()
+            logger.info("Another instance is already running, activating it")
+            print("VPN Toggle is already running. Bringing existing window to front.")
+            sys.exit(0)
+        socket.deleteLater()
+
+        # Create single-instance server
+        server = QLocalServer(app)
+        QLocalServer.removeServer(SINGLE_INSTANCE_SOCKET)
+        if not server.listen(SINGLE_INSTANCE_SOCKET):
+            logger.warning(f"Could not create single-instance server: {server.errorString()}")
+
         # Set application icon - render SVG to pixmaps for reliable display
+        # Resolve symlinks so icon path is correct when launched via ~/.local/bin symlink
         icon = QIcon()
-        icon_path = Path(__file__).parent / "vpn_toggle" / "icon.svg"
+        icon_path = Path(__file__).resolve().parent / "vpn_toggle" / "icon.svg"
         if icon_path.exists():
             renderer = QSvgRenderer(str(icon_path))
-            for size in (16, 24, 32, 48, 64, 128):
+            for size in (16, 22, 24, 32, 48, 64, 128):
                 pixmap = QPixmap(QSize(size, size))
                 pixmap.fill(Qt.GlobalColor.transparent)
                 painter = QPainter(pixmap)
@@ -96,8 +118,21 @@ def main():
 
         window = VPNToggleMainWindow(
             config_manager, vpn_manager, app_icon=icon,
+            icon_path=icon_path if icon_path.exists() else None,
             start_minimized=args.minimized,
         )
+
+        # Connect single-instance server to bring window to front
+        def handle_new_connection():
+            conn = server.nextPendingConnection()
+            if conn:
+                window.show()
+                window.raise_()
+                window.activateWindow()
+                conn.deleteLater()
+
+        server.newConnection.connect(handle_new_connection)
+
         if not args.minimized:
             window.show()
 

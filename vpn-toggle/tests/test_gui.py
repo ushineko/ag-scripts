@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 from PyQt6.QtGui import QIcon
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 from vpn_toggle.config import ConfigManager
 from vpn_toggle.gui import VPNToggleMainWindow, VPNWidget, SettingsDialog
@@ -389,3 +390,78 @@ class TestVPNRestore:
                 widget.on_disconnect()
 
         assert "test-vpn" not in config_manager.get_restore_vpns()
+
+
+class TestSingleInstance:
+    """Test suite for single-instance guard (QLocalServer/QLocalSocket)."""
+
+    SOCKET_NAME = "vpn-toggle-v2-test"
+
+    def test_server_listens(self, qapp):
+        """QLocalServer can listen on a named socket."""
+        QLocalServer.removeServer(self.SOCKET_NAME)
+        server = QLocalServer()
+        assert server.listen(self.SOCKET_NAME)
+        server.close()
+        QLocalServer.removeServer(self.SOCKET_NAME)
+
+    def test_client_connects_to_server(self, qapp):
+        """QLocalSocket connects to an existing server."""
+        QLocalServer.removeServer(self.SOCKET_NAME)
+        server = QLocalServer()
+        server.listen(self.SOCKET_NAME)
+
+        socket = QLocalSocket()
+        socket.connectToServer(self.SOCKET_NAME)
+        assert socket.waitForConnected(1000)
+
+        socket.disconnectFromServer()
+        server.close()
+        QLocalServer.removeServer(self.SOCKET_NAME)
+
+    def test_client_fails_when_no_server(self, qapp):
+        """QLocalSocket fails to connect when no server is running."""
+        QLocalServer.removeServer(self.SOCKET_NAME)
+
+        socket = QLocalSocket()
+        socket.connectToServer(self.SOCKET_NAME)
+        connected = socket.waitForConnected(500)
+        assert not connected
+
+    def test_server_receives_connection(self, qapp):
+        """Server's newConnection signal fires when client connects."""
+        QLocalServer.removeServer(self.SOCKET_NAME)
+        server = QLocalServer()
+        server.listen(self.SOCKET_NAME)
+
+        connections = []
+        server.newConnection.connect(lambda: connections.append(True))
+
+        socket = QLocalSocket()
+        socket.connectToServer(self.SOCKET_NAME)
+        socket.waitForConnected(1000)
+
+        qapp.processEvents()
+        assert len(connections) == 1
+
+        socket.disconnectFromServer()
+        server.close()
+        QLocalServer.removeServer(self.SOCKET_NAME)
+
+
+class TestTrayIcon:
+    """Test suite for tray icon rendering with icon_path."""
+
+    def test_icon_path_stored(self, qapp, config_manager, vpn_manager):
+        """VPNToggleMainWindow stores the icon_path attribute."""
+        icon_path = Path("/tmp/test-icon.svg")
+        with patch.object(vpn_manager, 'list_vpns', return_value=[]):
+            window = VPNToggleMainWindow(
+                config_manager, vpn_manager, icon_path=icon_path,
+            )
+            assert window._icon_path == icon_path
+            window.close()
+
+    def test_icon_path_defaults_to_none(self, main_window):
+        """icon_path defaults to None when not provided."""
+        assert main_window._icon_path is None

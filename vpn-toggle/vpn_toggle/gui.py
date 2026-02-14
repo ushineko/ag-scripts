@@ -535,7 +535,8 @@ class VPNToggleMainWindow(QMainWindow):
     MAX_LOG_LINES = 500
 
     def __init__(self, config_manager: ConfigManager, vpn_manager: VPNManager,
-                 app_icon: Optional[QIcon] = None, start_minimized: bool = False):
+                 app_icon: Optional[QIcon] = None, icon_path: Optional[Path] = None,
+                 start_minimized: bool = False):
         super().__init__()
         self.config_manager = config_manager
         self.vpn_manager = vpn_manager
@@ -544,6 +545,7 @@ class VPNToggleMainWindow(QMainWindow):
         self.metrics_collector = MetricsCollector()
         self.graph_widget = None
         self._app_icon = app_icon or QIcon()
+        self._icon_path = icon_path
         self._tray_available = False
         self._quitting = False
 
@@ -703,7 +705,15 @@ class VPNToggleMainWindow(QMainWindow):
             return
 
         self._tray_available = True
-        self.tray_icon = QSystemTrayIcon(self._app_icon, self)
+        self.tray_icon = QSystemTrayIcon(self)
+
+        # Set tray icon from SVG path for reliable KDE/SNI rendering,
+        # falling back to the pre-rendered pixmap QIcon
+        if self._icon_path and self._icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(self._icon_path)))
+        else:
+            self.tray_icon.setIcon(self._app_icon)
+
         self.tray_icon.setToolTip("VPN Monitor")
         self.tray_icon.activated.connect(self._on_tray_activated)
 
