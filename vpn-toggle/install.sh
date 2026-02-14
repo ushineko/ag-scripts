@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Installation script for VPN Toggle v3.0
+# Installation script for VPN Toggle v3.2
 #
 
 set -e
@@ -10,7 +10,7 @@ INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 
-echo "Installing VPN Toggle v3.0..."
+echo "Installing VPN Toggle v3.2..."
 
 # Check dependencies
 echo "Checking dependencies..."
@@ -72,7 +72,7 @@ mkdir -p "$DESKTOP_DIR"
 cat > "$DESKTOP_DIR/vpn-toggle-v2.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=VPN Toggle v3.0
+Name=VPN Toggle v3.2
 Comment=VPN Manager with integrated monitoring
 Exec=$INSTALL_DIR/vpn-toggle-v2
 Icon=$ICON_DIR/vpn-toggle-v2.svg
@@ -89,7 +89,7 @@ fi
 echo ""
 echo "Installation complete!"
 echo ""
-echo "You can now run VPN Toggle v3.0 by:"
+echo "You can now run VPN Toggle v3.2 by:"
 echo "  1. Running: vpn-toggle-v2"
 echo "  2. Searching for 'VPN Toggle' in your application launcher"
 echo ""
