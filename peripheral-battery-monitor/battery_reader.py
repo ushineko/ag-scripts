@@ -2,7 +2,8 @@
 import sys
 import structlog
 import logging
-import json # Added explicit import if missing, though likely in sys already or implied
+import json
+import dbus
 from unittest.mock import MagicMock
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -289,90 +290,13 @@ def get_headset_battery() -> Optional[BatteryInfo]:
 
     return None
 
-def get_airpods_battery_ble() -> Optional[BatteryInfo]:
-    """
-    Scans for AirPods BLE advertisements (Manufacturer 0x004c, Type 0x07) to extract battery.
-    Uses bleak (async) so we wrap it in asyncio.run().
-    """
-    import asyncio
-    try:
-        from bleak import BleakScanner
-    except ImportError:
-        return None
-
-    async def scan():
-        battery_info = None
-        
-        # We need a way to stop scanning once found or timeout
-        stop_event = asyncio.Event()
-
-        def callback(device, advertisement_data):
-            nonlocal battery_info
-            if battery_info: return
-            
-            # Apple Manufacturer ID 0x004c (76)
-            if 76 in advertisement_data.manufacturer_data:
-                data = advertisement_data.manufacturer_data[76]
-                # Check for Type 0x07 (AirPods status)
-                # Structure: 07 [Size] [Device?] ... [BatteryByte] ...
-                # Length varies. Usually > 0.
-                # Heuristic: RSSI check? 
-                
-                # Basic check for now: Is it the connected AirPods?
-                # We can try to match the BLE address if we verify it matches (it often doesn't).
-                # Or just picking the strongest signal 0x004c device?
-                if 27 <= len(data) or (len(data) > 2 and data[0] == 0x07):
-                     # Type 0x07 confirmed
-                     # Attempt decode
-                     # Byte layout is proprietary.
-                     # Common observation: 
-                     # Byte 6-ish? 
-                     # Let's try to match known patterns seen in online scripts.
-                     # "AirStatus" generic decoding:
-                     # It looks for specific bytes.
-                     pass
-                
-                # FOR POC: We just return a dummy strict value if we see ANY Apple device with decent signal
-                # and assume it's the airpods for now, OR rely on a specific byte.
-                # We saw in research that byte 6 or 7 often holds battery.
-                # Let's assume we find it.
-                pass
-
-        # For this iteration, since we don't have the exact decoding verified, 
-        # I will implement a 'Generic Apple BLE' detector that returns "Connected" 
-        # if it sees packets, which confirms presence better than just 'bluetoothctl info' 
-        # (which might be stale).
-        # Actually, let's try to implement the real decoder from open source references if possible.
-        # But for now, let's fail safe: Return None if we can't be sure.
-        pass
-        
-    # Since proper implementation requires a complex parser, and I want to verify 
-    # threading first, I will implement a placeholder that actually SCANs but returns None
-    # unless verified. 
-    # Wait, the user WANTS it to work.
-    # Let's use the 'bluetoothctl' fallback as the primary, and THIS as a 'live' check?
-    # Actually, `bluetoothctl` already gives us 'Connected'.
-    # The BLE scan is mainly for BATTERY LEVEL.
-    # If we can't decode it, this function is useless.
-    
-    # Let's try to import the parsing logic from a known gist.
-    # Reference: https://github.com/delphiki/AirStatus/blob/master/main.py
-    # They check for data starting with 0x0719...
-    
-    return None
-
-# Re-implementing get_airpods_battery to use the best available method
-# Parsing BLE logic inline for simplicity of the file.
-
-async def _ble_scan_for_airpods(target_mac=None):
+async def _ble_scan_for_airpods():
     from bleak import BleakScanner
     
     async def scan():
-        log.debug("starting_ble_scan", target=target_mac)
+        log.debug("starting_ble_scan")
         found_info = None
-        
-        # We need a way to stop scanning once found
-        
+
         def callback(device, advertisement_data):
             nonlocal found_info
             if found_info: return
@@ -386,11 +310,7 @@ async def _ble_scan_for_airpods(target_mac=None):
             
             if hex_data.startswith('0719'):
                 log.debug("found_apple_device", address=device.address, name=device.name, rssi=advertisement_data.rssi, raw=hex_data)
-                
-                # Check MAC match (Removed: MAC is randomized)
-                # if target_mac and device.address.upper() == target_mac.upper():
-                #     log.debug("matched_target_mac")
-                
+
                 try:
                     # Convert back to bytes for easier access
                     raw = bytes.fromhex(hex_data)
@@ -407,7 +327,6 @@ async def _ble_scan_for_airpods(target_mac=None):
                         case_val = b7 & 0x0F 
                         
 
-                        
                         log.debug("parsing_bytes", b6=hex(b6), left=left_val, right=right_val, b7=hex(b7), case=case_val)
                         
                         # Helper to convert 0-10 to %
@@ -466,78 +385,84 @@ async def _ble_scan_for_airpods(target_mac=None):
 
         scanner = BleakScanner(detection_callback=callback)
         await scanner.start()
-        await asyncio.sleep(5.0) 
+        await asyncio.sleep(5.0)
         await scanner.stop()
-        
-        await scanner.stop()
-        
+
         log.debug("scan_finished", result=found_info)
         return found_info
 
     return await scan()
 
-def get_airpods_battery() -> Optional[BatteryInfo]:
-    """
-    Retrieves battery for AirPods using bluetoothctl or BLE scan.
-    """
-    import asyncio
-    
-    # 1. Try bluetoothctl for Connection Status (Fast, reliable for connection)
-    mac = None
-    name = "AirPods"
-    is_connected = False
-    
+def _find_airpods_via_dbus():
+    """Find AirPods connection status and name via BlueZ D-Bus interface."""
+    AUDIO_UUIDS = {
+        '0000110b-0000-1000-8000-00805f9b34fb',  # Audio Sink
+        '0000110d-0000-1000-8000-00805f9b34fb',  # Advanced Audio Distribution
+    }
     try:
-        # Find MAC
-        devices_out = subprocess.run(['bluetoothctl', 'devices'], capture_output=True, text=True).stdout
-        for line in devices_out.split('\n'):
-            if "AirPods" in line:
-                parts = line.split()
-                if len(parts) >= 2:
-                    mac = parts[1]
-                    name_parts = line.split(' ', 2)
-                    if len(name_parts) > 2:
-                        name = name_parts[2]
-                    break
-        
-        if mac:
-            info_out = subprocess.run(['bluetoothctl', 'info', mac], capture_output=True, text=True).stdout
-            if "Connected: yes" in info_out:
-                is_connected = True
-                # Try Parsing Battery Level from BlueZ
-                match = re.search(r'Battery Percentage:\s+(0x[0-9a-fA-F]+|\d+)', info_out)
-                if match:
-                    val_str = match.group(1)
-                    level = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
-                    return BatteryInfo(level=level, status="Discharging", voltage=None, device_name=name)
+        bus = dbus.SystemBus()
+        manager = dbus.Interface(
+            bus.get_object('org.bluez', '/'),
+            'org.freedesktop.DBus.ObjectManager'
+        )
+        objects = manager.GetManagedObjects()
+    except dbus.exceptions.DBusException:
+        return None, "AirPods", False
 
-    except Exception:
-        pass
+    for path, interfaces in objects.items():
+        if 'org.bluez.Device1' not in interfaces:
+            continue
+        dev = interfaces['org.bluez.Device1']
+        alias = str(dev.get('Alias', ''))
+        name = str(dev.get('Name', ''))
+        display_name = alias or name
+        if 'airpods' not in display_name.lower():
+            continue
 
-    # 2. If Connected but no battery (or just paired), Try BLE Scan
-    
-    log.debug("airpods_logic", mac=mac, bluez_connected=is_connected)
+        mac = str(dev.get('Address', ''))
+        connected = bool(dev.get('Connected', False))
+        icon = str(dev.get('Icon', ''))
+        uuids = {str(u) for u in dev.get('UUIDs', [])}
 
-    if mac:  
+        is_audio = bool(AUDIO_UUIDS & uuids) or icon.startswith('audio-')
+        if is_audio:
+            # Check for Battery1 interface on this device
+            if 'org.bluez.Battery1' in interfaces:
+                bat = interfaces['org.bluez.Battery1']
+                level = int(bat.get('Percentage', -1))
+                if level >= 0:
+                    return mac, display_name, connected, level
+            return mac, display_name, connected, None
+
+    return None, "AirPods", False, None
+
+
+def get_airpods_battery() -> Optional[BatteryInfo]:
+    """Retrieves battery for AirPods via D-Bus connection check + BLE advertisement scan."""
+    # 1. Check connection status via D-Bus (fast, stable)
+    mac, name, is_connected, dbus_battery = _find_airpods_via_dbus()
+
+    # If D-Bus has battery level directly (Battery1 interface), use it
+    if dbus_battery is not None and dbus_battery >= 0:
+        return BatteryInfo(level=dbus_battery, status="Discharging", voltage=None, device_name=name)
+
+    log.debug("airpods_logic", mac=mac, dbus_connected=is_connected)
+
+    # 2. Try BLE advertisement scan for granular L/R/Case battery
+    if is_connected:
         try:
-             # Run the async scan with target MAC to check for matches
-             ble_info = asyncio.run(_ble_scan_for_airpods(mac))
-             if ble_info:
-                 # If we eventually decode battery, use it. 
-                 # currently _ble_scan_for_airpods returns details if found.
-                 ble_info.device_name = name
-                 # If found via BLE, it's visible/connected
-                 if ble_info.status == "Connected":
-                      ble_info.status = "BLE-Visible"
-                 return ble_info
+            ble_info = asyncio.run(_ble_scan_for_airpods())
+            if ble_info:
+                ble_info.device_name = name
+                if ble_info.status == "Connected":
+                    ble_info.status = "BLE-Visible"
+                return ble_info
         except Exception:
-             pass
+            pass
 
-        # Fallback: If scan failed (not found via BLE)
-        # Only report connected if BlueZ actually says so.
-        if is_connected:
-            return BatteryInfo(level=-1, status="Connected", voltage=None, device_name=name)
-            
+        # Fallback: connected but no battery data available
+        return BatteryInfo(level=-1, status="Connected", voltage=None, device_name=name)
+
     return None
 
 def get_all_batteries() -> dict:
@@ -605,4 +530,4 @@ if __name__ == "__main__":
     if info_airpods:
         print(f"AirPods: {info_airpods.device_name} - {info_airpods.level}% ({info_airpods.status})")
     else:
-        print("No AirPods found via bluetoothctl.")
+        print("No AirPods found.")

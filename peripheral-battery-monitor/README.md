@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.3.3
+Version 1.3.4
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
 
@@ -35,7 +35,8 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - `solaar`
 - `upower` (for Bluetooth keyboards)
 - `headsetcontrol` (for Arctis headsets)
-- `bluez` (bluetoothctl)
+- `bluez` (BlueZ bluetooth daemon)
+- `python-dbus` (BlueZ D-Bus interface)
 - `python-bleak` (for AirPods BLE scanning)
 - `python-structlog` (for structured logging)
 
@@ -107,6 +108,10 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.3.4
+- Fixed AirPods battery not reporting after bluez 5.86 update. Replaced `bluetoothctl` CLI with D-Bus for connection detection. BLE scan no longer gated on stale CLI output.
+- Removed dead code and fixed double `scanner.stop()` in BLE scan.
 
 ### v1.3.3
 - Fixed Logitech mouse battery not updating properly after state transitions (charging to discharging)
