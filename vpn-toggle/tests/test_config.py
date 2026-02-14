@@ -193,6 +193,79 @@ class TestConfigManager:
         assert 'window' in config
         assert 'logging' in config
 
+    def test_startup_defaults(self, temp_config_file):
+        """Test that startup config has correct defaults"""
+        manager = ConfigManager(str(temp_config_file))
+
+        startup = manager.get_startup_settings()
+        assert startup['autostart'] is False
+        assert startup['start_minimized'] is False
+        assert startup['restore_connections'] is False
+
+    def test_update_startup_settings(self, temp_config_file):
+        """Test updating startup settings"""
+        manager = ConfigManager(str(temp_config_file))
+
+        manager.update_startup_settings(autostart=True, start_minimized=True)
+
+        startup = manager.get_startup_settings()
+        assert startup['autostart'] is True
+        assert startup['start_minimized'] is True
+        assert startup['restore_connections'] is False
+
+    def test_get_restore_vpns_default_empty(self, temp_config_file):
+        """Test that restore VPN list is empty by default"""
+        manager = ConfigManager(str(temp_config_file))
+
+        assert manager.get_restore_vpns() == []
+
+    def test_add_restore_vpn(self, temp_config_file):
+        """Test adding a VPN to the restore list"""
+        manager = ConfigManager(str(temp_config_file))
+
+        manager.add_restore_vpn("vpn-1")
+        manager.add_restore_vpn("vpn-2")
+
+        assert manager.get_restore_vpns() == ["vpn-1", "vpn-2"]
+
+    def test_add_restore_vpn_no_duplicates(self, temp_config_file):
+        """Test that adding a duplicate VPN does not create duplicates"""
+        manager = ConfigManager(str(temp_config_file))
+
+        manager.add_restore_vpn("vpn-1")
+        manager.add_restore_vpn("vpn-1")
+
+        assert manager.get_restore_vpns() == ["vpn-1"]
+
+    def test_remove_restore_vpn(self, temp_config_file):
+        """Test removing a VPN from the restore list"""
+        manager = ConfigManager(str(temp_config_file))
+
+        manager.add_restore_vpn("vpn-1")
+        manager.add_restore_vpn("vpn-2")
+        manager.remove_restore_vpn("vpn-1")
+
+        assert manager.get_restore_vpns() == ["vpn-2"]
+
+    def test_remove_restore_vpn_not_present(self, temp_config_file):
+        """Test removing a VPN that is not in the restore list"""
+        manager = ConfigManager(str(temp_config_file))
+
+        manager.remove_restore_vpn("nonexistent")
+        assert manager.get_restore_vpns() == []
+
+    def test_startup_config_persists(self, temp_config_file):
+        """Test that startup config persists across loads"""
+        manager = ConfigManager(str(temp_config_file))
+        manager.update_startup_settings(autostart=True, restore_connections=True)
+        manager.add_restore_vpn("vpn-1")
+
+        manager2 = ConfigManager(str(temp_config_file))
+        startup = manager2.get_startup_settings()
+        assert startup['autostart'] is True
+        assert startup['restore_connections'] is True
+        assert manager2.get_restore_vpns() == ["vpn-1"]
+
     def test_thread_safety(self, temp_config_file):
         """Test that ConfigManager is thread-safe"""
         import threading

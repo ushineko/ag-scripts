@@ -3,6 +3,7 @@
 A comprehensive VPN management tool with integrated monitoring and health checking for NetworkManager connections.
 
 ## Table of Contents
+- [Version 3.2 (System Tray & Autostart)](#version-32-system-tray--autostart)
 - [Version 3.1 (UX Improvements)](#version-31-ux-improvements)
 - [Version 3.0 (Metrics Dashboard)](#version-30-metrics-dashboard)
 - [Version 2.0 (Monitor Mode)](#version-20-monitor-mode)
@@ -12,6 +13,41 @@ A comprehensive VPN management tool with integrated monitoring and health checki
 - [Configuration](#configuration)
 - [Version 1.0 (Legacy)](#version-10-legacy)
 - [Changelog](#changelog)
+
+## Version 3.2 (System Tray & Autostart)
+
+VPN Toggle v3.2 adds system tray integration, autostart-on-login support, and VPN connection restore on startup.
+
+### System Tray
+
+- **Tray Icon**: App icon appears in the system tray on startup (when tray is available)
+- **Close to Tray**: Closing the window hides it to the tray instead of quitting — the monitor thread keeps running in the background
+- **Context Menu**: Right-click the tray icon for Show/Hide, Monitor Mode toggle, and Quit
+- **Left-Click**: Toggles window visibility
+- **Tooltip**: Shows app name and number of active VPNs
+- **Fallback**: When no system tray is available (tiling WMs, headless), close behaves as before (quit)
+
+### Autostart on Login
+
+- **Settings Toggle**: Enable/disable autostart from the Settings dialog
+- **XDG Autostart**: Creates/removes `~/.config/autostart/vpn-toggle-v2.desktop`
+- **Start Minimized**: Option to start with the window hidden (tray icon only)
+- **`--minimized` CLI Flag**: Start the app with the window hidden
+
+### VPN Connection Restore
+
+- **Automatic Restore**: On startup, reconnects VPNs that were previously connected
+- **Tracked State**: Connected VPNs are tracked in `config.json` and updated on connect/disconnect
+- **Explicit Disconnect**: Only manual disconnect removes a VPN from the restore list (network drops do not)
+- **Settings Toggle**: Enable/disable restore from the Settings dialog
+- **Logged**: Each restore attempt is logged to the activity log
+
+### Quit
+
+- **Tray Menu**: "Quit" in the tray context menu fully exits the application
+- **Window Button**: "Quit" button in the toolbar for full exit without using the tray
+
+---
 
 ## Version 3.1 (UX Improvements)
 
@@ -135,6 +171,7 @@ vpn-toggle-v2 [options] [vpn_name]
 Options:
   --debug         Enable debug logging
   --config PATH   Use custom config file
+  --minimized     Start minimized to system tray
   --version       Show version information
   --help          Show help message
 
@@ -230,6 +267,18 @@ The original bash script is still available as `toggle_vpn.sh` for backward comp
 Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
+
+### v3.2.0
+
+- **System Tray**: App runs in system tray; closing the window hides to tray instead of quitting
+- **Tray Context Menu**: Show/Hide, Monitor Mode toggle, Quit
+- **Close-to-Tray**: Monitor thread keeps running when window is hidden; falls back to normal close when tray unavailable
+- **Autostart on Login**: XDG Autostart toggle in Settings creates/removes `~/.config/autostart/vpn-toggle-v2.desktop`
+- **Start Minimized**: `--minimized` CLI flag and Settings option to launch with window hidden
+- **VPN Connection Restore**: Automatically reconnects previously-connected VPNs on startup
+- **Quit Button**: Added to window toolbar for full application exit
+- **Uninstaller**: Now removes autostart desktop file
+- 143 total tests
 
 ### v3.1.0
 
