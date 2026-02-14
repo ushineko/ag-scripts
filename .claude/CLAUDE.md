@@ -221,6 +221,28 @@ Reference implementations: `peripheral-battery-monitor/install_kwin_rule.py`, `a
 
 ---
 
+## System Integration: Prefer Stable Contracts
+
+When interfacing with system services (BlueZ, NetworkManager, PulseAudio, etc.), prefer stable programmatic interfaces over CLI tools:
+
+| Approach | Stability | Example |
+| -------- | --------- | ------- |
+| D-Bus interfaces | Stable contract, versioned | `org.bluez.Device1`, `org.freedesktop.NetworkManager` |
+| Library bindings | Stable, typed | `python-dbus`, `pydbus`, GLib/GIO |
+| JSON-output CLI | Moderate (structured output) | `pactl --format=json`, `nmcli -t` |
+| Human-readable CLI | Brittle (output changes between versions) | `bluetoothctl`, `nmcli` (default format) |
+
+**Why**: CLI tools are user-facing — their output format, behavior in interactive vs non-interactive mode, and even subcommand semantics can change between minor versions without notice (e.g., bluez 5.86 broke `bluetoothctl devices` in non-interactive mode). D-Bus interfaces are the stable programmatic API that desktop environments and audio stacks themselves depend on.
+
+**Guidelines**:
+
+- Use D-Bus for any daemon that exposes one (BlueZ, NetworkManager, UPower, systemd, KWin)
+- When D-Bus isn't available, prefer CLI tools with structured output (`--format=json`, `-t` for terse)
+- If you must parse human-readable CLI output, treat it as fragile and document the assumption
+- `pactl --format=json` is acceptable — PulseAudio/PipeWire's JSON output is a supported interface
+
+---
+
 ## Workflow References
 
 Additional workflow guidance available in `.agent/workflows/`:
