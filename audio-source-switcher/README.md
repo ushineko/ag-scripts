@@ -142,7 +142,8 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
 - Python 3
 - `PyQt6`
 - `pulseaudio` / `pipewire-pulse` (pactl)
-- `bluez` (bluetoothctl)
+- `bluez` (bluetoothctl for connect/disconnect)
+- `python-dbus` (BlueZ D-Bus device queries)
 - `libnotify` (notify-send)
 - `headsetcontrol` (optional, for Arctis Nova battery/status)
 
@@ -153,7 +154,7 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
 
     ### Arch Linux / CachyOS
     ```bash
-    sudo pacman -S python-pyqt6 libnotify bluez-utils
+    sudo pacman -S python-pyqt6 python-dbus libnotify bluez-utils
     # headsetcontrol is available in the AUR
     ```
 
@@ -161,7 +162,7 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
     *Note: Debian/Ubuntu support is theoretical and not actively tested.*
     ```bash
     sudo apt update
-    sudo apt install python3-pyqt6 libnotify-bin bluez pulseaudio-utils
+    sudo apt install python3-pyqt6 python3-dbus libnotify-bin bluez pulseaudio-utils
     # headsetcontrol must be built from source or installed via .deb if available
     ```
 
@@ -177,6 +178,9 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
 Device priority and settings are saved to `~/.config/audio-source-switcher/config.json`.
 
 ## Changelog
+
+### v11.7
+- **Bluetooth Naming Fix**: Replaced `bluetoothctl` CLI with D-Bus for device enumeration. Fixes blank Bluetooth device list and devices showing as MAC addresses instead of names after bluez 5.86 update.
 
 ### v11.6
 - **Notification Sounds**: Desktop notifications now play a sound (using freedesktop sound theme).
