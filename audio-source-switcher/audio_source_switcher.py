@@ -4,6 +4,7 @@ import subprocess
 import re
 import os
 import argparse
+import dbus
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QListWidget, QListWidgetItem, QPushButton, QCheckBox, 
                              QLabel, QMessageBox, QGroupBox, QHBoxLayout,
@@ -162,7 +163,7 @@ class AudioController:
             display_name = ""
             
             # 1. Try BT Cache/Alias
-            if 'bluez' in name or props.get('device.api') == 'bluez':
+            if 'bluez' in name or 'bluez' in props.get('device.api', ''):
                 # Try to extract MAC from name (e.g. bluez_output.XX_XX... or bluez_output.XX:XX...)
                 # Regex allows both : and _ as separators
                 mac_match = re.search(r'([0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2})', name, re.IGNORECASE)
@@ -170,9 +171,9 @@ class AudioController:
                     mac = mac_match.group(1).replace('_', ':').upper()
                     if bt_cache and mac in bt_cache:
                         display_name = bt_cache[mac]
-                
+
                 if not display_name:
-                    display_name = props.get('bluez.alias')
+                    display_name = props.get('bluez.alias') or props.get('device.alias')
 
             # 2. Try Vendor + Product
             if not display_name:
@@ -366,12 +367,17 @@ class AudioController:
             display_name = ""
             
             # 1. Try BT Cache/Alias for Sources too
-            if 'bluez' in name or props.get('device.api') == 'bluez':
+            if 'bluez' in name or 'bluez' in props.get('device.api', ''):
                 mac_match = re.search(r'([0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2}[:_][0-9A-F]{2})', name, re.IGNORECASE)
                 if mac_match:
                     mac = mac_match.group(1).replace('_', ':').upper()
                     if bt_cache and mac in bt_cache:
                         display_name = bt_cache[mac]
+
+            if not display_name:
+                alias = props.get('bluez.alias') or props.get('device.alias')
+                if alias and alias != '(null)':
+                    display_name = alias
 
             if not display_name:
                 display_name = props.get('device.description', '')
@@ -444,10 +450,50 @@ class AudioController:
         return None
 
 class BluetoothController:
-    """Handles interaction with bluetoothctl."""
-    
+    """Handles interaction with BlueZ via D-Bus for device queries and bluetoothctl for connect/disconnect."""
+
+    AUDIO_UUIDS = {
+        '0000110b-0000-1000-8000-00805f9b34fb',  # Audio Sink
+        '0000110a-0000-1000-8000-00805f9b34fb',  # Audio Source
+        '00001108-0000-1000-8000-00805f9b34fb',  # Headset
+        '0000111e-0000-1000-8000-00805f9b34fb',  # Handsfree
+        '0000110d-0000-1000-8000-00805f9b34fb',  # Advanced Audio Distribution
+    }
+
+    def get_devices(self):
+        """Returns list of {mac, name, connected} for audio BT devices via D-Bus."""
+        try:
+            bus = dbus.SystemBus()
+            manager = dbus.Interface(
+                bus.get_object('org.bluez', '/'),
+                'org.freedesktop.DBus.ObjectManager'
+            )
+            objects = manager.GetManagedObjects()
+        except dbus.exceptions.DBusException:
+            return []
+
+        devices = []
+        for path, interfaces in objects.items():
+            if 'org.bluez.Device1' not in interfaces:
+                continue
+            dev = interfaces['org.bluez.Device1']
+            mac = str(dev.get('Address', ''))
+            alias = str(dev.get('Alias', ''))
+            name = str(dev.get('Name', ''))
+            connected = bool(dev.get('Connected', False))
+            icon = str(dev.get('Icon', ''))
+            uuids = {str(u) for u in dev.get('UUIDs', [])}
+
+            display_name = alias or name or mac
+
+            is_audio = bool(self.AUDIO_UUIDS & uuids) or icon.startswith('audio-')
+            if is_audio:
+                devices.append({'mac': mac, 'name': display_name, 'connected': connected})
+
+        return devices
+
     @staticmethod
-    def run_command(command):
+    def _run_bluetoothctl(command):
         try:
             result = subprocess.run(
                 ['bluetoothctl'] + command, capture_output=True, text=True, check=True
@@ -456,53 +502,11 @@ class BluetoothController:
         except subprocess.CalledProcessError:
             return None
 
-    def get_devices(self):
-        """Returns list of {mac, name, connected}"""
-        output = self.run_command(['devices'])
-        if not output: return []
-
-        devices = []
-        for line in output.split('\n'):
-            match = re.search(r'Device\s+([0-9A-F:]+)\s+(.+)', line)
-            if match:
-                mac = match.group(1)
-                name = match.group(2)
-                
-                # We need connection status. 
-                # Optimization: 'info' takes time. 
-                # But we need it for 'connected' status and detecting if it's audio.
-                info_out = self.run_command(['info', mac])
-                connected = False
-                if info_out:
-                    if "Connected: yes" in info_out:
-                        connected = True
-                    
-                    # Try to get Alias or Name from info for better naming
-                    alias_match = re.search(r'Alias:\s+(.+)', info_out)
-                    if alias_match:
-                        name = alias_match.group(1)
-                    elif "Name:" in info_out:
-                        name_match = re.search(r'Name:\s+(.+)', info_out)
-                        if name_match:
-                            name = name_match.group(1)
-
-                is_audio = False
-                if info_out and ("UUID: Audio Sink" in info_out or 
-                                 "UUID: Audio Source" in info_out or 
-                                 "UUID: Headset" in info_out or
-                                 "Icon: audio-" in info_out):
-                    is_audio = True
-                
-                if is_audio:
-                    devices.append({'mac': mac, 'name': name, 'connected': connected})
-
-        return devices
-
     def connect(self, mac):
-        self.run_command(['connect', mac])
-    
+        self._run_bluetoothctl(['connect', mac])
+
     def disconnect(self, mac):
-        self.run_command(['disconnect', mac])
+        self._run_bluetoothctl(['disconnect', mac])
 
 
 class PipeWireController:
@@ -1264,7 +1268,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 11.6</b></p>
+            <p><b>Version 11.7</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
