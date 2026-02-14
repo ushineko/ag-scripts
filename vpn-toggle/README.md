@@ -268,6 +268,14 @@ Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
 
+### v3.2.1
+
+- **Tray Icon Fix**: Tray icon now renders correctly on KDE Plasma/Wayland by constructing QIcon from SVG path for SNI compatibility
+- **Single-Instance Guard**: Prevents running multiple instances; second launch activates existing window via QLocalServer/QLocalSocket IPC
+- **Symlink Icon Fix**: Resolves `__file__` symlinks so icon loads correctly when launched via `~/.local/bin` symlink
+- **22px Icon Size**: Added 22x22 pixmap for KDE system tray compatibility
+- 149 total tests
+
 ### v3.2.0
 
 - **System Tray**: App runs in system tray; closing the window hides to tray instead of quitting
