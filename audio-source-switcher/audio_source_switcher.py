@@ -23,18 +23,17 @@ class ConnectThread(QThread):
         self.mac = mac
 
     def run(self):
-        # Run blocking connect command
         try:
-            # We don't use AudioController.run_command to separate concerns/threading
-            result = subprocess.run(
-                ['bluetoothctl', 'connect', self.mac],
-                capture_output=True, text=True
+            bus = dbus.SystemBus()
+            dev_path = f"/org/bluez/hci0/dev_{self.mac.replace(':', '_')}"
+            device = dbus.Interface(
+                bus.get_object('org.bluez', dev_path),
+                'org.bluez.Device1'
             )
-            # bluetoothctl returns 0 on success usually, but output matters too
-            if result.returncode == 0:
-                self.finished_signal.emit(True, "Connection command sent.")
-            else:
-                self.finished_signal.emit(False, f"Connection failed: {result.stdout}")
+            device.Connect()
+            self.finished_signal.emit(True, "Connection command sent.")
+        except dbus.exceptions.DBusException as e:
+            self.finished_signal.emit(False, f"Connection failed: {e.get_dbus_message()}")
         except Exception as e:
             self.finished_signal.emit(False, str(e))
 
@@ -450,7 +449,7 @@ class AudioController:
         return None
 
 class BluetoothController:
-    """Handles interaction with BlueZ via D-Bus for device queries and bluetoothctl for connect/disconnect."""
+    """Handles interaction with BlueZ entirely via D-Bus (org.bluez.Device1)."""
 
     AUDIO_UUIDS = {
         '0000110b-0000-1000-8000-00805f9b34fb',  # Audio Sink
@@ -459,6 +458,10 @@ class BluetoothController:
         '0000111e-0000-1000-8000-00805f9b34fb',  # Handsfree
         '0000110d-0000-1000-8000-00805f9b34fb',  # Advanced Audio Distribution
     }
+
+    @staticmethod
+    def _mac_to_path(mac):
+        return f"/org/bluez/hci0/dev_{mac.replace(':', '_')}"
 
     def get_devices(self):
         """Returns list of {mac, name, connected} for audio BT devices via D-Bus."""
@@ -492,21 +495,27 @@ class BluetoothController:
 
         return devices
 
-    @staticmethod
-    def _run_bluetoothctl(command):
-        try:
-            result = subprocess.run(
-                ['bluetoothctl'] + command, capture_output=True, text=True, check=True
-            )
-            return result.stdout.strip()
-        except subprocess.CalledProcessError:
-            return None
-
     def connect(self, mac):
-        self._run_bluetoothctl(['connect', mac])
+        try:
+            bus = dbus.SystemBus()
+            device = dbus.Interface(
+                bus.get_object('org.bluez', self._mac_to_path(mac)),
+                'org.bluez.Device1'
+            )
+            device.Connect()
+        except dbus.exceptions.DBusException:
+            pass
 
     def disconnect(self, mac):
-        self._run_bluetoothctl(['disconnect', mac])
+        try:
+            bus = dbus.SystemBus()
+            device = dbus.Interface(
+                bus.get_object('org.bluez', self._mac_to_path(mac)),
+                'org.bluez.Device1'
+            )
+            device.Disconnect()
+        except dbus.exceptions.DBusException:
+            pass
 
 
 class PipeWireController:

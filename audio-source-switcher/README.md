@@ -142,8 +142,8 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
 - Python 3
 - `PyQt6`
 - `pulseaudio` / `pipewire-pulse` (pactl)
-- `bluez` (bluetoothctl for connect/disconnect)
-- `python-dbus` (BlueZ D-Bus device queries)
+- `bluez` (BlueZ bluetooth daemon)
+- `python-dbus` (BlueZ D-Bus interface)
 - `libnotify` (notify-send)
 - `headsetcontrol` (optional, for Arctis Nova battery/status)
 
