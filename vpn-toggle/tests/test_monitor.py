@@ -292,3 +292,143 @@ class TestMonitorThread:
         assert len(vpns) == 2
         assert any(vpn['name'] == 'vpn1' for vpn in vpns)
         assert any(vpn['name'] == 'vpn2' for vpn in vpns)
+
+
+class TestCheckCompletedSignal:
+    """Tests for the check_completed signal and timing instrumentation"""
+
+    @patch('time.sleep')
+    @patch('vpn_toggle.monitor.create_assert')
+    def test_check_completed_emitted_on_pass(self, mock_create_assert, mock_sleep, config_manager, vpn_manager):
+        monitor = MonitorThread(config_manager, vpn_manager)
+        monitor.connection_times['test_vpn'] = datetime.now() - timedelta(seconds=30)
+
+        vpn_config = {
+            'name': 'test_vpn',
+            'enabled': True,
+            'asserts': [{'type': 'dns_lookup', 'hostname': 'test.com', 'expected_prefix': '10.'}]
+        }
+        monitor_settings = {'grace_period_seconds': 15, 'failure_threshold': 3}
+
+        mock_assert = MagicMock()
+        mock_assert.check.return_value = MagicMock(success=True, message="Passed")
+        mock_create_assert.return_value = mock_assert
+
+        emitted = []
+        monitor.check_completed.connect(lambda vpn, dp: emitted.append((vpn, dp)))
+
+        with patch.object(vpn_manager, 'is_vpn_active', return_value=True):
+            monitor._check_vpn(vpn_config, monitor_settings)
+
+        assert len(emitted) == 1
+        vpn_name, data_point = emitted[0]
+        assert vpn_name == 'test_vpn'
+        assert data_point['success'] is True
+        assert data_point['bounce_triggered'] is False
+        assert data_point['latency_ms'] >= 0
+        assert data_point['vpn_name'] == 'test_vpn'
+        assert 'timestamp' in data_point
+
+    @patch('time.sleep')
+    @patch('vpn_toggle.monitor.create_assert')
+    def test_check_completed_contains_assert_details(self, mock_create_assert, mock_sleep, config_manager, vpn_manager):
+        monitor = MonitorThread(config_manager, vpn_manager)
+        monitor.connection_times['test_vpn'] = datetime.now() - timedelta(seconds=30)
+
+        vpn_config = {
+            'name': 'test_vpn',
+            'enabled': True,
+            'asserts': [
+                {'type': 'dns_lookup', 'hostname': 'test.com', 'expected_prefix': '10.'},
+                {'type': 'geolocation', 'field': 'city', 'expected_value': 'Vegas'},
+            ]
+        }
+        monitor_settings = {'grace_period_seconds': 15, 'failure_threshold': 3}
+
+        mock_assert = MagicMock()
+        mock_assert.check.return_value = MagicMock(success=True, message="Passed")
+        mock_create_assert.return_value = mock_assert
+
+        emitted = []
+        monitor.check_completed.connect(lambda vpn, dp: emitted.append((vpn, dp)))
+
+        with patch.object(vpn_manager, 'is_vpn_active', return_value=True):
+            monitor._check_vpn(vpn_config, monitor_settings)
+
+        data_point = emitted[0][1]
+        assert len(data_point['assert_details']) == 2
+        assert data_point['assert_details'][0]['type'] == 'dns_lookup'
+        assert data_point['assert_details'][1]['type'] == 'geolocation'
+        for detail in data_point['assert_details']:
+            assert 'latency_ms' in detail
+            assert 'success' in detail
+            assert detail['latency_ms'] >= 0
+
+    @patch('time.sleep')
+    @patch('vpn_toggle.monitor.create_assert')
+    def test_check_completed_marks_bounce(self, mock_create_assert, mock_sleep, config_manager, vpn_manager):
+        monitor = MonitorThread(config_manager, vpn_manager)
+        monitor.connection_times['test_vpn'] = datetime.now() - timedelta(seconds=30)
+
+        vpn_config = {
+            'name': 'test_vpn',
+            'enabled': True,
+            'asserts': [{'type': 'dns_lookup', 'hostname': 'test.com', 'expected_prefix': '10.'}]
+        }
+        monitor_settings = {'grace_period_seconds': 15, 'failure_threshold': 3}
+
+        mock_assert = MagicMock()
+        mock_assert.check.return_value = MagicMock(success=False, message="Failed")
+        mock_create_assert.return_value = mock_assert
+
+        emitted = []
+        monitor.check_completed.connect(lambda vpn, dp: emitted.append((vpn, dp)))
+
+        with patch.object(vpn_manager, 'is_vpn_active', return_value=True):
+            with patch.object(vpn_manager, 'bounce_vpn', return_value=(True, "OK")):
+                monitor._check_vpn(vpn_config, monitor_settings)
+
+        data_point = emitted[0][1]
+        assert data_point['success'] is False
+        assert data_point['bounce_triggered'] is True
+
+    @patch('time.sleep')
+    @patch('vpn_toggle.monitor.create_assert')
+    def test_check_completed_not_emitted_when_not_connected(self, mock_create_assert, mock_sleep, config_manager, vpn_manager):
+        monitor = MonitorThread(config_manager, vpn_manager)
+
+        vpn_config = {
+            'name': 'test_vpn',
+            'enabled': True,
+            'asserts': [{'type': 'dns_lookup', 'hostname': 'test.com', 'expected_prefix': '10.'}]
+        }
+        monitor_settings = {'grace_period_seconds': 15, 'failure_threshold': 3}
+
+        emitted = []
+        monitor.check_completed.connect(lambda vpn, dp: emitted.append((vpn, dp)))
+
+        with patch.object(vpn_manager, 'is_vpn_active', return_value=False):
+            monitor._check_vpn(vpn_config, monitor_settings)
+
+        assert len(emitted) == 0
+
+    @patch('time.sleep')
+    @patch('vpn_toggle.monitor.create_assert')
+    def test_check_completed_not_emitted_during_grace_period(self, mock_create_assert, mock_sleep, config_manager, vpn_manager):
+        monitor = MonitorThread(config_manager, vpn_manager)
+        monitor.connection_times['test_vpn'] = datetime.now()
+
+        vpn_config = {
+            'name': 'test_vpn',
+            'enabled': True,
+            'asserts': [{'type': 'dns_lookup', 'hostname': 'test.com', 'expected_prefix': '10.'}]
+        }
+        monitor_settings = {'grace_period_seconds': 15, 'failure_threshold': 3}
+
+        emitted = []
+        monitor.check_completed.connect(lambda vpn, dp: emitted.append((vpn, dp)))
+
+        with patch.object(vpn_manager, 'is_vpn_active', return_value=True):
+            monitor._check_vpn(vpn_config, monitor_settings)
+
+        assert len(emitted) == 0

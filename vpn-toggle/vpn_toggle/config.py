@@ -26,7 +26,7 @@ DEFAULT_CONFIG = {
         "geometry": {
             "x": None,
             "y": None,
-            "width": 800,
+            "width": 1100,
             "height": 600
         },
         "always_on_top": False
