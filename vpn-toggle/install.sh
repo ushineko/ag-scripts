@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Installation script for VPN Toggle v2.1
+# Installation script for VPN Toggle v3.0
 #
 
 set -e
@@ -10,7 +10,7 @@ INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 
-echo "Installing VPN Toggle v2.1..."
+echo "Installing VPN Toggle v3.0..."
 
 # Check dependencies
 echo "Checking dependencies..."
@@ -39,6 +39,17 @@ if ! python3 -c "import PyQt6" &> /dev/null; then
     }
 fi
 
+# Check pyqtgraph (required for metrics dashboard)
+if ! python3 -c "import pyqtgraph" &> /dev/null; then
+    echo "Warning: pyqtgraph not found"
+    echo "Installing pyqtgraph..."
+    pip install --user pyqtgraph || {
+        echo "Failed to install pyqtgraph. Please install manually:"
+        echo "  pip install --user pyqtgraph"
+        exit 1
+    }
+fi
+
 # Create install directory if it doesn't exist
 mkdir -p "$INSTALL_DIR"
 
@@ -61,7 +72,7 @@ mkdir -p "$DESKTOP_DIR"
 cat > "$DESKTOP_DIR/vpn-toggle-v2.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=VPN Toggle v2.1
+Name=VPN Toggle v3.0
 Comment=VPN Manager with integrated monitoring
 Exec=$INSTALL_DIR/vpn-toggle-v2
 Icon=$ICON_DIR/vpn-toggle-v2.svg
@@ -78,7 +89,7 @@ fi
 echo ""
 echo "Installation complete!"
 echo ""
-echo "You can now run VPN Toggle v2.0 by:"
+echo "You can now run VPN Toggle v3.0 by:"
 echo "  1. Running: vpn-toggle-v2"
 echo "  2. Searching for 'VPN Toggle' in your application launcher"
 echo ""

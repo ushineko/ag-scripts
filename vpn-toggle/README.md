@@ -3,6 +3,7 @@
 A comprehensive VPN management tool with integrated monitoring and health checking for NetworkManager connections.
 
 ## Table of Contents
+- [Version 3.0 (Metrics Dashboard)](#version-30-metrics-dashboard)
 - [Version 2.0 (Monitor Mode)](#version-20-monitor-mode)
 - [Features](#features-v20)
 - [Installation](#installation)
@@ -11,11 +12,51 @@ A comprehensive VPN management tool with integrated monitoring and health checki
 - [Version 1.0 (Legacy)](#version-10-legacy)
 - [Changelog](#changelog)
 
+## Version 3.0 (Metrics Dashboard)
+
+VPN Toggle v3.0 adds real-time metrics tracking and graphing to the VPN monitor. Each health check cycle records probe latency and pass/fail status. A time-series graph displays this data alongside the VPN connection cards, with bounce events prominently marked.
+
+![VPN Toggle Screenshot](vpn-toggle-screenshot.png)
+
+### Features (v3.0)
+
+#### Metrics Collection
+- **Probe Latency Tracking**: Wall-clock timing of each health check cycle using `time.perf_counter()`
+- **Per-Assert Breakdown**: Individual latency measured for DNS lookup and geolocation asserts
+- **Pass/Fail Recording**: Every check cycle outcome is recorded
+- **Bounce Event Tracking**: Auto-reconnect events are marked in the data
+
+#### Real-Time Graph (pyqtgraph)
+- **Time-Series Line Chart**: Latency plotted over time with auto-scrolling
+- **Color-Coded VPN Lines**: Each VPN gets a distinct color in a unified graph
+- **Status Markers**: Green dots for passing checks, red X markers for failures
+- **Bounce Indicators**: Vertical red dashed lines with "Bounce" labels for reconnect events
+- **Interactive**: Mouse zoom and pan via pyqtgraph built-in controls
+- **Legend**: Displays VPN name-to-color mapping when multiple VPNs have data
+
+#### Statistics Summary
+- **Avg Latency**: Mean probe latency across all recorded checks per VPN
+- **Total Failures**: Count of failed check cycles per VPN
+- **Uptime %**: Calculated as `(total_checks - failures) / total_checks * 100`
+- Displayed in each VPN widget below the existing status line
+
+#### Data Persistence
+- Metrics stored as JSON files in `~/.config/vpn-toggle/metrics/`
+- One file per VPN, loaded on startup to populate the graph with historical data
+- Retention limit of 10,000 data points per VPN with FIFO trimming
+- "Clear History" button with confirmation dialog to reset all data
+
+#### UI Layout
+- **Horizontal Split**: QSplitter divides VPN list (left ~40%) and graph panel (right ~60%)
+- **User-Resizable**: Drag the splitter divider to resize panels
+- **Wider Window**: Default width increased from 800 to 1100
+- Activity log remains full-width at the bottom
+
+---
+
 ## Version 2.0 (Monitor Mode)
 
 VPN Toggle v2.0 is a complete rewrite featuring a persistent GUI with integrated monitoring capabilities.
-
-![VPN Toggle Screenshot](vpn-toggle-screenshot.png)
 
 ### Features (v2.0)
 
@@ -133,6 +174,8 @@ Located at `~/.config/vpn-toggle/config.json`:
 - NetworkManager (nmcli)
 - PyQt6
 - requests library
+- pyqtgraph (for metrics dashboard)
+- numpy (transitive dependency of pyqtgraph)
 - Linux desktop environment (KDE/GNOME)
 
 ### Uninstallation
@@ -169,6 +212,17 @@ The original bash script is still available as `toggle_vpn.sh` for backward comp
 Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
+
+### v3.0.0
+- **Metrics Dashboard**: Real-time time-series graph of probe latency using pyqtgraph
+- **Metrics Collection**: Per-check-cycle timing with `time.perf_counter()`, per-assert breakdown
+- **Statistics Summary**: Avg latency, total failures, uptime % displayed per VPN widget
+- **Data Persistence**: JSON-based metrics storage in `~/.config/vpn-toggle/metrics/` with 10K point retention
+- **Unified Graph**: Color-coded lines per VPN with pass/fail markers and bounce event indicators
+- **UI Restructure**: Horizontal QSplitter layout (VPN list left, graph right), default width 1100
+- **Clear History**: Button to reset all metrics with confirmation dialog
+- New dependency: pyqtgraph (+ numpy)
+- 110 total tests
 
 ### v2.1.0
 - **Application Icon**: Custom SVG shield icon for window title bar and desktop launcher

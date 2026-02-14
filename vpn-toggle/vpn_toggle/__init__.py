@@ -1,8 +1,8 @@
 """
-VPN Toggle v2.0 - Integrated VPN Manager and Monitor
+VPN Toggle v3.0 - Integrated VPN Manager, Monitor & Metrics Dashboard
 
 A PyQt6 application for managing NetworkManager VPN connections with integrated
-monitoring and assert-based health checking.
+monitoring, assert-based health checking, and real-time metrics graphing.
 """
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"

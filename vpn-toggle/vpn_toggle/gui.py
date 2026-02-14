@@ -1,5 +1,5 @@
 """
-GUI for VPN Toggle v2.1
+GUI for VPN Toggle v3.0
 """
 import logging
 from datetime import datetime
@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QCheckBox, QTextEdit,
     QScrollArea, QFrame, QMessageBox, QSpinBox,
     QGroupBox, QDialog, QDialogButtonBox, QFormLayout,
-    QLineEdit, QComboBox
+    QLineEdit, QComboBox, QSplitter
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QTextCursor
@@ -18,6 +18,8 @@ from PyQt6.QtGui import QFont, QTextCursor
 from .config import ConfigManager
 from .vpn_manager import VPNManager
 from .monitor import MonitorThread
+from .metrics import MetricsCollector, DataPoint, AssertDetail
+from .graph import MetricsGraphWidget
 
 logger = logging.getLogger('vpn_toggle.gui')
 
@@ -26,13 +28,15 @@ class VPNWidget(QFrame):
     """Widget representing a single VPN in the list"""
 
     def __init__(self, vpn_name: str, display_name: str, vpn_manager: VPNManager,
-                 config_manager: ConfigManager, monitor_thread: Optional[MonitorThread] = None):
+                 config_manager: ConfigManager, monitor_thread: Optional[MonitorThread] = None,
+                 metrics_collector: Optional[MetricsCollector] = None):
         super().__init__()
         self.vpn_name = vpn_name
         self.display_name = display_name
         self.vpn_manager = vpn_manager
         self.config_manager = config_manager
         self.monitor_thread = monitor_thread
+        self.metrics_collector = metrics_collector
 
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setup_ui()
@@ -72,6 +76,11 @@ class VPNWidget(QFrame):
         info_layout.addWidget(self.info_label)
         info_layout.addStretch()
         layout.addLayout(info_layout)
+
+        # Stats row (avg latency, total failures, uptime)
+        self.stats_label = QLabel("")
+        self.stats_label.setStyleSheet("color: #888888; font-size: 10px;")
+        layout.addWidget(self.stats_label)
 
         # Control buttons
         button_layout = QHBoxLayout()
@@ -131,6 +140,20 @@ class VPNWidget(QFrame):
                 else:
                     self.info_label.setText("Monitoring active")
                     self.info_label.setStyleSheet("color: gray; font-size: 10px;")
+
+            # Update stats from metrics collector
+            if self.metrics_collector:
+                stats = self.metrics_collector.get_stats(self.vpn_name)
+                if stats:
+                    self.stats_label.setText(
+                        f"Avg: {stats.avg_latency_ms:.0f}ms | "
+                        f"Total failures: {stats.total_failures} | "
+                        f"Uptime: {stats.uptime_pct:.1f}%"
+                    )
+                else:
+                    self.stats_label.setText("No data")
+            else:
+                self.stats_label.setText("")
         else:
             self.status_indicator.setStyleSheet("color: gray; font-size: 16px;")
             self.status_label.setText("Disconnected")
@@ -138,6 +161,7 @@ class VPNWidget(QFrame):
             self.disconnect_btn.setEnabled(False)
             self.bounce_btn.setEnabled(False)
             self.info_label.setText("")
+            self.stats_label.setText("")
 
     def on_connect(self):
         """Handle connect button click"""
@@ -395,8 +419,10 @@ class VPNToggleMainWindow(QMainWindow):
         self.vpn_manager = vpn_manager
         self.monitor_thread = None
         self.vpn_widgets: Dict[str, VPNWidget] = {}
+        self.metrics_collector = MetricsCollector()
+        self.graph_widget = None
 
-        self.setWindowTitle("VPN Monitor v2.1")
+        self.setWindowTitle("VPN Monitor v3.0")
         self.setup_ui()
         self.setup_monitor()
         self.restore_geometry()
@@ -407,7 +433,7 @@ class VPNToggleMainWindow(QMainWindow):
         self.status_timer.start(5000)  # Update every 5 seconds
 
     def setup_ui(self):
-        """Setup the main window UI"""
+        """Setup the main window UI with horizontal split (VPN list | Graph)"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
@@ -432,17 +458,18 @@ class VPNToggleMainWindow(QMainWindow):
 
         main_layout.addLayout(control_layout)
 
-        # VPN list area
+        # Horizontal splitter: VPN list (left) | Graph (right)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left panel: VPN Connections
         vpn_group = QGroupBox("VPN Connections")
         vpn_layout = QVBoxLayout()
 
-        # Scroll area for VPNs
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_widget = QWidget()
         self.vpn_list_layout = QVBoxLayout()
 
-        # Populate VPN list
         self.populate_vpn_list()
 
         scroll_widget.setLayout(self.vpn_list_layout)
@@ -450,9 +477,24 @@ class VPNToggleMainWindow(QMainWindow):
         vpn_layout.addWidget(scroll_area)
 
         vpn_group.setLayout(vpn_layout)
-        main_layout.addWidget(vpn_group)
+        self.splitter.addWidget(vpn_group)
 
-        # Activity log
+        # Right panel: Metrics graph
+        metrics_group = QGroupBox("Metrics")
+        metrics_layout = QVBoxLayout()
+
+        self.graph_widget = MetricsGraphWidget(self.metrics_collector)
+        metrics_layout.addWidget(self.graph_widget)
+
+        metrics_group.setLayout(metrics_layout)
+        self.splitter.addWidget(metrics_group)
+
+        # Set splitter proportions (~40/60)
+        self.splitter.setSizes([440, 660])
+
+        main_layout.addWidget(self.splitter)
+
+        # Activity log (full width, below splitter)
         log_group = QGroupBox("Activity Log")
         log_layout = QVBoxLayout()
 
@@ -487,7 +529,8 @@ class VPNToggleMainWindow(QMainWindow):
                 display_name = vpn_config.get('display_name', vpn.name)
 
             widget = VPNWidget(vpn.name, display_name, self.vpn_manager,
-                             self.config_manager, self.monitor_thread)
+                             self.config_manager, self.monitor_thread,
+                             self.metrics_collector)
             self.vpn_widgets[vpn.name] = widget
             self.vpn_list_layout.addWidget(widget)
 
@@ -501,10 +544,12 @@ class VPNToggleMainWindow(QMainWindow):
         self.monitor_thread.log_message.connect(self.append_log)
         self.monitor_thread.assert_result.connect(self.on_assert_result)
         self.monitor_thread.vpn_disabled.connect(self.on_vpn_disabled)
+        self.monitor_thread.check_completed.connect(self.on_check_completed)
 
         # Update VPN widgets with monitor reference
         for widget in self.vpn_widgets.values():
             widget.monitor_thread = self.monitor_thread
+            widget.metrics_collector = self.metrics_collector
 
         # Start monitor if enabled
         monitor_settings = self.config_manager.get_monitor_settings()
@@ -563,6 +608,37 @@ class VPNToggleMainWindow(QMainWindow):
         )
 
         # Update VPN widget
+        if vpn_name in self.vpn_widgets:
+            self.vpn_widgets[vpn_name].update_status()
+
+    def on_check_completed(self, vpn_name: str, data_point_dict: dict):
+        """Handle check_completed signal — record metrics and update graph."""
+        # Build DataPoint from the dict emitted by MonitorThread
+        assert_details = [
+            AssertDetail(
+                type=a['type'],
+                latency_ms=a['latency_ms'],
+                success=a['success'],
+            )
+            for a in data_point_dict.get('assert_details', [])
+        ]
+        data_point = DataPoint(
+            timestamp=data_point_dict['timestamp'],
+            vpn_name=data_point_dict['vpn_name'],
+            latency_ms=data_point_dict['latency_ms'],
+            success=data_point_dict['success'],
+            bounce_triggered=data_point_dict['bounce_triggered'],
+            assert_details=assert_details,
+        )
+
+        # Record in collector (persists to disk)
+        self.metrics_collector.record(data_point)
+
+        # Update graph
+        if self.graph_widget:
+            self.graph_widget.add_data_point(data_point)
+
+        # Update the VPN widget stats
         if vpn_name in self.vpn_widgets:
             self.vpn_widgets[vpn_name].update_status()
 

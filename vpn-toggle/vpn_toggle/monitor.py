@@ -39,6 +39,7 @@ class MonitorThread(QThread):
     assert_result = pyqtSignal(str, bool, str)  # vpn_name, success, message
     log_message = pyqtSignal(str)  # log message
     vpn_disabled = pyqtSignal(str, str)  # vpn_name, reason
+    check_completed = pyqtSignal(str, dict)  # vpn_name, data_point dict
 
     def __init__(self, config_manager: ConfigManager, vpn_manager: VPNManager):
         """
@@ -157,13 +158,24 @@ class MonitorThread(QThread):
         logger.info(f"{vpn_name}: Running {len(asserts_config)} assert(s)")
         self.log_message.emit(f"{vpn_name}: Checking {len(asserts_config)} assert(s)...")
         all_passed = True
+        assert_details = []
+        cycle_start = time.perf_counter()
+
         for assert_config in asserts_config:
             if not self.running:
                 break
 
             try:
                 assert_obj = create_assert(assert_config)
+                assert_start = time.perf_counter()
                 result = self._run_assert_with_retry(assert_obj)
+                assert_elapsed_ms = (time.perf_counter() - assert_start) * 1000.0
+
+                assert_details.append({
+                    'type': assert_config.get('type', 'unknown'),
+                    'latency_ms': round(assert_elapsed_ms, 1),
+                    'success': result.success,
+                })
 
                 # Emit assert result signal
                 self.assert_result.emit(vpn_name, result.success, result.message)
@@ -180,10 +192,13 @@ class MonitorThread(QThread):
                 self.log_message.emit(f"{vpn_name}: Assert error: {e}")
                 all_passed = False
 
+        cycle_elapsed_ms = (time.perf_counter() - cycle_start) * 1000.0
+
         # Update last check time
         self.last_check_times[vpn_name] = datetime.now()
 
         # Handle results
+        bounce_triggered = False
         if all_passed:
             # All asserts passed, reset failure count
             if vpn_name in self.failure_counts:
@@ -203,6 +218,7 @@ class MonitorThread(QThread):
 
             if failure_count < failure_threshold:
                 # Auto-reconnect
+                bounce_triggered = True
                 logger.info(f"{vpn_name}: Attempting auto-reconnect (attempt {failure_count})")
                 self.log_message.emit(f"{vpn_name}: Attempting auto-reconnect...")
                 self.vpn_states[vpn_name] = MonitorState.RECONNECTING
@@ -233,6 +249,17 @@ class MonitorThread(QThread):
                 # Disable monitoring for this VPN in config
                 vpn_config['enabled'] = False
                 self.config_manager.update_vpn_config(vpn_name, vpn_config)
+
+        # Emit metrics data point
+        data_point = {
+            'timestamp': datetime.now().isoformat(),
+            'vpn_name': vpn_name,
+            'latency_ms': round(cycle_elapsed_ms, 1),
+            'success': all_passed,
+            'bounce_triggered': bounce_triggered,
+            'assert_details': assert_details,
+        }
+        self.check_completed.emit(vpn_name, data_point)
 
     def _run_assert_with_retry(self, assert_obj, retries: int = 2) -> AssertResult:
         """
