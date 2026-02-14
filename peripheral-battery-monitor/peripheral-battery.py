@@ -22,7 +22,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.3.3"
+__version__ = "1.3.4"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_PROJECTS_PATH = os.path.expanduser("~/.claude/projects")
