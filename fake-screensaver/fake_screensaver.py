@@ -105,7 +105,8 @@ class FakeScreensaver(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.bsod.setGeometry(0, 0, self.width(), self.height())
+        if hasattr(self, 'bsod'):
+            self.bsod.setGeometry(0, 0, self.width(), self.height())
 
     def mousePressEvent(self, event):
         if self.bsod.isVisible():
