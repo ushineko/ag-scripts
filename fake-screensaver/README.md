@@ -13,6 +13,7 @@ A simple "poor man's screensaver" that displays a black fullscreen window. Unlik
 - **Black Fullscreen**: Covers the entire monitor with black.
 - **Visible Cursor**: Does not hide the mouse pointer.
 - **Easy Exit**: Press `Esc` to close.
+- **Easter Egg**: Press `B` to toggle the "Blue Screen of Delight" (a parody BSOD).
 
 ## Requirements
 - Python 3
@@ -58,6 +59,9 @@ To activate, you can bind this script to a global hotkey (e.g., `Meta+L` or `Met
     *(Run `./fake_screensaver.py` in a terminal to see available screen indices).*
 
 ## Changelog
+
+### v1.2.0
+- Added "Blue Screen of Delight" easter egg (press `B` to toggle)
 
 ### v1.1.1
 - Added install.sh script

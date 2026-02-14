@@ -1,9 +1,55 @@
 #!/usr/bin/env python3
 import sys
 import argparse
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPalette, QColor, QCursor, QFont
+from PyQt6.QtGui import QPalette, QColor, QFont
+
+
+class BlueScreenOfDelight(QWidget):
+    """Easter egg: a Windows-style 'Blue Screen of Delight' overlay."""
+
+    BSOD_TEXT = (
+        "Your PC ran into a problem and has joined the choir invisible. "
+        "It's Microsoft's fault, so install Linux instead.\n\n"
+        "-100% (estimated time: approximate heat death of the universe)\n\n"
+    )
+    STOP_CODE = "STOP CODE: CRITICAL_PROCESS_HATES_YOU"
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAutoFillBackground(True)
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#0078d7"))
+        self.setPalette(palette)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(100, 100, 100, 100)
+        layout.setSpacing(0)
+
+        face = QLabel(":)")
+        face.setFont(QFont("Segoe UI", 120))
+        face.setStyleSheet("color: white; background: transparent;")
+        layout.addWidget(face)
+
+        layout.addSpacing(30)
+
+        body = QLabel(self.BSOD_TEXT)
+        body.setFont(QFont("Segoe UI", 22))
+        body.setStyleSheet("color: white; background: transparent;")
+        body.setWordWrap(True)
+        body.setMaximumWidth(800)
+        layout.addWidget(body)
+
+        stop = QLabel(self.STOP_CODE)
+        stop.setFont(QFont("Segoe UI", 14))
+        stop.setStyleSheet("color: rgba(255,255,255,0.8); background: transparent;")
+        layout.addWidget(stop)
+
+        layout.addStretch()
+
+        self.setCursor(Qt.CursorShape.BlankCursor)
+        self.hide()
 
 class FakeScreensaver(QWidget):
     def __init__(self, screen_index, app_ref):
@@ -54,17 +100,38 @@ class FakeScreensaver(QWidget):
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.label.hide)
 
+        # Easter egg: Blue Screen of Delight overlay
+        self.bsod = BlueScreenOfDelight(self)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.bsod.setGeometry(0, 0, self.width(), self.height())
+
     def mousePressEvent(self, event):
+        if self.bsod.isVisible():
+            return
         # Show reminder on click
-        self.label.resize(self.width(), 200) # Ensure it spans full width if window resized (less relevant for fullscreen but good practice)
+        self.label.resize(self.width(), 200)
         self.label.move(0, (self.height() - self.label.height()) // 2)
         self.label.show()
         self.hide_timer.start(2000) # Hide after 2 seconds
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            # Close all windows
             self.app_ref.quit()
+        elif event.key() == Qt.Key.Key_B:
+            self._toggle_bsod()
+
+    def _toggle_bsod(self):
+        if self.bsod.isVisible():
+            self.bsod.hide()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            self.bsod.setGeometry(0, 0, self.width(), self.height())
+            self.bsod.show()
+            self.bsod.raise_()
+            self.label.hide()
+            self.setCursor(Qt.CursorShape.BlankCursor)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Fake Screensaver")
