@@ -4,6 +4,7 @@ set -e
 TARGET_DIR="$HOME/.claude"
 TARGET_FILE="$TARGET_DIR/CLAUDE.md"
 COMMANDS_DIR="$TARGET_DIR/commands"
+POLICIES_DIR="$TARGET_DIR/policies"
 
 echo "Uninstalling Claude Code global config..."
 
@@ -21,6 +22,19 @@ fi
 if [ -f "$COMMANDS_DIR/ralph.md" ]; then
     echo "Removing /ralph command..."
     rm "$COMMANDS_DIR/ralph.md"
+    REMOVED_SOMETHING=true
+fi
+
+if [ -f "$COMMANDS_DIR/ralph-setup.md" ]; then
+    echo "Removing /ralph-setup command..."
+    rm "$COMMANDS_DIR/ralph-setup.md"
+    REMOVED_SOMETHING=true
+fi
+
+# Remove policy modules
+if [ -d "$POLICIES_DIR" ]; then
+    echo "Removing policy modules..."
+    rm -rf "$POLICIES_DIR"
     REMOVED_SOMETHING=true
 fi
 

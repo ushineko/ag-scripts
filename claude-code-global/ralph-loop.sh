@@ -7,7 +7,7 @@
 #
 # Usage: ralph-loop.sh [project_dir] [--max-iterations N] [--dry-run]
 #
-# Version: 1.3.1
+# Version: 2.0.0
 
 set -e
 

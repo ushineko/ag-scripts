@@ -2,96 +2,151 @@
 
 This file establishes default development practices based on the Ralph Wiggum autonomous coding framework. Override or extend per-project via project-level `CLAUDE.md`.
 
+Language-specific standards, git workflows, release safety details, and external tool integrations are defined in policy modules. See [Policy Module System](#policy-module-system) below.
+
 ---
 
 ## Core Philosophy
 
 - **Spec-driven development**: Work from specifications with clear acceptance criteria
 - **Iterative self-correction**: Handle one focused task per cycle
-- **Test-based verification**: Tests enforce quality before marking work complete
-- **Autonomous operation**: Make decisions, don't wait for approval on implementation details
+- **Test-based verification**: Tests encode behavioral contracts, not just coverage checkboxes
+- **Human-in-the-loop by default**: AI accelerates implementation; humans own design decisions and convergence. Surface choices early rather than presenting finished work for bulk review
 - **Reversible by default**: Changes should be undoable in minutes without data heroics
 
 ---
 
-## Release Safety Principles
+## AI Tool Input Hygiene
 
-AI coding tools let us produce more change per day. That increases release risk unless we build in reversibility.
+AI coding tools send repository context to third-party APIs. This is how they work. Managing what they see is as important as reviewing what they produce.
 
-**The question every release must answer:**
-> "If this causes pain, can we undo it in minutes without data heroics?"
+### The Input/Output Risk Model
 
-### Parallel Change: Expand, Migrate, Contract
+| Risk | Question | Where Ralph Addresses It |
+|------|----------|--------------------------|
+| **Input** | What data reaches the AI provider? | Context exclusion (below) |
+| **Output** | Did the AI produce safe, correct code? | Phases 3-5 (test, quality, security) |
+| **Display** | What credentials appear in the terminal? | Credential display safety (below) |
 
-Break risky changes into phases that stay compatible while different versions coexist:
+Ralph's workflow handles output risk thoroughly. Input risk and display risk require these additional practices.
 
-| Phase | Action | Reversibility |
-|-------|--------|---------------|
-| **Expand** | Add new things without removing old ones | Full - just don't use new code |
-| **Migrate** | Backfill and dual-write, then switch reads | Full - flip back to old reads |
-| **Contract** | Remove old paths after confidence is established | Reduced - plan carefully |
+### Context Exclusion
 
-**Key insight**: Changes stay additive during Expand and Migrate. Rollback becomes expensive only in Contract phase.
+Ensure sensitive files never enter the AI tool's context window:
 
-### Feature Flags for Release Control
+- **`.gitignore`** — AI tools generally respect this. Verify it covers: `.env*`, `*.pem`, `*.key`, `credentials.*`, and any private data directories.
+- **`.claudeignore`** / **`.cursorignore`** — Tool-specific exclusion files. Mirror your `.gitignore` patterns and add anything sensitive that's tracked in git (e.g., configuration with internal URLs, proprietary datasets).
+- **Secrets in code** — Phase 5 catches these before commit, but they also represent input risk while you're working. Prefer environment variables and secret managers over any in-repo secrets.
 
-Deploy code, then control exposure separately:
-- **Deploy** = code is in production (can be instant)
-- **Release** = behavior is enabled (can be gradual)
+### Credential Display Safety
 
-Use flags for:
-- Behavior changes on existing endpoints
-- Risky migrations during the Migrate phase
-- Progressive rollout (internal → pilot → general)
+AI tools construct and execute shell commands on your behalf. When those commands involve authentication, credentials can appear in the terminal UI — in the command preview, in command output, or in shell history. This is a concern during screensharing, pair programming, or recorded sessions.
 
-### Stack-Specific Guidance
+**Where credentials become visible:**
+- **Command preview**: AI tools show the full command before execution. A `curl -H "Authorization: Bearer sk-abc123"` exposes the token in the UI.
+- **Command output**: Some tools echo auth details in verbose or debug output.
+- **Terminal scrollback**: Credentials persist in scroll history after the command finishes.
+- **Shell history**: Commands with literal tokens get saved to `~/.bash_history` or `~/.zsh_history`.
 
-#### APIs (DRF/FastAPI/GraphQL)
-- **Add fields, don't rename/remove in-place**. Ship old and new together until migration is complete.
-- **Behavior changes require a flag**. Same endpoint, two behaviors, one rollback lever.
-- **Version only when contracts must diverge**. Otherwise, control exposure with flags.
+**Prefer authentication methods that keep credentials out of commands:**
 
-#### PostgreSQL / Database Migrations
-- **Expand**: Add nullable columns, additive tables, use `CREATE INDEX CONCURRENTLY`
-- **Migrate**: Backfill in batches, dual-write briefly, switch reads behind a flag
-- **Contract**: Enforce constraints later, deprecate later, remove later (or never)
+| Approach | Credential Visibility | Example |
+|----------|----------------------|---------|
+| MCP server with config-based auth | Not visible — auth in server config | Token in MCP config file, never in commands |
+| CLI with built-in auth (gh, kubectl) | Not visible — auth in config file | Token in `~/.config/`, not in commands |
+| `curl` with `--netrc-file` | Not visible — auth in netrc file | Credentials in `~/.netrc`, not in command |
+| Environment variable in command | **Visible if expanded** | `$TOKEN` may appear as literal value in output |
+| Literal token in command | **Fully visible** | Worst case — avoid this pattern |
 
-#### Elasticsearch / Search Indices
-- Mappings often can't be changed in place - treat indices as versions
-- Create new versioned index → Reindex → Switch with alias
-- Rollback = flip alias back
+**Prompt before exposing credentials:**
 
-#### Kubernetes / Container Deployments
-- Release in rings: internal → pilot tenants → broader cohorts
-- Canary or blue-green for high-risk changes
-- Document the rollback lever: flag off, rollout undo, alias flip
+When about to execute a command that would include a credential in plaintext (e.g., a token in a `curl` header, an API key as a CLI argument), **stop and ask the user before constructing the command**. Do not write the command first and then ask — the credential would already be visible in the terminal at that point.
 
-### Concrete Example: Rename a Field
+- Describe what you intend to do and why it requires a credential (e.g., "I need to call the API to check status. This would require passing your token as a header.")
+- Give the user the chance to: approve, suggest a safer alternative (MCP server, authenticated CLI), or cancel
+- If the user approves credential-bearing commands for the session, do not prompt again for the same type of operation. Treat it as a session-level permission
 
-Want to rename `risk_score` to `threat_score`:
+**For day-to-day work:**
+- Instruct the AI tool to reference environment variables rather than reading and embedding literal token values into commands
+- MCP servers are the safest pattern for tool integrations — auth is configured once in the server config and never appears in any command
+- Authenticated CLIs (gh, kubectl) are the next safest — they read from their own config files
+- Avoid patterns where the AI reads a token from a file and interpolates it into a `curl` command
 
-1. **Expand**: Add `threat_score` nullable, return both in API, UI reads old field
-2. **Migrate**: Dual-write, backfill, flip reads behind flag (internal → pilot)
-3. **Contract**: Stop dual-write, deprecate old field in future release
+---
 
-**Rollback at any point**: Flip the flag off - old path still works.
+## Test Philosophy
+
+AI tools can produce tests rapidly, but speed of test creation is not the same as quality of test design. Tests encode commitments about system behavior. The wrong tests create maintenance burden without meaningful safety.
+
+> Influenced by Abel Enekes, ["When Change Becomes Cheaper Than Commitment"](https://www.abelenekes.com/when-change-becomes-cheaper-than-commitment) (2026), which applies Khalil Stemmler's divergence/convergence model to AI-assisted development.
+
+### Tests Are Contracts, Not Coverage
+
+Every test is an implicit contract: "the system must continue to behave this way." The value of that contract depends on what it commits to and how long that commitment lasts.
+
+| Contract Type | Example | Lifespan | Refactor Survival | Value |
+|---------------|---------|----------|-------------------|-------|
+| **User-facing behavioral** | "Login returns a session token" | Long — tied to product promises | High — survives internal rewrites | High |
+| **Integration boundary** | "Service A calls Service B with correct payload" | Medium — tied to API contracts | Medium — survives internal changes | Medium |
+| **Implementation detail** | "Function X calls mock Y with args Z" | Short — tied to current code structure | Low — breaks on any refactor | Low unless isolating specific logic |
+
+**Prioritize long-lived contracts.** Tests that verify what the system does for users survive architectural changes. Tests that verify how the code is internally wired break when you refactor.
+
+### The "Mock the Universe" Anti-Pattern
+
+If a test requires mocking many dependencies to achieve isolation, that is a signal — either the code under test has too many dependencies (refactor the code) or you are testing at the wrong level of abstraction (move the test higher).
+
+**Symptoms**:
+- Test setup is longer than the test itself
+- Mocks encode internal call sequences and argument shapes
+- Changing one function's implementation breaks tests for unrelated features
+- Test suite resists refactoring rather than enabling it
+
+**Guidance**:
+- Use mocks sparingly and deliberately, not as the default approach
+- Prefer testing through public interfaces and real collaborators where practical
+- When mocks are necessary, mock at architectural boundaries (external APIs, databases, third-party services), not between internal modules
+- If you find yourself mocking more than 2-3 dependencies for a single test, reconsider the test's abstraction level
+
+### Coverage Measures Exercise, Not Intent
+
+Coverage tells you which code paths were executed during tests. It does not tell you whether those tests encode meaningful commitments. A 95% coverage number built on heavily-mocked unit tests may provide less real safety than 60% coverage built on integration tests that verify actual behavior.
+
+**Guidance**:
+- Do not treat coverage as a target to maximize. Treat it as a diagnostic — low coverage in critical paths is a signal; high coverage via brittle mocks is not safety
+- When adding tests, ask: "What behavioral contract does this test encode? Will this contract still matter if I refactor the internals?"
+- Surface test strategy decisions to the human: test level (unit vs. integration vs. e2e), mock boundaries, and what behavioral contracts the tests will encode
+
+### AI-Generated Tests Require Human Judgment
+
+AI tools write tests that match the code they just wrote. By construction, those tests pass. But passing is not the same as encoding a meaningful commitment. AI-generated tests tend toward implementation-coupled unit tests because the AI has full visibility into internal structure.
+
+**Guidance**:
+- Treat AI-generated test suites as a starting point for human review, not a finished artifact
+- During code review, evaluate tests for contract quality: do they test behavior or implementation?
+- When the AI proposes tests, it should state what behavioral contract each test encodes
+- Flag tests that will break on refactoring without any behavior change — these are implementation contracts with short lifespans
 
 ---
 
 ## Context Detection
 
-### Ralph Loop Mode (Automated Workflow)
+### Interactive Mode (Default — Recommended)
+When user is working conversationally, implementing features, or iterating on code.
+
+**Behavior**: Collaborate on implementation. Surface design decisions, test strategy choices, and architectural trade-offs for human input. This is the recommended mode for most work because it keeps humans in the convergence loop — catching design divergence early costs less than reviewing bulk changes after the fact.
+
+### Ralph Loop Mode (Bounded Autonomous Workflow)
 Triggered when:
 - Running via `ralph-loop.sh` or similar orchestration
 - Prompt references "implement spec" or completion signals
 - Working through a `specs/` folder systematically
 
-**Behavior**: Focus purely on implementation. Output `<promise>DONE</promise>` only when all acceptance criteria pass.
+**Behavior**: Focus on implementation. Output `<promise>DONE</promise>` only when all acceptance criteria pass.
 
-### Interactive Mode (Default)
-When user is asking questions, discussing ideas, or working conversationally.
+**When Loop Mode works well**: Mechanical tasks with low design ambiguity — formatting fixes, applying a well-defined pattern across files, implementing a spec where all design decisions are pre-made in the spec itself.
 
-**Behavior**: Provide guidance, explain decisions, and collaborate on specs/planning.
+**When Loop Mode works poorly**: Features with design decisions embedded in implementation details. Specs capture intent but not every structural choice. When the AI makes those choices autonomously and threads them through many files, the human faces a bulk review that is harder to form a convergence opinion about than incremental course corrections would have been. Prefer Interactive Mode for anything with meaningful design latitude.
 
 ---
 
@@ -113,11 +168,13 @@ When working on features/tasks, follow these phases:
 - Code the selected spec completely
 - Follow requirements precisely
 - Add tests for new functionality
+- **Test strategy checkpoint** (Interactive Mode): Before writing tests, surface the test approach to the human — what level (unit/integration/e2e), what behavioral contracts will be encoded, and where mock boundaries should be. This prevents investing in tests the human would reject on review
 
 ### Phase 3: Validate
 - Confirm all existing tests pass
 - Verify new functionality meets acceptance criteria
 - Run the full test suite
+- **Review test contract quality**: Do the new tests encode behavioral contracts (what the system does) or implementation contracts (how it does it internally)? Flag any tests that would break on refactoring without behavior change
 
 ### Phase 4: Code Quality Refactor Pass
 **Conditional refactoring** - Only refactor if issues are found:
@@ -197,41 +254,15 @@ When working on features/tasks, follow these phases:
 
 ### Phase 5.5: Release Safety Review
 
-**Reversibility check** - Verify changes can be safely rolled back:
+**Reversibility check** - Verify changes can be safely rolled back.
 
-#### For Schema/Database Changes
-- [ ] Uses Expand-Migrate-Contract pattern (or justified exception)
-- [ ] New columns are nullable or have safe defaults
-- [ ] Indexes created with `CONCURRENTLY` where supported
-- [ ] Backfill strategy defined for data migrations
-- [ ] Rollback path documented
-
-#### For API Changes
-- [ ] Additive only (no breaking removals in same release)
-- [ ] Behavior changes behind feature flag (if applicable)
-- [ ] Backward compatible with existing clients
-- [ ] Rollback = disable flag or revert deploy
-
-#### For Search/Index Changes
-- [ ] Using versioned indices with alias strategy
-- [ ] Rollback = flip alias to previous index
-
-#### For Infrastructure/Deployment
-- [ ] Rollout rings defined (internal → pilot → general)
-- [ ] Rollback lever documented (flag, undo, alias flip)
-- [ ] No shared state that prevents independent rollback
-
-#### Rollback Plan Documentation
 Every change must have an answer to: "How do we undo this in minutes?"
 
-| Change Type | Rollback Approach |
-|-------------|-------------------|
-| Code-only | Revert commit, redeploy |
-| Feature flag | Disable flag |
-| Schema (Expand phase) | Ignore new columns |
-| Schema (Migrate phase) | Flip reads to old path |
-| Schema (Contract phase) | ⚠️ May require restore - document carefully |
-| Index change | Flip alias |
+If a release-safety policy module is active (e.g., `release-safety/full.md`), follow its detailed checklists. Otherwise, apply this generic checklist:
+
+- [ ] Rollback approach identified (revert commit, disable flag, flip alias, etc.)
+- [ ] Changes are additive where possible (no breaking removals in same release)
+- [ ] Rollback plan documented in commit or PR description
 
 **Skip conditions**: This phase can be streamlined for:
 - Documentation-only changes
@@ -264,7 +295,7 @@ After completing validation phases (3-5), save results to track quality trends:
 
 **IMPORTANT**: A validation report is REQUIRED before any commit that includes code changes. This ensures:
 - Quality gates were actually run (not just claimed)
-- Audit trail exists for compliance
+- Audit trail exists for tracking
 - Issues are documented before they reach production
 
 **What to include**:
@@ -280,39 +311,31 @@ validation-reports/YYYY-MM-DD-HHmm-<task-name>.md
 - Test suite: <test command>
 - Results: X passing, Y failing
 - Coverage: Z%
-- Status: ✓ PASSED / ✗ FAILED
+- Status: PASSED / FAILED
 
 ### Phase 4: Code Quality
 - Dead code: None found / <issues>
 - Duplication: None found / <issues>
 - Encapsulation: Well-structured / <issues>
 - Refactorings: <list any refactorings made>
-- Status: ✓ PASSED / ✗ FAILED
+- Status: PASSED / FAILED
 
 ### Phase 5: Security Review
 - Dependencies: <tool> - X vulnerabilities (Critical: Y, High: Z)
 - OWASP Top 10: <summary of findings>
 - Anti-patterns: <summary>
 - Fixes applied: <list>
-- Status: ✓ PASSED / ✗ FAILED
+- Status: PASSED / FAILED
 
 ### Phase 5.5: Release Safety
 - Change type: Code-only / Schema / API / Infrastructure
-- Pattern used: Expand-Migrate-Contract / Additive API / Feature flag / N/A
 - Rollback plan: <describe how to undo in minutes>
-- Rollout strategy: Immediate / Ringed (internal → pilot → general)
-- Status: ✓ PASSED / ✗ FAILED / ⊘ SKIPPED (docs/tests only)
+- Status: PASSED / FAILED / SKIPPED (docs/tests only)
 
 ### Overall
 - All gates passed: YES/NO
 - Notes: <any additional context>
 ```
-
-**Benefits**:
-- Track quality trends over time
-- Document due diligence for audits
-- Identify recurring issues
-- Demonstrate continuous improvement
 
 ### Phase 7: Commit & Complete
 
@@ -327,20 +350,6 @@ validation-reports/YYYY-MM-DD-HHmm-<task-name>.md
 - Deploy if applicable
 
 **Note**: Never commit code changes without a corresponding validation report. The report documents that quality gates were actually executed.
-
----
-
-## Git Preferences
-
-- **No Co-Authored-By**: Do NOT include `Co-Authored-By` lines in commit messages
-- Commit messages should be concise and descriptive
-- Use conventional commit prefixes (feat, fix, chore, docs, refactor, test)
-
-### Remote Connectivity Check
-**Before running `git push`, `git pull`, or `git fetch`:**
-- Test connectivity first with a short timeout: `timeout 5 git ls-remote --exit-code origin HEAD`
-- If it fails or hangs, inform the user that the VPN may need to be manually bounced
-- Only proceed with the actual git operation after connectivity is confirmed
 
 ### Phase 8: Completion Signal (Loop Mode Only)
 Output `<promise>DONE</promise>` only when ALL of these pass:
@@ -375,8 +384,8 @@ All written artifacts (specs, documentation, commit messages, validation reports
 
 **Examples**:
 
-| ❌ Avoid | ✅ Use Instead |
-|---------|---------------|
+| Avoid | Use Instead |
+|-------|-------------|
 | "This amazing feature provides enterprise-grade scalability" | "This feature supports horizontal scaling via Redis clustering" |
 | "Awesome refactor that makes the code more robust" | "Refactor: extract database logic into repository pattern" |
 | "Incredible test coverage improvements" | "Increase test coverage from 45% to 87%" |
@@ -415,29 +424,42 @@ When you determine that a tool or package needs to be installed:
   - Note what validation/functionality could not be completed
   - Include this in any validation reports or documentation
 
-**Examples**:
-
-❌ **Wrong approach**:
-```
-Tool not found. Installing via pip...
-[proceeds with pip install without asking]
-```
-
-✅ **Correct approach**:
-```
-The pip-audit tool is not installed. This tool scans Python dependencies for known CVEs.
-
-Options:
-1. Install it: pipx install pip-audit (recommended)
-2. Skip CVE scanning (will note this limitation in validation report)
-
-Should I proceed with installation? [Provide installation command for your environment]
-```
-
 **Special cases**:
 - **System tools** (apt, pacman): Always ask - these require sudo and modify system state
 - **Python packages**: Ask which method (pip, pipx, conda) and where (system, venv)
 - **Development tools**: Consider if they should be in requirements.txt instead
+
+---
+
+## Policy Module System
+
+Project-specific coding standards, git workflows, release safety practices, and external tool integrations are defined in policy modules located at `~/.claude/policies/`.
+
+### How It Works
+
+1. The global `~/.claude/CLAUDE.md` (this file) provides the core methodology
+2. Each project's `.claude/CLAUDE.md` lists which policies to activate under `## Selected Policies`
+3. At session start, read the listed policy files and apply them alongside the core methodology
+4. If a project has no config or no `## Selected Policies` section, only the core methodology applies — inform the user once and suggest running `/ralph-setup`
+
+### Available Policies
+
+| Category | Policies | Purpose |
+|----------|----------|---------|
+| Languages | `languages/python.md`, `languages/go.md`, `languages/bash.md` | Coding standards |
+| Git | `git/standard.md`, `git/platform-backend.md`, `git/simple.md` | Git workflows |
+| Release Safety | `release-safety/full.md`, `release-safety/simplified.md`, `release-safety/minimal.md` | Rollback practices |
+| Integrations | `integrations/jira-mcp.md`, `integrations/gitlab-glab.md` | External tools |
+
+### Reading Policies
+
+When you encounter a `## Selected Policies` section in a project's `.claude/CLAUDE.md`, read each listed file from `~/.claude/policies/` and apply its guidance for the remainder of the session. If a listed file does not exist, inform the user that the policy module is missing and suggest running `./install.sh` from the claude-code-global project to update.
+
+### Policy Composition
+
+Some policies extend others:
+- `git/platform-backend.md` **includes all rules from** `git/standard.md` — listing only `git/platform-backend.md` is sufficient
+- All other policies are independent — list each one you need
 
 ---
 
@@ -458,13 +480,13 @@ Use `/ralph-setup` for a guided wizard, or manually create `.claude/CLAUDE.md`.
 
 #### Relaxable Guidelines
 These can be loosened for specific projects:
-- Validation report frequency (every commit → milestones only)
-- Code quality refactor pass (always → skip for hotfixes)
-- Test requirements (must pass → WIP commits allowed)
-- Communication standards (strict → relaxed for docs)
-- Tool installation policy (always ask → auto-approve dev deps)
+- Validation report frequency (every commit -> milestones only)
+- Code quality refactor pass (always -> skip for hotfixes)
+- Test requirements (must pass -> WIP commits allowed)
+- Communication standards (strict -> relaxed for docs)
+- Tool installation policy (always ask -> auto-approve dev deps)
 - Git standards (partial: connectivity checks can be disabled)
-- Release safety (full checklist → simplified → minimal for prototypes)
+- Release safety (full checklist -> simplified -> minimal for prototypes)
 
 #### Non-Relaxable Guidelines (Security)
 These CANNOT be disabled, only extended with additional rules:
@@ -479,10 +501,10 @@ When relaxing guidelines, document the justification in the project config.
 
 | Trigger | Mode | Behavior |
 |---------|------|----------|
-| `/ralph` command | Loop | Enter Loop Mode, work through specs autonomously |
+| Conversation/implementation | Interactive (default) | Collaborate, surface decisions, iterate with human input |
+| `/ralph` command | Loop | Bounded autonomous mode for low-ambiguity tasks |
 | `ralph-loop.sh` | Loop | External orchestration with fresh context per iteration |
 | Working through specs/ | Loop | Implement, test, signal completion |
-| Conversation/questions | Interactive | Guide and collaborate |
 
 ---
 
