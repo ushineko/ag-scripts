@@ -6,7 +6,20 @@ This project follows the Ralph Wiggum methodology (see `~/.claude/CLAUDE.md` for
 
 ## Project Overview
 
-A collection of utility scripts and tools for Linux desktop automation, system configuration, and quality-of-life improvements. Each sub-directory is a self-contained project.
+- **Type**: Utility script monorepo
+- **Languages**: Python, Bash/Shell
+- **Purpose**: Linux desktop automation, system configuration, and quality-of-life improvements. Each sub-directory is a self-contained project.
+
+---
+
+## Selected Policies
+
+Load the following policy modules from `~/.claude/policies/`:
+
+- `languages/python.md`
+- `languages/bash.md`
+- `git/standard.md`
+- `release-safety/minimal.md`
 
 ---
 
@@ -250,3 +263,24 @@ Additional workflow guidance available in `.agent/workflows/`:
 - `update_docs_and_version.md` - Sub-project versioning and docs
 - `uninstaller.md` - Uninstaller creation guidelines
 - `base.md` - Core Ralph Wiggum methodology workflow
+
+---
+
+## Configuration Summary
+
+| Category | Setting | Notes |
+| ---------- | ------- | ----- |
+| Validation Reports | Required for all commits | Default (strict) |
+| Code Quality Checks | Always check | Default (strict) |
+| Test Requirements | Tests required | Default (strict) |
+| Communication Style | Factual, no superlatives | Default (strict) |
+| Tool Installation | Always ask | Default (strict) |
+| Language Policies | Python, Bash | `languages/python.md`, `languages/bash.md` |
+| Git Policy | Standard | `git/standard.md` |
+| Release Safety | Minimal | `release-safety/minimal.md` |
+| Integrations | None | — |
+| Security | Defaults (mandatory) | CVE scanning, OWASP Top 10, secrets detection |
+
+---
+
+<!-- Upgraded to v2.0 policy module format by /ralph-setup on 2026-02-15 -->
