@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.3.4
+Version 1.4.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
 
@@ -10,7 +10,6 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Manual Usage](#manual-usage)
-- [Calibrating Claude Code Usage Tracking](#calibrating-claude-code-usage-tracking)
 - [Logging](#logging)
 - [Changelog](#changelog)
 
@@ -22,8 +21,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
 - **Arctis Headsets**: Uses `headsetcontrol` to fetch battery levels.
 - **AirPods Support**: Advanced BLE scanning to fetch granular battery levels for Left, Right, and Case. Supports disconnected monitoring. Now with fallback logic and Case display!
-- **Claude Code Integration**: Displays token usage within rolling time windows (1h-12h) with progress bar and countdown to reset. Auto-hides if Claude Code is not installed. Configurable session budget, window duration, and reset hour via right-click menu.
-  - **Note**: Tracks local CLI usage only (from `~/.claude/projects/`). Does not include usage from claude.ai web interface or other devices. Best suited for single-system workflows where most usage is via Claude Code CLI.
+- **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Auto-Remember**: KWin remembers the window position and screen between sessions.
@@ -55,59 +53,19 @@ python3 peripheral-battery.py
 python3 peripheral-battery.py --debug
 ```
 
-## Calibrating Claude Code Usage Tracking
-
-The Claude Code section tracks local CLI token usage against a configurable budget. Since Claude's actual rate limits aren't exposed via API, you'll need to calibrate the settings to match your plan.
-
-### Step 1: Find Your Reset Time
-
-In Claude Code, run `/usage` and note the reset time displayed (e.g., "Resets 2:00am"). This is your **Reset Hour**.
-
-Right-click the monitor → **Claude Code** → **Reset Hour** → Select the matching hour (e.g., "2am").
-
-### Step 2: Determine Your Window Duration
-
-Claude uses rolling time windows. The `/usage` command shows a countdown to reset. If it says "Resets in 4h 30m" and you know the reset hour is 2am, you can calculate your window duration.
-
-Common values:
-- **Max plan**: Often 4-5 hour windows
-- **Pro plan**: May vary
-
-Right-click → **Claude Code** → **Window Duration** → Select your window (1h-12h options available).
-
-### Step 3: Calibrate Your Budget
-
-1. Note your current usage percentage from `/usage` (e.g., "50%")
-2. Set a test budget in the monitor (e.g., 20k tokens)
-3. Compare the monitor's percentage to `/usage`
-4. Adjust the budget until they roughly match
-
-**Example calibration:**
-- `/usage` shows 50%
-- Monitor shows 49% with 20k budget
-- ✓ Budget is calibrated correctly
-
-### Troubleshooting
-
-| Symptom | Solution |
-|---------|----------|
-| Monitor shows much lower % than /usage | Decrease the budget (try 15k, 10k) |
-| Monitor shows much higher % than /usage | Increase the budget (try 25k, 50k) |
-| Countdown timer doesn't match | Adjust the reset hour and/or window duration |
-| Usage resets mid-window | Your window duration doesn't match Claude's actual windows |
-
-### Limitations
-
-- Only tracks local CLI usage from `~/.claude/projects/`
-- Does not include claude.ai web interface or other devices
-- Best suited for single-system workflows
-
 ## Logging
 Logs are automatically saved in JSON format for debugging:
 - **Location**: `~/.local/state/peripheral-battery-monitor/peripheral_battery.log`
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.4.0
+- Replaced local JSONL token scraping with Anthropic's OAuth usage API (`GET /api/oauth/usage`)
+- Claude section now shows 5-hour and 7-day utilization percentages directly from Anthropic's servers
+- Automatic OAuth token refresh when expired
+- Removed manual calibration workflow (budget, window duration, reset hour settings)
+- Requires `claude login` authentication (uses `~/.claude/.credentials.json`)
 
 ### v1.3.4
 - Fixed AirPods battery not reporting after bluez 5.86 update. Replaced `bluetoothctl` CLI with D-Bus for connection detection. BLE scan no longer gated on stale CLI output.

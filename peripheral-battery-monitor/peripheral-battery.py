@@ -6,15 +6,16 @@ import os
 import subprocess
 import faulthandler
 import shutil
-from datetime import datetime, timezone, timedelta
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
 
 
 from PyQt6.QtWidgets import (
     QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QProgressBar, QDialog, QSpinBox, QComboBox, QPushButton, QFormLayout,
-    QDialogButtonBox, QInputDialog
+    QFrame, QProgressBar
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QLockFile, QDir
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
 import battery_reader
@@ -22,10 +23,16 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.3.4"
+__version__ = "1.4.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
-CLAUDE_PROJECTS_PATH = os.path.expanduser("~/.claude/projects")
+CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
+
+CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CLAUDE_TOKEN_URL = "https://console.anthropic.com/api/oauth/token"
+CLAUDE_USER_AGENT = "claude-code/2.1.42"
+CLAUDE_BETA_HEADER = "oauth-2025-04-20"
 
 
 def is_claude_installed():
@@ -33,159 +40,125 @@ def is_claude_installed():
     return shutil.which('claude') is not None
 
 
-def get_session_window(window_hours=4, reset_hour=2):
-    """
-    Calculate the current session window boundaries based on reset hour.
-    Windows are aligned to the user's reset time (from Claude's /usage).
+def get_time_until_reset(resets_at: str) -> str:
+    """Calculate time remaining until reset from an ISO 8601 timestamp string."""
+    now = datetime.now(timezone.utc)
+    try:
+        reset_time = datetime.fromisoformat(resets_at)
+    except (ValueError, TypeError):
+        return "Unknown"
 
-    For example, if reset_hour=2 and window_hours=4:
-    - Windows are: 22:00-02:00, 02:00-06:00, 06:00-10:00, etc.
-
-    Returns (window_start, window_end) as datetime objects in local timezone.
-    """
-    now = datetime.now().astimezone()
-    current_hour = now.hour
-
-    # Calculate all window boundary hours in a day (aligned to reset_hour)
-    # E.g., reset_hour=2, window_hours=4 → boundaries at [2, 6, 10, 14, 18, 22]
-    boundaries = [(reset_hour + i * window_hours) % 24 for i in range(24 // window_hours)]
-    boundaries.sort()
-
-    # Find which window we're in
-    window_end_hour = None
-    for i, boundary in enumerate(boundaries):
-        if current_hour < boundary:
-            window_end_hour = boundary
-            break
-
-    # If we didn't find one, we're past the last boundary → next window is first boundary tomorrow
-    if window_end_hour is None:
-        window_end_hour = boundaries[0]
-        # Window ends tomorrow
-        window_end = now.replace(hour=window_end_hour, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    else:
-        window_end = now.replace(hour=window_end_hour, minute=0, second=0, microsecond=0)
-
-    # Window start is window_hours before window end
-    window_start = window_end - timedelta(hours=window_hours)
-
-    return window_start, window_end
-
-
-def get_time_until_reset(window_start, window_end):
-    """Calculate time remaining until window resets, with window times displayed."""
-    now = datetime.now().astimezone()
-    delta = window_end - now
-
-    # Format window times in 24H format
-    start_time = window_start.strftime("%H:%M")
-    end_time = window_end.strftime("%H:%M")
-    window_str = f"{start_time}-{end_time}"
-
+    delta = reset_time - now
     if delta.total_seconds() <= 0:
-        return f"{window_str} (resetting...)"
+        return "Resetting..."
 
     hours = int(delta.total_seconds() // 3600)
     minutes = int((delta.total_seconds() % 3600) // 60)
 
     if hours > 0:
-        return f"{window_str} ({hours}h {minutes}m)"
-    else:
-        return f"{window_str} ({minutes}m)"
+        return f"Resets in {hours}h {minutes}m"
+    return f"Resets in {minutes}m"
 
 
-def get_claude_stats(window_start=None, window_end=None):
-    """
-    Read and parse Claude Code usage from session files within the time window.
-    If no window specified, uses all files modified today.
-    """
-    if not os.path.exists(CLAUDE_PROJECTS_PATH):
-        return None
-
+def _read_credentials() -> dict | None:
+    """Read and return the Claude OAuth credentials, or None if unavailable."""
     try:
-        total_input = 0
-        total_output = 0
-        total_cache_read = 0
-        total_cache_create = 0
-        api_calls = 0
-        files_processed = 0
-
-        # Convert window times to timestamps for comparison
-        if window_start and window_end:
-            window_start_ts = window_start.timestamp()
-            window_end_ts = window_end.timestamp()
-        else:
-            # Fallback: use today (UTC)
-            today = datetime.now(timezone.utc).date()
-            window_start_ts = None
-            window_end_ts = None
-
-        for root, dirs, files in os.walk(CLAUDE_PROJECTS_PATH):
-            for f in files:
-                if f.endswith('.jsonl'):
-                    path = os.path.join(root, f)
-                    file_mtime = os.path.getmtime(path)
-
-                    # Filter by window if specified
-                    if window_start_ts and window_end_ts:
-                        # Skip files not modified within window
-                        if file_mtime < window_start_ts or file_mtime > window_end_ts:
-                            continue
-                    else:
-                        # Fallback: only files modified today
-                        mtime_date = datetime.fromtimestamp(file_mtime, tz=timezone.utc).date()
-                        if mtime_date != today:
-                            continue
-
-                    files_processed += 1
-
-                    # Parse this session file, filtering by timestamp if needed
-                    with open(path, 'r') as fp:
-                        for line in fp:
-                            try:
-                                data = json.loads(line)
-
-                                # Check timestamp if window filtering
-                                if window_start_ts and window_end_ts:
-                                    # Try to get timestamp from the message
-                                    msg_ts = data.get('timestamp')
-                                    if msg_ts:
-                                        # Parse ISO timestamp
-                                        try:
-                                            msg_time = datetime.fromisoformat(msg_ts.replace('Z', '+00:00'))
-                                            msg_timestamp = msg_time.timestamp()
-                                            if msg_timestamp < window_start_ts or msg_timestamp > window_end_ts:
-                                                continue
-                                        except (ValueError, AttributeError):
-                                            pass
-
-                                if 'message' in data and isinstance(data['message'], dict):
-                                    usage = data['message'].get('usage', {})
-                                    if usage:
-                                        api_calls += 1
-                                        total_input += usage.get('input_tokens', 0)
-                                        total_output += usage.get('output_tokens', 0)
-                                        total_cache_read += usage.get('cache_read_input_tokens', 0)
-                                        total_cache_create += usage.get('cache_creation_input_tokens', 0)
-                            except json.JSONDecodeError:
-                                pass
-
-        if files_processed == 0:
-            return None
-
-        return {
-            'session_tokens': total_input + total_output,
-            'input_tokens': total_input,
-            'output_tokens': total_output,
-            'cache_read': total_cache_read,
-            'cache_create': total_cache_create,
-            'api_calls': api_calls,
-            'files_processed': files_processed,
-            'window_start': window_start,
-            'window_end': window_end
-        }
-    except Exception:
+        with open(CLAUDE_CREDENTIALS_PATH, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
         return None
+
+
+def _refresh_oauth_token(refresh_token: str) -> dict | None:
+    """Refresh the OAuth access token. Returns new token data or None on failure."""
+    log = structlog.get_logger()
+    body = json.dumps({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": CLAUDE_OAUTH_CLIENT_ID,
+    }).encode()
+
+    req = urllib.request.Request(
+        CLAUDE_TOKEN_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as e:
+        log.warning("oauth_refresh_failed", error=str(e))
+        return None
+
+
+def _save_credentials(creds: dict) -> None:
+    """Write updated credentials back to disk."""
+    try:
+        with open(CLAUDE_CREDENTIALS_PATH, 'w') as f:
+            json.dump(creds, f)
+    except OSError:
+        pass
+
+
+def fetch_claude_usage() -> dict | None:
+    """Fetch Claude Code usage from the Anthropic OAuth API.
+
+    Reads the OAuth token from ~/.claude/.credentials.json, refreshes if expired,
+    and calls GET /api/oauth/usage. Returns the parsed JSON response or None on error.
+    """
+    log = structlog.get_logger()
+    creds = _read_credentials()
+    if not creds:
+        return None
+
+    oauth = creds.get("claudeAiOauth")
+    if not oauth:
+        return None
+
+    access_token = oauth.get("accessToken")
+    refresh_token = oauth.get("refreshToken")
+    expires_at = oauth.get("expiresAt", 0)
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if now_ms >= expires_at:
+        if not refresh_token:
+            log.warning("claude_token_expired_no_refresh")
+            return {"error": "auth_expired"}
+
+        new_token_data = _refresh_oauth_token(refresh_token)
+        if not new_token_data or "access_token" not in new_token_data:
+            return {"error": "auth_expired"}
+
+        access_token = new_token_data["access_token"]
+        oauth["accessToken"] = access_token
+        if "refresh_token" in new_token_data:
+            oauth["refreshToken"] = new_token_data["refresh_token"]
+        if "expires_in" in new_token_data:
+            oauth["expiresAt"] = now_ms + new_token_data["expires_in"] * 1000
+        _save_credentials(creds)
+
+    req = urllib.request.Request(
+        CLAUDE_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "User-Agent": CLAUDE_USER_AGENT,
+            "anthropic-beta": CLAUDE_BETA_HEADER,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        log.warning("claude_usage_api_error", status=e.code)
+        return {"error": "api_error"}
+    except (urllib.error.URLError, TimeoutError) as e:
+        log.warning("claude_usage_network_error", error=str(e))
+        return {"error": "offline"}
+    except json.JSONDecodeError:
+        log.warning("claude_usage_invalid_json")
+        return {"error": "invalid_response"}
 
 
 def setup_logging(debug_mode=False):
@@ -275,157 +248,13 @@ class UpdateThread(QThread):
             log = structlog.get_logger()
             log.error("update_failed", error=str(e))
         
+        try:
+            results['claude_usage'] = fetch_claude_usage()
+        except Exception as e:
+            log = structlog.get_logger()
+            log.error("claude_usage_fetch_failed", error=str(e))
+
         self.data_ready.emit(results)
-
-
-class CalibrationDialog(QDialog):
-    """Dialog for calibrating Claude usage display to match actual billing."""
-
-    def __init__(self, parent, current_tokens, current_budget, current_percentage):
-        super().__init__(parent)
-        self.current_tokens = current_tokens
-        self.current_budget = current_budget
-        self.current_percentage = current_percentage
-        self.result_budget = current_budget
-
-        self.setWindowTitle("Calibrate Claude Usage")
-        self.setModal(True)
-        self.setup_ui()
-        self.update_preview()
-
-        # Ensure dialog fits on screen and is positioned properly
-        self.adjustSize()
-        self.setFixedSize(self.sizeHint())
-
-        # Center on screen (works better than centering on parent for small parent windows)
-        screen = QApplication.primaryScreen().geometry()
-        x = (screen.width() - self.width()) // 2
-        y = (screen.height() - self.height()) // 2
-        self.move(x, y)
-
-    def setup_ui(self):
-        layout = QFormLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        # Apply dark theme
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #2b2b2b;
-                color: #e0e0e0;
-            }
-            QLabel {
-                color: #e0e0e0;
-            }
-            QSpinBox, QComboBox {
-                background-color: #3d3d3d;
-                color: #e0e0e0;
-                border: 1px solid #555;
-                padding: 4px;
-                min-width: 120px;
-            }
-            QPushButton {
-                background-color: #3d3d3d;
-                color: #e0e0e0;
-                border: 1px solid #555;
-                padding: 4px 12px;
-                min-width: 60px;
-            }
-            QPushButton:hover {
-                background-color: #4d4d4d;
-            }
-            QPushButton:pressed {
-                background-color: #555;
-            }
-        """)
-
-        def format_tokens(n):
-            if n >= 1000000:
-                return f"{n / 1000000:.1f}M"
-            elif n >= 1000:
-                return f"{n / 1000:.1f}k"
-            return str(int(n))
-
-        # Show current state inline
-        current_lbl = QLabel(f"{format_tokens(self.current_tokens)} / {format_tokens(self.current_budget)} = {self.current_percentage}%")
-        current_lbl.setStyleSheet("color: #888;")
-        layout.addRow("Current:", current_lbl)
-
-        # Target percentage input
-        self.target_spin = QSpinBox()
-        self.target_spin.setRange(1, 200)
-        self.target_spin.setValue(self.current_percentage if self.current_percentage > 0 else 25)
-        self.target_spin.setSuffix("%")
-        self.target_spin.valueChanged.connect(self.update_preview)
-        layout.addRow("Target %:", self.target_spin)
-
-        # Adjustment mode
-        self.adjust_combo = QComboBox()
-        self.adjust_combo.addItems([
-            "Adjust budget",
-            "Adjust tokens"
-        ])
-        self.adjust_combo.currentIndexChanged.connect(self.update_preview)
-        layout.addRow("Method:", self.adjust_combo)
-
-        # Preview result
-        self.preview_lbl = QLabel("--")
-        self.preview_lbl.setStyleSheet("color: #4caf50; font-weight: bold;")
-        layout.addRow("Result:", self.preview_lbl)
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_btn)
-
-        apply_btn = QPushButton("Apply")
-        apply_btn.clicked.connect(self.accept)
-        apply_btn.setDefault(True)
-        button_layout.addWidget(apply_btn)
-
-        layout.addRow(button_layout)
-
-    def update_preview(self):
-        target_pct = self.target_spin.value()
-        adjust_mode = self.adjust_combo.currentIndex()
-
-        def format_tokens(n):
-            if n >= 1000000:
-                return f"{n / 1000000:.1f}M"
-            elif n >= 1000:
-                return f"{n / 1000:.1f}k"
-            return str(int(n))
-
-        if adjust_mode == 0:  # Adjust budget
-            if target_pct > 0:
-                new_budget = int(self.current_tokens / (target_pct / 100))
-                self.result_budget = new_budget
-                self.result_tokens = None
-                self.preview_lbl.setText(f"Budget → {format_tokens(new_budget)}")
-            else:
-                self.preview_lbl.setText("Invalid percentage")
-        else:  # Adjust token count (override)
-            if self.current_budget > 0:
-                new_tokens = int(self.current_budget * (target_pct / 100))
-                self.result_budget = None
-                self.result_tokens = new_tokens
-                self.preview_lbl.setText(f"Tokens → {format_tokens(new_tokens)}")
-            else:
-                self.preview_lbl.setText("Unlimited budget - can't calibrate")
-
-    def get_result(self):
-        """Returns (new_budget, token_offset) or (None, None) if cancelled."""
-        if self.adjust_combo.currentIndex() == 0:
-            return (self.result_budget, None)
-        else:
-            # Token override: calculate offset from current counted tokens
-            if hasattr(self, 'result_tokens') and self.result_tokens is not None:
-                offset = self.result_tokens - self.current_tokens
-                return (None, offset)
-            return (None, None)
 
 
 class PeripheralMonitor(QWidget):
@@ -437,9 +266,6 @@ class PeripheralMonitor(QWidget):
         self.initUI()
         self.setup_timer()
 
-        # Update Claude section immediately with saved settings
-        self.update_claude_section()
-
         # Delay initial update so window shows up first
         QTimer.singleShot(100, self.update_status)
 
@@ -448,9 +274,6 @@ class PeripheralMonitor(QWidget):
             "opacity": 0.95,
             "font_scale": 1.0,
             "claude_section_enabled": True,
-            "claude_session_budget": 500000,  # 500k tokens default
-            "claude_window_hours": 4,  # 4-hour session window (Max plan)
-            "claude_reset_hour": 2  # Reset hour from /usage (e.g., 2 = 2am)
         }
         if os.path.exists(CONFIG_PATH):
             try:
@@ -582,31 +405,26 @@ class PeripheralMonitor(QWidget):
         claude_layout.setContentsMargins(15, 8, 15, 10)
         claude_layout.setSpacing(4)
 
-        # Header row: title and session duration
         header_row = QHBoxLayout()
         header_row.setSpacing(8)
 
-        # Icon
         icon_lbl = QLabel(self)
         icon = QIcon.fromTheme("dialog-scripts", QIcon.fromTheme("utilities-terminal"))
         icon_lbl.setPixmap(icon.pixmap(16, 16))
         header_row.addWidget(icon_lbl)
 
-        # Title
         title_lbl = QLabel("Claude Code", self)
         title_lbl.setObjectName("ClaudeTitle")
         header_row.addWidget(title_lbl)
 
         header_row.addStretch()
 
-        # Session duration
         self.claude_duration_lbl = QLabel("--", self)
         self.claude_duration_lbl.setObjectName("ClaudeReset")
         header_row.addWidget(self.claude_duration_lbl)
 
         claude_layout.addLayout(header_row)
 
-        # Progress bar
         self.claude_progress = QProgressBar(self)
         self.claude_progress.setObjectName("ClaudeProgress")
         self.claude_progress.setMinimum(0)
@@ -616,18 +434,17 @@ class PeripheralMonitor(QWidget):
         self.claude_progress.setFixedHeight(8)
         claude_layout.addWidget(self.claude_progress)
 
-        # Stats row: tokens and API calls
         stats_row = QHBoxLayout()
 
-        self.claude_tokens_lbl = QLabel("-- tokens", self)
-        self.claude_tokens_lbl.setObjectName("ClaudeStats")
-        stats_row.addWidget(self.claude_tokens_lbl)
+        self.claude_five_hour_lbl = QLabel("5h: --", self)
+        self.claude_five_hour_lbl.setObjectName("ClaudeStats")
+        stats_row.addWidget(self.claude_five_hour_lbl)
 
         stats_row.addStretch()
 
-        self.claude_calls_lbl = QLabel("0 calls", self)
-        self.claude_calls_lbl.setObjectName("ClaudeStats")
-        stats_row.addWidget(self.claude_calls_lbl)
+        self.claude_seven_day_lbl = QLabel("7d: --", self)
+        self.claude_seven_day_lbl.setObjectName("ClaudeStats")
+        stats_row.addWidget(self.claude_seven_day_lbl)
 
         claude_layout.addLayout(stats_row)
 
@@ -768,123 +585,14 @@ class PeripheralMonitor(QWidget):
             font_group.addAction(action)
             fontMenu.addAction(action)
 
-        # Claude Section Menu (only if Claude is installed)
         if is_claude_installed():
             contextMenu.addSeparator()
             claudeMenu = contextMenu.addMenu("Claude Code")
 
-            toggleAction = QAction("Show Session Stats", self, checkable=True)
+            toggleAction = QAction("Show Usage Stats", self, checkable=True)
             toggleAction.setChecked(self.settings.get('claude_section_enabled', True))
             toggleAction.triggered.connect(self.toggle_claude_section)
             claudeMenu.addAction(toggleAction)
-
-            calibrateAction = QAction("Calibrate Usage...", self)
-            calibrateAction.triggered.connect(self.show_calibration_dialog)
-            claudeMenu.addAction(calibrateAction)
-
-            claudeMenu.addSeparator()
-
-            # Session Budget Submenu
-            budgetMenu = claudeMenu.addMenu("Session Budget")
-            budget_group = QActionGroup(self)
-
-            budgets = [
-                ("10k tokens", 10000),
-                ("15k tokens", 15000),
-                ("20k tokens", 20000),
-                ("25k tokens", 25000),
-                ("50k tokens", 50000),
-                ("100k tokens", 100000),
-                ("250k tokens", 250000),
-                ("500k tokens", 500000),
-                ("1M tokens", 1000000),
-                ("Unlimited", 0),
-            ]
-
-            current_budget = self.settings.get("claude_session_budget", 500000)
-
-            for label, val in budgets:
-                action = QAction(label, self, checkable=True)
-                action.setData(val)
-                action.triggered.connect(lambda checked, v=val: self.set_claude_budget(v))
-                if current_budget == val:
-                    action.setChecked(True)
-                budget_group.addAction(action)
-                budgetMenu.addAction(action)
-
-            budgetMenu.addSeparator()
-            customBudgetAction = QAction("Custom...", self)
-            customBudgetAction.triggered.connect(self.show_custom_budget_dialog)
-            budgetMenu.addAction(customBudgetAction)
-
-            # Window Duration Submenu
-            windowMenu = claudeMenu.addMenu("Window Duration")
-            window_group = QActionGroup(self)
-
-            windows = [
-                ("1 hour", 1),
-                ("2 hours", 2),
-                ("3 hours", 3),
-                ("4 hours", 4),
-                ("5 hours", 5),
-                ("6 hours", 6),
-                ("8 hours", 8),
-                ("12 hours", 12),
-            ]
-
-            current_window = self.settings.get("claude_window_hours", 4)
-
-            for label, val in windows:
-                action = QAction(label, self, checkable=True)
-                action.setData(val)
-                action.triggered.connect(lambda checked, v=val: self.set_claude_window(v))
-                if current_window == val:
-                    action.setChecked(True)
-                window_group.addAction(action)
-                windowMenu.addAction(action)
-
-            # Reset Hour Submenu (sync with /usage reset time)
-            resetMenu = claudeMenu.addMenu("Reset Hour (from /usage)")
-            reset_group = QActionGroup(self)
-
-            # All 24 hours (window durations like 5h can have any reset hour)
-            reset_hours = [
-                ("12am (midnight)", 0),
-                ("1am", 1),
-                ("2am", 2),
-                ("3am", 3),
-                ("4am", 4),
-                ("5am", 5),
-                ("6am", 6),
-                ("7am", 7),
-                ("8am", 8),
-                ("9am", 9),
-                ("10am", 10),
-                ("11am", 11),
-                ("12pm (noon)", 12),
-                ("1pm", 13),
-                ("2pm", 14),
-                ("3pm", 15),
-                ("4pm", 16),
-                ("5pm", 17),
-                ("6pm", 18),
-                ("7pm", 19),
-                ("8pm", 20),
-                ("9pm", 21),
-                ("10pm", 22),
-                ("11pm", 23),
-            ]
-
-            current_reset = self.settings.get("claude_reset_hour", 2)
-
-            for label, val in reset_hours:
-                action = QAction(label, self, checkable=True)
-                action.setData(val)
-                action.triggered.connect(lambda checked, v=val: self.set_claude_reset_hour(v))
-                if current_reset == val:
-                    action.setChecked(True)
-                reset_group.addAction(action)
-                resetMenu.addAction(action)
 
         contextMenu.addSeparator()
 
@@ -928,81 +636,6 @@ class PeripheralMonitor(QWidget):
 
         self.adjustSize()
 
-    def set_claude_budget(self, val):
-        """Set the session token budget for Claude Code."""
-        self.settings["claude_session_budget"] = val
-        self.save_settings()
-        self.update_claude_section()
-
-    def set_claude_window(self, val):
-        """Set the session window duration in hours."""
-        self.settings["claude_window_hours"] = val
-        self.save_settings()
-        self.update_claude_section()
-
-    def set_claude_reset_hour(self, val):
-        """Set the reset hour (from Claude's /usage display)."""
-        self.settings["claude_reset_hour"] = val
-        self.save_settings()
-        self.update_claude_section()
-
-    def show_calibration_dialog(self):
-        """Show the calibration dialog to snap usage to a known percentage."""
-        # Get current values
-        window_hours = self.settings.get('claude_window_hours', 4)
-        reset_hour = self.settings.get('claude_reset_hour', 2)
-        window_start, window_end = get_session_window(window_hours, reset_hour)
-        stats = get_claude_stats(window_start, window_end)
-
-        current_tokens = stats['session_tokens'] if stats else 0
-        current_budget = self.settings.get('claude_session_budget', 500000)
-
-        if current_budget > 0:
-            current_percentage = int((current_tokens / current_budget) * 100)
-        else:
-            current_percentage = 0
-
-        # Add any existing token offset
-        token_offset = self.settings.get('claude_token_offset', 0)
-        current_tokens += token_offset
-
-        dialog = CalibrationDialog(self, current_tokens, current_budget, current_percentage)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            new_budget, token_offset = dialog.get_result()
-
-            if new_budget is not None:
-                self.settings['claude_session_budget'] = new_budget
-                # Clear any previous token offset when adjusting budget
-                self.settings['claude_token_offset'] = 0
-            elif token_offset is not None:
-                # Store offset to apply to counted tokens
-                existing_offset = self.settings.get('claude_token_offset', 0)
-                self.settings['claude_token_offset'] = existing_offset + token_offset
-
-            self.save_settings()
-            self.update_claude_section()
-
-    def show_custom_budget_dialog(self):
-        """Show dialog to enter a custom budget value."""
-        current_budget = self.settings.get('claude_session_budget', 500000)
-
-        # Use QInputDialog for simple integer input
-        value, ok = QInputDialog.getInt(
-            self,
-            "Custom Budget",
-            "Enter token budget (0 for unlimited):",
-            value=current_budget,
-            min=0,
-            max=10000000,
-            step=10000
-        )
-
-        if ok:
-            self.settings['claude_session_budget'] = value
-            self.save_settings()
-            self.update_claude_section()
-
     def setup_timer(self):
         # Update every 30 seconds
         self.timer = QTimer(self)
@@ -1033,83 +666,76 @@ class PeripheralMonitor(QWidget):
         # Safely clear the reference
         self.worker = None
 
-    def update_claude_section(self):
-        """Update the Claude Code usage stats display."""
-        # Check if section should be visible based on settings (not transient state)
+    def update_claude_section(self, usage_data: dict | None = None):
+        """Update the Claude Code usage stats display from API data."""
         if not self.settings.get('claude_section_enabled', True) or self.claude_frame is None:
             return
 
-        # Ensure section is visible if it should be
         if not self.claude_section_visible:
             self.claude_frame.show()
             self.claude_section_visible = True
 
-        # Get window boundaries based on configured window hours and reset hour
-        window_hours = self.settings.get('claude_window_hours', 4)
-        reset_hour = self.settings.get('claude_reset_hour', 2)
-        window_start, window_end = get_session_window(window_hours, reset_hour)
-
-        # Get stats for current window
-        stats = get_claude_stats(window_start, window_end)
-        if stats is None:
-            # Show "no data" state instead of hiding
+        if usage_data is None:
             self.claude_progress.setValue(0)
-            self.claude_tokens_lbl.setText("No activity")
-            self.claude_calls_lbl.setText("0 calls")
-            self.claude_duration_lbl.setText(get_time_until_reset(window_start, window_end))
+            self.claude_five_hour_lbl.setText("5h: --")
+            self.claude_seven_day_lbl.setText("7d: --")
+            self.claude_duration_lbl.setText("No data")
             return
 
-        # Format token counts (use k for thousands, M for millions)
-        def format_tokens(n):
-            if n >= 1000000:
-                return f"{n / 1000000:.1f}M"
-            elif n >= 1000:
-                return f"{n / 1000:.1f}k"
-            else:
-                return str(int(n))
-
-        session_tokens = stats['session_tokens']
-        # Apply any calibration offset
-        token_offset = self.settings.get('claude_token_offset', 0)
-        session_tokens += token_offset
-        session_tokens = max(0, session_tokens)  # Don't go negative
-
-        api_calls = stats['api_calls']
-        budget = self.settings.get('claude_session_budget', 500000)
-
-        # Update progress bar
-        if budget > 0:
-            progress = min(100, int((session_tokens / budget) * 100))
-            self.claude_progress.setValue(progress)
-
-            # Color code: green < 50%, yellow 50-80%, red > 80%
-            if progress >= 80:
-                color = "#f44336"  # Red
-            elif progress >= 50:
-                color = "#ff9800"  # Orange/Yellow
-            else:
-                color = "#4caf50"  # Green
-
-            self.claude_progress.setStyleSheet(f"""
-                QProgressBar#ClaudeProgress {{
-                    background-color: rgba(255, 255, 255, 0.1);
-                    border: none;
-                    border-radius: 4px;
-                }}
-                QProgressBar#ClaudeProgress::chunk {{
-                    background-color: {color};
-                    border-radius: 4px;
-                }}
-            """)
-
-            self.claude_tokens_lbl.setText(f"{format_tokens(session_tokens)} / {format_tokens(budget)} ({progress}%)")
-        else:
-            # Unlimited - no progress bar
+        error = usage_data.get("error")
+        if error:
             self.claude_progress.setValue(0)
-            self.claude_tokens_lbl.setText(f"{format_tokens(session_tokens)} tokens")
+            labels = {
+                "auth_expired": "Auth expired",
+                "offline": "Offline",
+                "api_error": "API error",
+                "invalid_response": "No data",
+            }
+            self.claude_five_hour_lbl.setText(labels.get(error, "Error"))
+            self.claude_seven_day_lbl.setText("")
+            self.claude_duration_lbl.setText("")
+            return
 
-        self.claude_calls_lbl.setText(f"{api_calls} calls")
-        self.claude_duration_lbl.setText(get_time_until_reset(window_start, window_end))
+        five_hour = usage_data.get("five_hour", {})
+        seven_day = usage_data.get("seven_day", {})
+
+        five_pct = five_hour.get("utilization", 0)
+        seven_pct = seven_day.get("utilization", 0)
+        resets_at = five_hour.get("resets_at", "")
+
+        progress = min(100, int(five_pct))
+        self.claude_progress.setValue(progress)
+
+        if progress >= 80:
+            color = "#f44336"
+        elif progress >= 50:
+            color = "#ff9800"
+        else:
+            color = "#4caf50"
+
+        self.claude_progress.setStyleSheet(f"""
+            QProgressBar#ClaudeProgress {{
+                background-color: rgba(255, 255, 255, 0.1);
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar#ClaudeProgress::chunk {{
+                background-color: {color};
+                border-radius: 4px;
+            }}
+        """)
+
+        self.claude_five_hour_lbl.setText(f"5h: {five_pct:.0f}%")
+
+        right_parts = [f"7d: {seven_pct:.0f}%"]
+        for key in ("seven_day_opus", "seven_day_sonnet"):
+            bucket = usage_data.get(key)
+            if bucket and bucket.get("utilization", 0) > 0:
+                label = key.replace("seven_day_", "").capitalize()
+                right_parts.append(f"{label}: {bucket['utilization']:.0f}%")
+        self.claude_seven_day_lbl.setText(" | ".join(right_parts))
+
+        self.claude_duration_lbl.setText(get_time_until_reset(resets_at) if resets_at else "")
 
     def on_data_ready(self, results):
         # 1. Update Mouse - Now comes from results like everything else
@@ -1125,7 +751,7 @@ class PeripheralMonitor(QWidget):
         self.update_single_device(self.airpods_ui, lambda: results.get('airpods'), use_offline_cache=False)
 
         # 5. Update Claude Code section
-        self.update_claude_section()
+        self.update_claude_section(results.get('claude_usage'))
 
         self.setToolTip(f"Last updated: {self.format_time()}")
         self.adjustSize()

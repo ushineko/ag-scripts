@@ -1,5 +1,6 @@
 
 import sys
+import json
 import unittest
 from unittest.mock import MagicMock
 import importlib.util
@@ -286,158 +287,203 @@ class TestKeyboardBatteryPriority(unittest.TestCase):
         self.assertEqual(result.status, "Wired")
 
 
-class TestClaudeStats(unittest.TestCase):
-    """Test Claude Code usage statistics parsing"""
+class TestClaudeUsage(unittest.TestCase):
+    """Test Claude Code OAuth usage API integration"""
 
     def test_is_claude_installed_true(self):
-        """Test detection when Claude is installed"""
         from unittest.mock import patch
-
         with patch('shutil.which', return_value='/usr/bin/claude'):
-            result = pb.is_claude_installed()
-        self.assertTrue(result)
+            self.assertTrue(pb.is_claude_installed())
 
     def test_is_claude_installed_false(self):
-        """Test detection when Claude is not installed"""
         from unittest.mock import patch
-
         with patch('shutil.which', return_value=None):
-            result = pb.is_claude_installed()
-        self.assertFalse(result)
-
-    def test_get_claude_stats_missing_projects(self):
-        """Test handling of missing projects directory"""
-        from unittest.mock import patch
-
-        with patch('os.path.exists', return_value=False):
-            result = pb.get_claude_stats()
-
-        self.assertIsNone(result)
-
-    def test_get_session_window_4h(self):
-        """Test 4-hour session window calculation"""
-        window_start, window_end = pb.get_session_window(4, reset_hour=2)
-
-        # Window should be 4 hours apart
-        delta = window_end - window_start
-        self.assertEqual(delta.total_seconds(), 4 * 3600)
-
-    def test_get_session_window_1h(self):
-        """Test 1-hour session window calculation"""
-        window_start, window_end = pb.get_session_window(1, reset_hour=0)
-
-        delta = window_end - window_start
-        self.assertEqual(delta.total_seconds(), 1 * 3600)
-
-    def test_get_session_window_reset_alignment(self):
-        """Test that window boundaries align to reset hour"""
-        # With reset_hour=2 and 4h windows, boundaries are at 2, 6, 10, 14, 18, 22
-        window_start, window_end = pb.get_session_window(4, reset_hour=2)
-
-        # Window end hour should be in [2, 6, 10, 14, 18, 22]
-        valid_end_hours = [2, 6, 10, 14, 18, 22]
-        self.assertIn(window_end.hour, valid_end_hours)
+            self.assertFalse(pb.is_claude_installed())
 
     def test_get_time_until_reset(self):
-        """Test time until reset calculation with window times"""
-        from datetime import datetime, timedelta
-
-        # Window starts now, ends 1 hour 30 minutes from now
-        now = datetime.now().astimezone()
-        window_start = now
-        window_end = now + timedelta(hours=1, minutes=30)
-        result = pb.get_time_until_reset(window_start, window_end)
-
-        # Should contain window times in HH:MM-HH:MM format
-        self.assertIn("-", result)
-        self.assertIn(":", result)
-        # Should contain time remaining in parentheses
+        """Behavioral contract: countdown string contains hours and minutes for future reset times."""
+        from datetime import datetime, timezone, timedelta
+        future = datetime.now(timezone.utc) + timedelta(hours=1, minutes=30)
+        result = pb.get_time_until_reset(future.isoformat())
         self.assertIn("h", result)
         self.assertIn("m", result)
-        self.assertIn("(", result)
-        self.assertIn(")", result)
+        self.assertIn("Resets in", result)
 
     def test_get_time_until_reset_short(self):
-        """Test time until reset for < 1 hour with window times"""
-        from datetime import datetime, timedelta
-
-        # Window starts now, ends 30 minutes from now
-        now = datetime.now().astimezone()
-        window_start = now
-        window_end = now + timedelta(minutes=30)
-        result = pb.get_time_until_reset(window_start, window_end)
-
-        # Should contain window times in HH:MM-HH:MM format
-        self.assertIn("-", result)
-        self.assertIn(":", result)
-        # Should contain time remaining in parentheses
+        """Behavioral contract: sub-hour resets show only minutes."""
+        from datetime import datetime, timezone, timedelta
+        future = datetime.now(timezone.utc) + timedelta(minutes=30)
+        result = pb.get_time_until_reset(future.isoformat())
         self.assertIn("m", result)
-        self.assertIn("(", result)
-        self.assertIn(")", result)
+        self.assertIn("Resets in", result)
+        self.assertNotIn("h", result)
 
-    def test_session_budget_default(self):
-        """Test that default session budget is 500k tokens"""
-        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+    def test_get_time_until_reset_past(self):
+        """Behavioral contract: past reset times show 'Resetting...'."""
+        from datetime import datetime, timezone, timedelta
+        past = datetime.now(timezone.utc) - timedelta(minutes=5)
+        result = pb.get_time_until_reset(past.isoformat())
+        self.assertEqual(result, "Resetting...")
+
+    def test_get_time_until_reset_invalid(self):
+        """Behavioral contract: invalid input returns 'Unknown'."""
+        self.assertEqual(pb.get_time_until_reset("not-a-date"), "Unknown")
+        self.assertEqual(pb.get_time_until_reset(None), "Unknown")
+
+    def test_fetch_claude_usage_success(self):
+        """Behavioral contract: valid API response is returned as parsed dict."""
+        from unittest.mock import patch, mock_open
+        import io
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "test-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": 9999999999999,
+            }
+        }
+        sample_response = {
+            "five_hour": {"utilization": 70.0, "resets_at": "2026-02-16T22:00:00+00:00"},
+            "seven_day": {"utilization": 25.0, "resets_at": "2026-02-21T00:00:00+00:00"},
+        }
+        response_bytes = json.dumps(sample_response).encode()
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = response_bytes
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch('builtins.open', mock_open(read_data=json.dumps(sample_creds))):
+            with patch.object(pb.urllib.request, 'urlopen', return_value=mock_resp):
+                result = pb.fetch_claude_usage()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["five_hour"]["utilization"], 70.0)
+        self.assertEqual(result["seven_day"]["utilization"], 25.0)
+
+    def test_fetch_claude_usage_network_error(self):
+        """Behavioral contract: network errors return error dict, not None."""
+        from unittest.mock import patch, mock_open
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "test-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": 9999999999999,
+            }
+        }
+
+        with patch('builtins.open', mock_open(read_data=json.dumps(sample_creds))):
+            with patch.object(pb.urllib.request, 'urlopen', side_effect=pb.urllib.error.URLError("timeout")):
+                result = pb.fetch_claude_usage()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["error"], "offline")
+
+    def test_fetch_claude_usage_missing_credentials(self):
+        """Behavioral contract: missing credentials file returns None."""
+        from unittest.mock import patch
+        with patch('builtins.open', side_effect=FileNotFoundError):
+            result = pb.fetch_claude_usage()
+        self.assertIsNone(result)
+
+    def test_fetch_claude_usage_expired_token_refresh(self):
+        """Behavioral contract: expired token triggers refresh, new token is used."""
+        from unittest.mock import patch, mock_open, call
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "old-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": 0,
+            }
+        }
+        refresh_response = {
+            "access_token": "new-token",
+            "refresh_token": "new-refresh",
+            "expires_in": 3600,
+        }
+        usage_response = {
+            "five_hour": {"utilization": 50.0, "resets_at": "2026-02-16T22:00:00+00:00"},
+            "seven_day": {"utilization": 10.0, "resets_at": "2026-02-21T00:00:00+00:00"},
+        }
+
+        def make_mock_response(data):
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(data).encode()
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        refresh_resp = make_mock_response(refresh_response)
+        usage_resp = make_mock_response(usage_response)
+
+        urlopen_calls = [refresh_resp, usage_resp]
+
+        m_open = mock_open(read_data=json.dumps(sample_creds))
+        with patch('builtins.open', m_open):
+            with patch.object(pb.urllib.request, 'urlopen', side_effect=urlopen_calls):
+                result = pb.fetch_claude_usage()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["five_hour"]["utilization"], 50.0)
+
+        # Verify credentials were written back (token refresh persisted)
+        write_calls = [c for c in m_open().write.call_args_list]
+        self.assertTrue(len(write_calls) > 0, "Credentials should have been written back after refresh")
+
+    def test_update_claude_section_with_api_data(self):
+        """Behavioral contract: API data sets correct labels and progress bar."""
+        from datetime import datetime, timezone, timedelta
+
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={'claude_section_enabled': True})
         monitor = pb.PeripheralMonitor()
-        # Default should be 500000
-        self.assertEqual(monitor.settings.get('claude_session_budget', 500000), 500000)
+        monitor.claude_frame = MagicMock()
+        monitor.claude_section_visible = True
+        monitor.claude_progress = MockQProgressBar()
+        monitor.claude_progress.setValue = MagicMock()
+        monitor.claude_progress.setStyleSheet = MagicMock()
+        monitor.claude_five_hour_lbl = MockQLabel()
+        monitor.claude_five_hour_lbl.setText = MagicMock()
+        monitor.claude_seven_day_lbl = MockQLabel()
+        monitor.claude_seven_day_lbl.setText = MagicMock()
+        monitor.claude_duration_lbl = MockQLabel()
+        monitor.claude_duration_lbl.setText = MagicMock()
 
-    def test_set_claude_budget(self):
-        """Test setting the Claude session budget"""
-        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        future = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        usage_data = {
+            "five_hour": {"utilization": 70.0, "resets_at": future},
+            "seven_day": {"utilization": 25.0, "resets_at": "2026-02-21T00:00:00+00:00"},
+        }
+
+        monitor.update_claude_section(usage_data)
+
+        monitor.claude_progress.setValue.assert_called_with(70)
+        monitor.claude_five_hour_lbl.setText.assert_called_with("5h: 70%")
+        monitor.claude_seven_day_lbl.setText.assert_called_with("7d: 25%")
+        duration_text = monitor.claude_duration_lbl.setText.call_args[0][0]
+        self.assertIn("Resets in", duration_text)
+
+    def test_update_claude_section_no_data(self):
+        """Behavioral contract: None usage data shows 'No data' state."""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={'claude_section_enabled': True})
         monitor = pb.PeripheralMonitor()
-        monitor.save_settings = MagicMock()
-        monitor.update_claude_section = MagicMock()
+        monitor.claude_frame = MagicMock()
+        monitor.claude_section_visible = True
+        monitor.claude_progress = MockQProgressBar()
+        monitor.claude_progress.setValue = MagicMock()
+        monitor.claude_five_hour_lbl = MockQLabel()
+        monitor.claude_five_hour_lbl.setText = MagicMock()
+        monitor.claude_seven_day_lbl = MockQLabel()
+        monitor.claude_seven_day_lbl.setText = MagicMock()
+        monitor.claude_duration_lbl = MockQLabel()
+        monitor.claude_duration_lbl.setText = MagicMock()
 
-        monitor.set_claude_budget(1000000)
+        monitor.update_claude_section(None)
 
-        self.assertEqual(monitor.settings['claude_session_budget'], 1000000)
-        monitor.save_settings.assert_called_once()
-        monitor.update_claude_section.assert_called_once()
-
-    def test_token_offset_applied(self):
-        """Test that token offset from calibration is applied to display"""
-        pb.PeripheralMonitor.load_settings = MagicMock(return_value={
-            'claude_token_offset': 50000,
-            'claude_session_budget': 500000
-        })
-        monitor = pb.PeripheralMonitor()
-        # Offset should be in settings
-        self.assertEqual(monitor.settings.get('claude_token_offset', 0), 50000)
-
-    def test_token_offset_default_zero(self):
-        """Test that token offset defaults to zero"""
-        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
-        monitor = pb.PeripheralMonitor()
-        self.assertEqual(monitor.settings.get('claude_token_offset', 0), 0)
-
-
-class TestCalibrationDialog(unittest.TestCase):
-    """Tests for the CalibrationDialog class"""
-
-    def test_budget_calculation(self):
-        """Test that budget is calculated correctly to match target percentage"""
-        # If we have 125000 tokens and want to show 25%, budget should be 500000
-        current_tokens = 125000
-        target_pct = 25
-        expected_budget = int(current_tokens / (target_pct / 100))
-        self.assertEqual(expected_budget, 500000)
-
-    def test_budget_calculation_high_percentage(self):
-        """Test budget calculation for high percentages"""
-        # If we have 400000 tokens and want to show 80%, budget should be 500000
-        current_tokens = 400000
-        target_pct = 80
-        expected_budget = int(current_tokens / (target_pct / 100))
-        self.assertEqual(expected_budget, 500000)
-
-    def test_token_override_calculation(self):
-        """Test token override calculation"""
-        # If budget is 500000 and we want to show 50%, tokens should be 250000
-        budget = 500000
-        target_pct = 50
-        expected_tokens = int(budget * (target_pct / 100))
-        self.assertEqual(expected_tokens, 250000)
+        monitor.claude_progress.setValue.assert_called_with(0)
+        monitor.claude_five_hour_lbl.setText.assert_called_with("5h: --")
+        monitor.claude_duration_lbl.setText.assert_called_with("No data")
 
 
 if __name__ == '__main__':
