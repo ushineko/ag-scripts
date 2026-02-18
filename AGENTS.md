@@ -35,6 +35,8 @@ Load the following policy modules from `~/.codex/policies/`:
 
 - Use system Python (`/usr/bin/python` or `/usr/bin/python3`), not conda/miniforge.
 - Keep tests in each sub-project’s `tests/` directory and run relevant tests for changed sub-projects.
+- For every completed spec or release-level change, add/update a validation report in that project’s `validation-reports/` directory before final push.
+- In validation reports, keep **Phase 4** strictly about code quality (structure, duplication, robustness, dead code, residual gaps), not feature checklisting.
 - Do not generate artifacts (especially images) unless explicitly requested.
 - Before running scripts, prefer observable runs (`--debug` if available) and capture stdout/stderr when diagnosing.
 - For long-running GUI/background scripts, start from a clean slate by terminating prior instances when safe to do so.
