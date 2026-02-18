@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DHCP Lease Monitor
+Comment=Monitor dnsmasq leases in a floating widget
+Exec=/usr/bin/python3 REPLACE_WITH_SCRIPT_PATH
+Icon=network-wired
+StartupWMClass=dhcp-lease-monitor
+Terminal=false
+Categories=Utility;System;Network;
