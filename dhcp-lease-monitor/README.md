@@ -4,7 +4,7 @@ Frameless PyQt6 desktop widget for monitoring `dnsmasq` DHCP leases in real time
 
 ## Version
 
-`1.1.0`
+`1.1.1`
 
 ## Table of Contents
 - [Features](#features)

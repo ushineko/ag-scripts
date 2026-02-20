@@ -9,16 +9,26 @@ from datetime import datetime
 import json
 import logging
 import logging.config
-import os
 from pathlib import Path
 import signal
-import socket
 import subprocess
 import sys
 import time
 
 import faulthandler
-from PyQt6.QtCore import QDir, QEvent, QPoint, QLockFile, QSocketNotifier, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import (
+    QDir,
+    QEvent,
+    QObject,
+    QPoint,
+    QLockFile,
+    QSocketNotifier,
+    QThread,
+    QTimer,
+    Qt,
+    pyqtSignal,
+    pyqtSlot,
+)
 from PyQt6.QtGui import QAction, QActionGroup, QContextMenuEvent, QIcon, QMouseEvent, QGuiApplication, QCursor
 from PyQt6.QtWidgets import (
     QApplication,
@@ -50,7 +60,7 @@ except ImportError:  # pragma: no cover - optional runtime dependency
     flags = None
 
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 APP_ID = "dhcp-lease-monitor"
 CONFIG_PATH = Path.home() / ".config" / f"{APP_ID}.json"
@@ -515,16 +525,125 @@ class LeaseDetailPopup(QFrame):
         self._value_labels["client_id"].setText(client_id_value)
 
 
+class LeaseRefreshWorker(QObject):
+    """Background worker that keeps lease refresh work off the UI thread."""
+
+    refresh_ready = pyqtSignal(int, object, str, bool)  # request_id, leases, interface, include_expired
+    refresh_failed = pyqtSignal(int, str)  # request_id, error
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.log = structlog.get_logger().bind(component="refresh_worker")
+        self.identifier = DeviceIdentifier()
+        self._pending: tuple[int, str, bool] | None = None
+        self._busy = False
+        self._reverse_dns_cache: dict[str, tuple[str | None, float]] = {}
+        self._reverse_dns_positive_ttl = 600.0
+        self._reverse_dns_negative_ttl = 120.0
+        self._reverse_dns_timeout = 0.45
+
+    @pyqtSlot(int, str, bool)
+    def queue_refresh(self, request_id: int, lease_file: str, include_expired: bool) -> None:
+        # Keep only the latest pending request while one refresh is in flight.
+        self._pending = (request_id, lease_file, include_expired)
+        if not self._busy:
+            self._process_pending()
+
+    def _process_pending(self) -> None:
+        while self._pending is not None:
+            request_id, lease_file, include_expired = self._pending
+            self._pending = None
+            self._busy = True
+            try:
+                leases = load_leases(
+                    lease_file=lease_file,
+                    identifier=self.identifier,
+                    include_expired=include_expired,
+                )
+                leases = self._with_reverse_dns(leases)
+                interface = detect_interface_for_leases(leases)
+            except Exception as exc:
+                self.log.warning(
+                    "refresh_failed",
+                    request_id=request_id,
+                    lease_file=lease_file,
+                    error=str(exc),
+                )
+                self.refresh_failed.emit(request_id, str(exc))
+            else:
+                self.refresh_ready.emit(request_id, leases, interface, include_expired)
+            finally:
+                self._busy = False
+
+    def _with_reverse_dns(self, leases: list[DhcpLease]) -> list[DhcpLease]:
+        if not leases:
+            return leases
+
+        lookups: dict[str, str | None] = {}
+        for lease in leases:
+            if lease.ip not in lookups:
+                lookups[lease.ip] = self._resolve_reverse_dns(lease.ip)
+
+        enriched: list[DhcpLease] = []
+        for lease in leases:
+            reverse_dns = lookups[lease.ip]
+            if lease.reverse_dns == reverse_dns:
+                enriched.append(lease)
+                continue
+            enriched.append(replace(lease, reverse_dns=reverse_dns))
+        return enriched
+
+    def _resolve_reverse_dns(self, ip: str) -> str | None:
+        now = time.monotonic()
+        cached = self._reverse_dns_cache.get(ip)
+        if cached is not None:
+            value, valid_until = cached
+            if now < valid_until:
+                return value
+
+        resolved = self._lookup_reverse_dns(ip)
+        ttl = self._reverse_dns_positive_ttl if resolved else self._reverse_dns_negative_ttl
+        self._reverse_dns_cache[ip] = (resolved, now + ttl)
+        return resolved
+
+    def _lookup_reverse_dns(self, ip: str) -> str | None:
+        # Keep PTR resolution strictly timeout-bounded in the worker.
+        try:
+            completed = subprocess.run(
+                ["getent", "hosts", ip],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=self._reverse_dns_timeout,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        if completed.returncode != 0:
+            return None
+
+        parts = completed.stdout.split()
+        if len(parts) < 2:
+            return None
+
+        hostname = parts[1].rstrip(".")
+        if hostname and hostname != ip:
+            return hostname
+        return None
+
+
 class DhcpLeaseMonitor(QWidget):
+    refresh_requested = pyqtSignal(int, str, bool)  # request_id, lease_file, include_expired
+
     def __init__(self, cli_lease_file: str | None, debug: bool = False) -> None:
         super().__init__()
         self.log = structlog.get_logger().bind(component="widget")
         self.settings = load_settings()
         self.cli_lease_file = cli_lease_file
-        self.identifier = DeviceIdentifier()
         self.leases: list[DhcpLease] = []
         self.detail_popup = LeaseDetailPopup()
         self._active_menu: QMenu | None = None
+        self._refresh_request_id = 0
         self._menu_stylesheet = """
             QMenu {
                 background-color: rgba(22, 27, 34, 0.98);
@@ -549,10 +668,6 @@ class DhcpLeaseMonitor(QWidget):
         self._inotify = None
         self._inotify_notifier: QSocketNotifier | None = None
         self._watched_filename: str | None = None
-        self._reverse_dns_cache: dict[str, tuple[str | None, float]] = {}
-        self._reverse_dns_positive_ttl = 600.0
-        self._reverse_dns_negative_ttl = 120.0
-        self._reverse_dns_timeout = 0.45
 
         self.setWindowTitle("DHCP Lease Monitor")
         self.setWindowFlags(
@@ -605,6 +720,7 @@ class DhcpLeaseMonitor(QWidget):
 
         self._apply_main_style()
         self._update_width_constraints()
+        self._setup_refresh_worker()
 
         self.fallback_timer = QTimer(self)
         self.fallback_timer.setInterval(30_000)
@@ -814,6 +930,19 @@ class DhcpLeaseMonitor(QWidget):
         if self.width() < target_width:
             self.resize(target_width, self.height())
 
+    def _setup_refresh_worker(self) -> None:
+        self._refresh_thread = QThread(self)
+        self._refresh_worker = LeaseRefreshWorker()
+        self._refresh_worker.moveToThread(self._refresh_thread)
+        self._refresh_thread.finished.connect(self._refresh_worker.deleteLater)
+        self.refresh_requested.connect(
+            self._refresh_worker.queue_refresh,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._refresh_worker.refresh_ready.connect(self._on_refresh_ready)
+        self._refresh_worker.refresh_failed.connect(self._on_refresh_failed)
+        self._refresh_thread.start()
+
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if self.detail_popup.isVisible():
             event_type = event.type()
@@ -829,91 +958,56 @@ class DhcpLeaseMonitor(QWidget):
 
     def refresh_leases(self) -> None:
         lease_file = self.effective_lease_file
-        self.log.debug("refresh_start", lease_file=lease_file)
-
         include_expired = bool(self.settings.get("show_expired", True))
-        leases = load_leases(
+        self._refresh_request_id += 1
+        request_id = self._refresh_request_id
+        self.log.debug(
+            "refresh_queued",
+            request_id=request_id,
             lease_file=lease_file,
-            identifier=self.identifier,
             include_expired=include_expired,
         )
-        self.leases = self._with_reverse_dns(leases)
+        self.refresh_requested.emit(request_id, lease_file, include_expired)
 
-        interface = detect_interface_for_leases(self.leases)
+    def _on_refresh_ready(
+        self,
+        request_id: int,
+        leases: object,
+        interface: str,
+        include_expired: bool,
+    ) -> None:
+        if request_id < self._refresh_request_id:
+            self.log.debug(
+                "refresh_result_stale",
+                request_id=request_id,
+                latest_request_id=self._refresh_request_id,
+            )
+            return
+
+        leases_list = leases if isinstance(leases, list) else []
+        self.leases = leases_list
         self.title_label.setText(f"DHCP Leases ({len(self.leases)})")
         self.interface_label.setText(f"▼ {interface}")
         self._render_rows()
 
         self.log.debug(
             "refresh_complete",
+            request_id=request_id,
             count=len(self.leases),
             interface=interface,
             include_expired=include_expired,
         )
 
-    def _with_reverse_dns(self, leases: list[DhcpLease]) -> list[DhcpLease]:
-        if not leases:
-            return leases
-
-        lookups: dict[str, str | None] = {}
-        for lease in leases:
-            if lease.ip not in lookups:
-                lookups[lease.ip] = self._resolve_reverse_dns(lease.ip)
-
-        enriched: list[DhcpLease] = []
-        for lease in leases:
-            reverse_dns = lookups[lease.ip]
-            if lease.reverse_dns == reverse_dns:
-                enriched.append(lease)
-                continue
-            enriched.append(replace(lease, reverse_dns=reverse_dns))
-        return enriched
-
-    def _resolve_reverse_dns(self, ip: str) -> str | None:
-        now = time.monotonic()
-        cached = self._reverse_dns_cache.get(ip)
-        if cached is not None:
-            value, valid_until = cached
-            if now < valid_until:
-                return value
-
-        resolved = self._lookup_reverse_dns(ip)
-        ttl = self._reverse_dns_positive_ttl if resolved else self._reverse_dns_negative_ttl
-        self._reverse_dns_cache[ip] = (resolved, now + ttl)
-        return resolved
-
-    def _lookup_reverse_dns(self, ip: str) -> str | None:
-        try:
-            completed = subprocess.run(
-                ["getent", "hosts", ip],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=self._reverse_dns_timeout,
+    def _on_refresh_failed(self, request_id: int, error: str) -> None:
+        if request_id < self._refresh_request_id:
+            self.log.debug(
+                "refresh_error_stale",
+                request_id=request_id,
+                latest_request_id=self._refresh_request_id,
+                error=error,
             )
-        except (OSError, subprocess.SubprocessError):
-            completed = None
-
-        if completed and completed.returncode == 0:
-            parts = completed.stdout.split()
-            if len(parts) >= 2:
-                hostname = parts[1].rstrip(".")
-                if hostname and hostname != ip:
-                    return hostname
-
-        previous_timeout = socket.getdefaulttimeout()
-        try:
-            socket.setdefaulttimeout(self._reverse_dns_timeout)
-            hostname, _aliases, _addresses = socket.gethostbyaddr(ip)
-        except (OSError, socket.herror, socket.gaierror):
-            return None
-        finally:
-            socket.setdefaulttimeout(previous_timeout)
-
-        normalized = hostname.rstrip(".")
-        if normalized and normalized != ip:
-            return normalized
-        return None
+            return
+        self.log.warning("refresh_failed", request_id=request_id, error=error)
 
     def _setup_inotify(self) -> None:
         if INotify is None or flags is None:
@@ -984,6 +1078,10 @@ class DhcpLeaseMonitor(QWidget):
                 self._inotify.close()
             except Exception:
                 pass
+        if self._refresh_thread.isRunning():
+            self._refresh_thread.quit()
+            if not self._refresh_thread.wait(1_500):
+                self.log.warning("refresh_thread_shutdown_timeout")
         super().closeEvent(event)
 
 
