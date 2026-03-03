@@ -678,7 +678,7 @@ class DhcpLeaseMonitor(QWidget):
         # Qt.Tool windows do not quit the app on close by default.
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, True)
         self.setMinimumWidth(320)
-        self.setMaximumHeight(600)
+        self.setFixedHeight(600)
         self.setWindowOpacity(float(self.settings["opacity"]))
 
         root_layout = QVBoxLayout(self)
