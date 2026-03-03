@@ -486,5 +486,138 @@ class TestClaudeUsage(unittest.TestCase):
         monitor.claude_duration_lbl.setText.assert_called_with("No data")
 
 
+class TestOAuthBackoff(unittest.TestCase):
+    """Test OAuth refresh backoff logic"""
+
+    def setUp(self):
+        """Reset backoff state before each test."""
+        pb.reset_oauth_backoff()
+        pb._oauth_creds_mtime = 0.0
+
+    def test_backoff_engages_on_403(self):
+        """Behavioral contract: 403 refresh failure triggers backoff; second attempt is skipped."""
+        from unittest.mock import patch, mock_open
+        import time
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "old-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": 0,
+            }
+        }
+
+        error_403 = pb.urllib.error.HTTPError(
+            url="https://example.com", code=403, msg="Forbidden",
+            hdrs=None, fp=None)
+
+        with patch('builtins.open', mock_open(read_data=json.dumps(sample_creds))):
+            with patch.object(pb.urllib.request, 'urlopen', side_effect=error_403):
+                with patch('pb.os.stat') as mock_stat:
+                    mock_stat.return_value = MagicMock(st_mtime=1.0)
+                    # First call: triggers refresh, fails, engages backoff
+                    result1 = pb.fetch_claude_usage()
+                    self.assertEqual(result1["error"], "auth_expired")
+                    self.assertEqual(pb._oauth_fail_count, 1)
+                    self.assertGreater(pb._oauth_backoff_until, time.monotonic())
+
+                    # Second call: should be skipped due to backoff
+                    result2 = pb.fetch_claude_usage()
+                    self.assertEqual(result2["error"], "auth_backoff")
+
+    def test_backoff_escalates_on_permanent_errors(self):
+        """Behavioral contract: after 5 consecutive 403s, retry interval is at least 15 minutes."""
+        import time
+
+        for i in range(5):
+            pb._apply_backoff(is_permanent=True)
+
+        remaining = pb._oauth_backoff_until - time.monotonic()
+        self.assertGreaterEqual(remaining, 900)  # 15 minutes = 900 seconds
+
+    def test_backoff_resets_on_success(self):
+        """Behavioral contract: successful refresh resets backoff to zero."""
+        from unittest.mock import patch, mock_open
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "old-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": 0,
+            }
+        }
+        refresh_response = {
+            "access_token": "new-token",
+            "refresh_token": "new-refresh",
+            "expires_in": 3600,
+        }
+        usage_response = {
+            "five_hour": {"utilization": 50.0, "resets_at": "2026-02-16T22:00:00+00:00"},
+        }
+
+        def make_mock_response(data):
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(data).encode()
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        # Simulate prior backoff state
+        pb._oauth_fail_count = 3
+        pb._oauth_backoff_until = 0.0  # expired backoff so refresh is attempted
+
+        urlopen_calls = [make_mock_response(refresh_response),
+                         make_mock_response(usage_response)]
+
+        with patch('builtins.open', mock_open(read_data=json.dumps(sample_creds))):
+            with patch.object(pb.urllib.request, 'urlopen', side_effect=urlopen_calls):
+                with patch('pb.os.stat') as mock_stat:
+                    mock_stat.return_value = MagicMock(st_mtime=1.0)
+                    result = pb.fetch_claude_usage()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(pb._oauth_fail_count, 0)
+        self.assertEqual(pb._oauth_backoff_until, 0.0)
+
+    def test_manual_refresh_resets_backoff(self):
+        """Behavioral contract: reset_oauth_backoff clears all backoff state."""
+        import time
+
+        pb._oauth_fail_count = 5
+        pb._oauth_backoff_until = time.monotonic() + 9999
+
+        pb.reset_oauth_backoff()
+
+        self.assertEqual(pb._oauth_fail_count, 0)
+        self.assertEqual(pb._oauth_backoff_until, 0.0)
+
+    def test_creds_mtime_change_resets_backoff(self):
+        """Behavioral contract: credentials file change on disk resets backoff."""
+        from unittest.mock import patch
+        import time
+
+        pb._oauth_fail_count = 5
+        pb._oauth_backoff_until = time.monotonic() + 9999
+        pb._oauth_creds_mtime = 100.0
+
+        with patch('pb.os.stat') as mock_stat:
+            mock_stat.return_value = MagicMock(st_mtime=200.0)
+            pb._check_creds_mtime()
+
+        self.assertEqual(pb._oauth_fail_count, 0)
+        self.assertEqual(pb._oauth_backoff_until, 0.0)
+        self.assertEqual(pb._oauth_creds_mtime, 200.0)
+
+    def test_transient_error_lower_backoff_cap(self):
+        """Behavioral contract: transient errors cap at 5 minutes, not 30."""
+        import time
+
+        for i in range(10):
+            pb._apply_backoff(is_permanent=False)
+
+        remaining = pb._oauth_backoff_until - time.monotonic()
+        self.assertLessEqual(remaining, 301)  # 300s cap + small timing tolerance
+
+
 if __name__ == '__main__':
     unittest.main()
