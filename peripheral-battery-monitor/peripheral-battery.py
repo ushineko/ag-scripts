@@ -644,27 +644,27 @@ class PeripheralMonitor(QWidget):
 
     def update_status(self):
         # Prevent overlap
-        if self.worker and self.worker.isRunning():
-            return
-
-    def update_status(self):
-        # Prevent overlap
         if self.worker is not None:
-             # Just in case it's lingering but finished? 
-             # No, if it's not None it implies running or not cleaned up.
-             # We rely on on_worker_finished to clean it up.
-             return
+            return
 
         # Start worker thread
         self.worker = UpdateThread()
         self.worker.data_ready.connect(self.on_data_ready)
-        self.worker.finished.connect(self.on_worker_finished)
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(self._cleanup_worker)
         self.worker.start()
-    
-    def on_worker_finished(self):
-        # Safely clear the reference
+
+    def _cleanup_worker(self):
+        """Clean up the finished worker thread safely.
+
+        Captures the reference in a local variable before clearing self.worker,
+        so the Python wrapper stays alive until deleteLater() is scheduled.
+        This avoids a race where Python GC destroys the wrapper before Qt
+        processes the deferred delete, which causes qFatal() -> abort().
+        """
+        worker = self.worker
         self.worker = None
+        if worker is not None:
+            worker.deleteLater()
 
     def update_claude_section(self, usage_data: dict | None = None):
         """Update the Claude Code usage stats display from API data."""
