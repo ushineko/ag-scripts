@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.4.0
+Version 1.4.1
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
 
@@ -59,6 +59,14 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.4.1
+- Fixed recurring crash caused by QThread `deleteLater` race condition (Python GC destroying worker wrapper before Qt processed deferred delete)
+- Added exponential backoff to OAuth token refresh — stops hammering the token endpoint on persistent 403s (transient errors cap at 5 min, permanent at 30 min)
+- OAuth backoff resets automatically when credentials file changes on disk (e.g., after `claude login`)
+- "Refresh Now" context menu action bypasses any active backoff
+- Reduced log spam: repeated OAuth failures log at debug level after the first warning
+- Code cleanup: removed dead code, fixed indentation inconsistencies
 
 ### v1.4.0
 - Replaced local JSONL token scraping with Anthropic's OAuth usage API (`GET /api/oauth/usage`)

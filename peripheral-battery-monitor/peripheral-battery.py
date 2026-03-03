@@ -24,7 +24,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -383,7 +383,7 @@ class PeripheralMonitor(QWidget):
         # Set icon
         icon = QIcon.fromTheme("input-mouse")
         if icon.isNull():
-             icon = QIcon.fromTheme("battery-full")
+            icon = QIcon.fromTheme("battery-full")
         self.setWindowIcon(icon)
         self.setWindowTitle("Battery Monitor")
 
@@ -879,7 +879,7 @@ class PeripheralMonitor(QWidget):
             # Smart Fallback Logic for "Connected" but "--%" (Level -1)
             # Only use merged level if status hasn't changed
             if current_info and current_info.level == -1 and current_info.status == "Connected":
-                 if last_known and last_known.level >= 0 and not status_changed:
+                if last_known and last_known.level >= 0 and not status_changed:
                      # Create a merged info object
                      merged = battery_reader.BatteryInfo(
                          level=last_known.level,
@@ -910,8 +910,7 @@ class PeripheralMonitor(QWidget):
                 last_valid if use_offline_cache else None,
                 ui_dict['default_name']
             )
-        except Exception as e:
-            # print(f"Error updating {ui_dict['default_name']}: {e}")
+        except Exception:
             pass
 
     def _update_label_block(self, name_lbl, val_lbl, stat_lbl, icon_lbl, current_info, last_info, fallback_name):
@@ -946,7 +945,6 @@ class PeripheralMonitor(QWidget):
             icon = QIcon.fromTheme(icon_name, QIcon.fromTheme("battery-missing"))
             icon_lbl.setPixmap(icon.pixmap(24, 24))
             
-            # Handle special "Unknown Level but Connected" state
             # Handle special "Unknown Level but Connected" state
             if level == -1:
                 val_text = '<span style="color: #e0e0e0;">--%</span>' # Light gray/white for connected
@@ -1007,8 +1005,8 @@ class PeripheralMonitor(QWidget):
             
             # If we overrode icon_name above, update it
             if status_text in ["Wired", "Wireless"]:
-                 icon = QIcon.fromTheme(icon_name)
-                 icon_lbl.setPixmap(icon.pixmap(24, 24))
+                icon = QIcon.fromTheme(icon_name)
+                icon_lbl.setPixmap(icon.pixmap(24, 24))
         else:
             name_lbl.setText(fallback_name)
             val_lbl.setText('<span style="color: gray;">--%</span>')
