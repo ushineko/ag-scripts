@@ -29,6 +29,10 @@ Load the following policy modules from `~/.claude/policies/`:
 - **Tests**: pytest, kept in a `tests/` subdirectory of each sub-project
 - **Artifacts**: Do NOT generate artifacts (especially images) unless explicitly requested
 
+## Issue Tracking
+
+This is a personal public GitHub repository. No issue tracker is used. Spec files should be named without ticket IDs (e.g., `specs/001-short-description.md`). Do not prompt for ticket IDs when creating specs.
+
 ---
 
 ## Observability (CRITICAL)

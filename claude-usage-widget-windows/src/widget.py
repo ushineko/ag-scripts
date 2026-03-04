@@ -1,406 +1,310 @@
-"""Always-on-top floating widget showing Claude usage."""
+"""PySide6 floating widget for Claude usage display.
 
-import tkinter as tk
-from typing import Callable, Optional
+Layout mirrors the Claude section in peripheral-battery-monitor:
+  Row 1: [icon] Claude Code              2h 15m
+  Row 2: [████████████░░░░░░░░░░░░░░░░░░]
+  Row 3: 5h: 26%                      7d: 31%
+"""
 
-import customtkinter as ctk
-import structlog
-
-from .config import get_setting, set_setting
-from .claude_stats import (
-    get_session_window,
-    get_time_until_reset,
-    get_claude_stats,
-    format_tokens,
-    calculate_usage_percentage,
-    get_usage_color,
+from PySide6.QtCore import Qt, QPoint, QSize
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QProgressBar,
+    QVBoxLayout,
+    QWidget,
 )
 
-log = structlog.get_logger(__name__)
+from .display import usage_color, format_percentage, error_message, COLOR_GRAY
 
 
-class FloatingWidget:
-    """Always-visible floating widget showing Claude usage with progress bar."""
+def _make_terminal_icon(size: int = 16) -> QPixmap:
+    """Draw a simple terminal/console icon as a pixmap."""
+    pixmap = QPixmap(QSize(size, size))
+    pixmap.fill(QColor(0, 0, 0, 0))
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    # Rounded rect body
+    p.setPen(QColor("#aaaaaa"))
+    p.setBrush(QColor(60, 60, 60, 200))
+    p.drawRoundedRect(1, 1, size - 2, size - 2, 3, 3)
+    # ">" prompt
+    p.setPen(QColor("#e0e0e0"))
+    font = p.font()
+    font.setPixelSize(int(size * 0.6))
+    font.setBold(True)
+    p.setFont(font)
+    p.drawText(3, 1, size - 4, size - 2, Qt.AlignmentFlag.AlignVCenter, ">_")
+    p.end()
+    return pixmap
 
-    def __init__(self, on_calibrate: Callable = None, on_exit: Callable = None):
-        """
-        Initialize the floating widget.
 
-        Args:
-            on_calibrate: Callback for calibration
-            on_exit: Callback for exit
-        """
-        self.on_calibrate = on_calibrate
-        self.on_exit = on_exit
+class FloatingWidget(QWidget):
+    """Frameless, semi-transparent, always-on-top Claude usage widget."""
 
-        self.root: Optional[ctk.CTk] = None
-        self.update_timer: Optional[str] = None
-        self.running = False
+    def __init__(
+        self,
+        on_refresh: callable = None,
+        on_exit: callable = None,
+        opacity: float = 0.95,
+        position: list[int] | None = None,
+    ):
+        super().__init__()
+        self._on_refresh = on_refresh
+        self._on_exit = on_exit
+        self._drag_pos: QPoint | None = None
 
-        # Widget references
-        self.window_label: Optional[ctk.CTkLabel] = None
-        self.progress_bar: Optional[ctk.CTkProgressBar] = None
-        self.percentage_label: Optional[ctk.CTkLabel] = None
-        self.tokens_label: Optional[ctk.CTkLabel] = None
-        self.calls_label: Optional[ctk.CTkLabel] = None
-
-        # Drag state
-        self._drag_start_x = 0
-        self._drag_start_y = 0
-
-        # Context menu
-        self.context_menu: Optional[tk.Menu] = None
-
-        log.debug("floating_widget_initialized")
-
-    def _get_color_hex(self, color: str) -> str:
-        """Convert color name to hex."""
-        colors = {
-            "green": "#22c55e",
-            "yellow": "#eab308",
-            "red": "#ef4444",
-            "gray": "#6b7280",
-        }
-        return colors.get(color, colors["gray"])
-
-    def _start_drag(self, event):
-        """Start dragging the widget."""
-        self._drag_start_x = event.x
-        self._drag_start_y = event.y
-
-    def _drag(self, event):
-        """Handle dragging the widget."""
-        x = self.root.winfo_x() + (event.x - self._drag_start_x)
-        y = self.root.winfo_y() + (event.y - self._drag_start_y)
-        self.root.geometry(f"+{x}+{y}")
-
-    def _build_ui(self):
-        """Build the widget UI."""
-        # Configure window
-        self.root.title("Claude Usage")
-        self.root.geometry("280x140")
-        self.root.resizable(False, False)
-        self.root.overrideredirect(True)  # Remove window decorations
-        self.root.attributes("-topmost", True)  # Always on top
-        self.root.attributes("-alpha", 0.95)  # Slight transparency
-
-        # Position in bottom-right corner
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        x = screen_width - 300
-        y = screen_height - 200
-        self.root.geometry(f"+{x}+{y}")
-
-        # Main frame with border
-        main_frame = ctk.CTkFrame(
-            self.root,
-            corner_radius=10,
-            border_width=2,
-            border_color="#374151",
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
         )
-        main_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowOpacity(opacity)
+        self.setFixedWidth(220)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
-        # Make frame draggable
-        main_frame.bind("<Button-1>", self._start_drag)
-        main_frame.bind("<B1-Motion>", self._drag)
-
-        # Header frame with title and close button
-        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        header_frame.pack(fill="x", padx=8, pady=(8, 4))
-
-        title_label = ctk.CTkLabel(
-            header_frame,
-            text="Claude Code",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        )
-        title_label.pack(side="left")
-        title_label.bind("<Button-1>", self._start_drag)
-        title_label.bind("<B1-Motion>", self._drag)
-
-        # Close button
-        close_btn = ctk.CTkButton(
-            header_frame,
-            text="×",
-            width=24,
-            height=24,
-            corner_radius=4,
-            fg_color="transparent",
-            hover_color="#4b5563",
-            command=self._on_close,
-        )
-        close_btn.pack(side="right")
-
-        # Window time label
-        self.window_label = ctk.CTkLabel(
-            main_frame,
-            text="Window: --:-- - --:--",
-            font=ctk.CTkFont(size=11),
-            text_color="#9ca3af",
-        )
-        self.window_label.pack(pady=(0, 6))
-        self.window_label.bind("<Button-1>", self._start_drag)
-        self.window_label.bind("<B1-Motion>", self._drag)
-
-        # Progress bar frame
-        progress_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        progress_frame.pack(fill="x", padx=12, pady=(0, 4))
-
-        self.progress_bar = ctk.CTkProgressBar(
-            progress_frame,
-            width=200,
-            height=16,
-            corner_radius=4,
-        )
-        self.progress_bar.pack(side="left")
-        self.progress_bar.set(0)
-
-        self.percentage_label = ctk.CTkLabel(
-            progress_frame,
-            text="0%",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            width=45,
-        )
-        self.percentage_label.pack(side="right", padx=(8, 0))
-
-        # Stats frame
-        stats_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        stats_frame.pack(fill="x", padx=12, pady=(4, 8))
-
-        self.tokens_label = ctk.CTkLabel(
-            stats_frame,
-            text="0 / 0",
-            font=ctk.CTkFont(size=11),
-            text_color="#d1d5db",
-        )
-        self.tokens_label.pack(side="left")
-
-        self.calls_label = ctk.CTkLabel(
-            stats_frame,
-            text="0 calls",
-            font=ctk.CTkFont(size=11),
-            text_color="#9ca3af",
-        )
-        self.calls_label.pack(side="right")
-
-        # Build context menu
-        self._build_context_menu()
-
-        # Bind right-click to all widgets
-        for widget in [main_frame, title_label, self.window_label,
-                       self.tokens_label, self.calls_label]:
-            widget.bind("<Button-3>", self._show_context_menu)
-
-        log.debug("widget_ui_built")
-
-    def _build_context_menu(self):
-        """Build the right-click context menu with all tuning options."""
-        self.context_menu = tk.Menu(self.root, tearoff=0, bg="#2b2b2b", fg="#e0e0e0",
-                                    activebackground="#4b5563", activeforeground="#ffffff")
-
-        # Budget submenu - more granular options
-        budget_menu = tk.Menu(self.context_menu, tearoff=0, bg="#2b2b2b", fg="#e0e0e0",
-                              activebackground="#4b5563", activeforeground="#ffffff")
-        budget_options = [
-            ("100k", 100000), ("200k", 200000), ("250k", 250000), ("300k", 300000),
-            ("400k", 400000), ("500k", 500000), ("750k", 750000), ("1M", 1000000),
-            ("1.5M", 1500000), ("2M", 2000000),
-        ]
-        current_budget = get_setting("session_budget", 500000)
-        for label, value in budget_options:
-            budget_menu.add_radiobutton(
-                label=label,
-                value=value,
-                variable=tk.IntVar(value=current_budget),
-                command=lambda v=value: self._set_budget(v),
-            )
-        self.context_menu.add_cascade(label="Budget", menu=budget_menu)
-
-        # Window Duration submenu - more granular options
-        window_menu = tk.Menu(self.context_menu, tearoff=0, bg="#2b2b2b", fg="#e0e0e0",
-                              activebackground="#4b5563", activeforeground="#ffffff")
-        window_options = [
-            ("30 min", 0.5), ("1 hour", 1), ("1.5 hours", 1.5), ("2 hours", 2),
-            ("3 hours", 3), ("4 hours", 4), ("5 hours", 5), ("6 hours", 6),
-            ("8 hours", 8), ("10 hours", 10), ("12 hours", 12),
-        ]
-        current_window = get_setting("window_hours", 4)
-        for label, value in window_options:
-            window_menu.add_radiobutton(
-                label=label,
-                value=value,
-                variable=tk.DoubleVar(value=current_window),
-                command=lambda v=value: self._set_window_hours(v),
-            )
-        self.context_menu.add_cascade(label="Window Duration", menu=window_menu)
-
-        # Reset Hour submenu - all 24 hours
-        reset_menu = tk.Menu(self.context_menu, tearoff=0, bg="#2b2b2b", fg="#e0e0e0",
-                             activebackground="#4b5563", activeforeground="#ffffff")
-        current_reset = get_setting("reset_hour", 2)
-        for hour in range(24):
-            reset_menu.add_radiobutton(
-                label=f"{hour:02d}:00",
-                value=hour,
-                variable=tk.IntVar(value=current_reset),
-                command=lambda h=hour: self._set_reset_hour(h),
-            )
-        self.context_menu.add_cascade(label="Reset Hour", menu=reset_menu)
-
-        self.context_menu.add_separator()
-
-        # Calibrate option
-        self.context_menu.add_command(label="Calibrate...", command=self._on_calibrate)
-
-        self.context_menu.add_separator()
-
-        # Exit option
-        self.context_menu.add_command(label="Exit", command=self._on_close)
-
-    def _show_context_menu(self, event):
-        """Show the context menu at the cursor position."""
-        try:
-            # Rebuild menu to update checked states
-            self._build_context_menu()
-            self.context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.context_menu.grab_release()
-
-    def _set_budget(self, value: int):
-        """Set budget and update display."""
-        log.info("budget_changed", value=value)
-        set_setting("session_budget", value)
-        self._update_display()
-
-    def _set_window_hours(self, value: float):
-        """Set window hours and update display."""
-        log.info("window_hours_changed", value=value)
-        set_setting("window_hours", value)
-        self._update_display()
-
-    def _set_reset_hour(self, value: int):
-        """Set reset hour and update display."""
-        log.info("reset_hour_changed", value=value)
-        set_setting("reset_hour", value)
-        self._update_display()
-
-    def _on_calibrate(self):
-        """Handle calibrate menu item."""
-        log.debug("calibrate_clicked")
-        if self.on_calibrate:
-            self.on_calibrate()
-
-    def _update_display(self):
-        """Update the widget with current stats."""
-        if not self.running or not self.root:
-            return
-
-        try:
-            # Get current stats
-            window_start, window_end = get_session_window()
-            window_str, countdown_str, _, _ = get_time_until_reset(window_start, window_end)
-            stats = get_claude_stats(window_start, window_end)
-
-            budget = get_setting("session_budget", 500000)
-            offset = get_setting("token_offset", 0)
-
-            if stats:
-                session_tokens = stats["session_tokens"] + offset
-                percentage = calculate_usage_percentage(stats["session_tokens"])
-                color = get_usage_color(percentage)
-                api_calls = stats["api_calls"]
-            else:
-                session_tokens = 0
-                percentage = 0.0
-                color = "gray"
-                api_calls = 0
-
-            color_hex = self._get_color_hex(color)
-
-            # Update UI
-            self.window_label.configure(text=f"{window_str}  ({countdown_str} left)")
-
-            self.progress_bar.set(percentage / 100.0)
-            self.progress_bar.configure(progress_color=color_hex)
-
-            self.percentage_label.configure(
-                text=f"{percentage:.0f}%",
-                text_color=color_hex,
-            )
-
-            self.tokens_label.configure(
-                text=f"{format_tokens(session_tokens)} / {format_tokens(budget)}"
-            )
-
-            self.calls_label.configure(text=f"{api_calls} calls")
-
-            log.debug(
-                "widget_updated",
-                percentage=percentage,
-                tokens=session_tokens,
-                calls=api_calls,
-            )
-
-        except Exception as e:
-            log.exception("widget_update_error", error=str(e))
-
-        # Schedule next update
-        if self.running:
-            interval = get_setting("update_interval_seconds", 30) * 1000
-            self.update_timer = self.root.after(interval, self._update_display)
-
-    def _on_close(self):
-        """Handle close button."""
-        log.info("widget_close_requested")
-        if self.on_exit:
-            self.on_exit()
-        else:
-            self.stop()
-
-    def run(self):
-        """Run the widget."""
-        log.info("widget_starting")
-        self.running = True
-
-        # Set appearance
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
-
-        # Create window
-        self.root = ctk.CTk()
         self._build_ui()
 
-        # Initial update
-        self._update_display()
+        if position:
+            self.move(position[0], position[1])
+        else:
+            self._position_bottom_right()
 
-        log.info("widget_running")
-        # Run mainloop
-        try:
-            self.root.mainloop()
-        except KeyboardInterrupt:
-            log.info("keyboard_interrupt")
-        finally:
-            self.stop()
+    def _position_bottom_right(self) -> None:
+        """Position widget in the bottom-right corner of the primary screen."""
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            x = geo.right() - self.width() - 16
+            y = geo.bottom() - 100
+            self.move(x, y)
 
-    def stop(self):
-        """Stop the widget."""
-        log.info("widget_stopping")
-        self.running = False
+    def _build_ui(self) -> None:
+        """Build compact 3-row layout matching peripheral-battery-monitor."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        if self.update_timer and self.root:
-            self.root.after_cancel(self.update_timer)
-            self.update_timer = None
+        self._container = QWidget(self)
+        self._container.setObjectName("container")
+        self._container.setStyleSheet("""
+            #container {
+                background-color: rgba(35, 35, 35, 230);
+                border-radius: 8px;
+                border: 1px solid rgba(255, 255, 255, 20);
+            }
+        """)
 
-        if self.root:
-            try:
-                self.root.quit()
-                self.root.destroy()
-            except Exception:
-                pass
-            self.root = None
+        cl = QVBoxLayout(self._container)
+        cl.setContentsMargins(12, 8, 12, 10)
+        cl.setSpacing(4)
 
-        log.info("widget_stopped")
+        # Row 1: [icon] Claude Code              countdown
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
 
-    def update(self):
-        """Force an update (called externally after calibration)."""
-        if self.running and self.root:
-            self.root.after(0, self._update_display)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(_make_terminal_icon(16))
+        header_row.addWidget(icon_lbl)
+
+        title_lbl = QLabel("Claude Code")
+        title_lbl.setStyleSheet("color: #aaaaaa; font-size: 11px; font-weight: bold;")
+        header_row.addWidget(title_lbl)
+
+        header_row.addStretch()
+
+        self._countdown_label = QLabel("--")
+        self._countdown_label.setStyleSheet("color: #888888; font-size: 9px;")
+        header_row.addWidget(self._countdown_label)
+
+        cl.addLayout(header_row)
+
+        # Row 2: thin progress bar
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setObjectName("ClaudeProgress")
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setFixedHeight(8)
+        self._set_bar_color(COLOR_GRAY)
+        cl.addWidget(self._progress_bar)
+
+        # Row 3: 5h: XX%                    7d: YY%
+        stats_row = QHBoxLayout()
+
+        self._five_hour_label = QLabel("5h: --")
+        self._five_hour_label.setStyleSheet("color: #888888; font-size: 9px;")
+        stats_row.addWidget(self._five_hour_label)
+
+        stats_row.addStretch()
+
+        self._seven_day_label = QLabel("7d: --")
+        self._seven_day_label.setStyleSheet("color: #888888; font-size: 9px;")
+        stats_row.addWidget(self._seven_day_label)
+
+        cl.addLayout(stats_row)
+
+        # Status line (errors, stale — hidden unless needed)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: #6b7280; font-size: 9px;")
+        self._status_label.setVisible(False)
+        cl.addWidget(self._status_label)
+
+        layout.addWidget(self._container)
+
+    def _set_bar_color(self, color_hex: str) -> None:
+        """Update the progress bar color."""
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar#ClaudeProgress {{
+                background-color: rgba(255, 255, 255, 25);
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar#ClaudeProgress::chunk {{
+                background-color: {color_hex};
+                border-radius: 4px;
+            }}
+        """)
+
+    def update_usage(self, data: dict | None) -> None:
+        """Update the widget display with new usage data."""
+        if data is None:
+            self._show_error("Not logged in \u2014 run `claude login`")
+            return
+
+        error = data.get("error")
+        if error:
+            error_msg = self._error_message(error)
+            if error in ("auth_backoff", "offline", "api_error"):
+                self._show_stale(error_msg)
+            else:
+                self._show_error(error_msg)
+            return
+
+        five_hour = data.get("five_hour", {})
+        seven_day = data.get("seven_day", {})
+
+        util_5h = five_hour.get("utilization")
+        util_7d = seven_day.get("utilization")
+        resets_at = five_hour.get("resets_at", "")
+
+        # Progress bar
+        pct_value = min(100, int(util_5h or 0))
+        color = usage_color(util_5h)
+        self._progress_bar.setValue(pct_value)
+        self._set_bar_color(color)
+
+        # Stats labels
+        self._five_hour_label.setText(f"5h: {format_percentage(util_5h)}")
+
+        # Build 7d text with model breakdowns if available
+        right_parts = [f"7d: {format_percentage(util_7d)}"]
+        for key in ("seven_day_opus", "seven_day_sonnet"):
+            bucket = data.get(key)
+            if bucket and bucket.get("utilization", 0) > 0:
+                label = key.replace("seven_day_", "").capitalize()
+                right_parts.append(f"{label}: {bucket['utilization']:.0f}%")
+        self._seven_day_label.setText(" | ".join(right_parts))
+
+        # Countdown
+        if resets_at:
+            from .oauth import get_time_until_reset
+            self._countdown_label.setText(f"Resets in {get_time_until_reset(resets_at)}")
+        else:
+            self._countdown_label.setText("")
+
+        self._status_label.setVisible(False)
+
+    def _show_error(self, message: str) -> None:
+        """Display an error/status message, reset bar to empty."""
+        self._five_hour_label.setText("5h: --")
+        self._progress_bar.setValue(0)
+        self._set_bar_color(COLOR_GRAY)
+        self._countdown_label.setText("")
+        self._seven_day_label.setText("7d: --")
+        self._status_label.setText(message)
+        self._status_label.setVisible(True)
+
+    def _show_stale(self, message: str) -> None:
+        """Show stale data indicator while keeping last-known values."""
+        self._status_label.setText(message)
+        self._status_label.setVisible(True)
+
+    @staticmethod
+    def _error_message(error_code: str) -> str:
+        return error_message(error_code)
+
+    def _show_context_menu(self, pos) -> None:
+        """Show right-click context menu."""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                padding: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #3d3d3d;
+            }
+        """)
+
+        refresh_action = QAction("Refresh Now", self)
+        refresh_action.triggered.connect(self._request_refresh)
+        menu.addAction(refresh_action)
+
+        menu.addSeparator()
+
+        minimize_action = QAction("Minimize to Tray", self)
+        minimize_action.triggered.connect(self._minimize_to_tray)
+        menu.addAction(minimize_action)
+
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self._request_exit)
+        menu.addAction(exit_action)
+
+        menu.exec(self.mapToGlobal(pos))
+
+    def _request_refresh(self) -> None:
+        """Trigger a manual refresh."""
+        if self._on_refresh:
+            self._on_refresh()
+
+    def _minimize_to_tray(self) -> None:
+        """Hide the widget (tray icon remains)."""
+        self.hide()
+
+    def _request_exit(self) -> None:
+        """Request application exit."""
+        if self._on_exit:
+            self._on_exit()
+
+    # Drag support
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_pos = None
+        from .config import set_setting
+        set_setting("widget_position", [self.x(), self.y()])
+
+    def paintEvent(self, event) -> None:
+        """Paint transparent background (container handles its own rounded rect)."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(self.rect().toRectF(), 10, 10)
+        painter.fillPath(path, QColor(0, 0, 0, 0))
+        painter.end()

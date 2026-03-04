@@ -1,39 +1,37 @@
 """Logging configuration using structlog."""
 
 import logging
+import os
 import sys
 from pathlib import Path
 
 import structlog
 
 
-def setup_logging(debug: bool = False, log_file: Path = None) -> None:
-    """
-    Configure structlog for the application.
+def get_log_dir() -> Path:
+    """Get the log directory, using LOCALAPPDATA on Windows."""
+    localappdata = os.environ.get("LOCALAPPDATA", "")
+    if localappdata:
+        return Path(localappdata) / "claude-usage-widget" / "logs"
+    return Path.home() / ".claude-usage-widget" / "logs"
 
-    Args:
-        debug: Enable debug level logging
-        log_file: Optional file path to write logs to
-    """
-    # Set up standard logging
+
+def setup_logging(debug: bool = False, log_file: Path | None = None) -> None:
+    """Configure structlog for the application."""
     log_level = logging.DEBUG if debug else logging.INFO
 
-    # Configure handlers
-    handlers = []
+    handlers: list[logging.Handler] = []
 
-    # Console handler - always enabled
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
     handlers.append(console_handler)
 
-    # File handler - if specified
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(log_level)
         handlers.append(file_handler)
 
-    # Configure root logger
     logging.basicConfig(
         format="%(message)s",
         level=log_level,
@@ -41,7 +39,6 @@ def setup_logging(debug: bool = False, log_file: Path = None) -> None:
         force=True,
     )
 
-    # Configure structlog
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -56,8 +53,3 @@ def setup_logging(debug: bool = False, log_file: Path = None) -> None:
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
-
-
-def get_logger(name: str = None) -> structlog.BoundLogger:
-    """Get a logger instance."""
-    return structlog.get_logger(name)

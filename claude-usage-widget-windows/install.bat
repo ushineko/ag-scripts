@@ -1,6 +1,6 @@
 @echo off
 REM Claude Usage Widget for Windows - Installer
-REM Installs dependencies and creates a startup shortcut
+REM Installs dependencies and optionally creates a startup shortcut
 
 echo Claude Usage Widget Installer
 echo ==============================
@@ -35,7 +35,6 @@ echo.
 REM Ask about startup
 set /p ADD_STARTUP="Add to Windows startup? (y/n): "
 if /i "%ADD_STARTUP%"=="y" (
-    REM Create startup shortcut using PowerShell
     echo Creating startup shortcut...
     powershell -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Claude Usage Widget.lnk'); $Shortcut.TargetPath = 'pythonw'; $Shortcut.Arguments = '-m src.main'; $Shortcut.WorkingDirectory = '%SCRIPT_DIR%'; $Shortcut.Description = 'Claude Usage Widget'; $Shortcut.Save()"
     if errorlevel 1 (

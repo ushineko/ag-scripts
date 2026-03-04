@@ -34,12 +34,28 @@ if exist "%CONFIG_DIR%" (
     echo No configuration files found.
 )
 
+REM Remove log files
+set "LOG_DIR=%LOCALAPPDATA%\claude-usage-widget"
+if exist "%LOG_DIR%" (
+    set /p REMOVE_LOGS="Remove log files? (y/n): "
+    if /i "%REMOVE_LOGS%"=="y" (
+        echo Removing log directory...
+        rmdir /s /q "%LOG_DIR%"
+        echo Log files removed.
+    ) else (
+        echo Log files preserved at:
+        echo   %LOG_DIR%
+    )
+) else (
+    echo No log files found.
+)
+
 echo.
 echo ================================
 echo Uninstallation complete.
 echo.
 echo Note: Python dependencies were not removed.
 echo To remove them manually:
-echo   pip uninstall pystray customtkinter Pillow structlog
+echo   pip uninstall PySide6 structlog
 echo.
 pause

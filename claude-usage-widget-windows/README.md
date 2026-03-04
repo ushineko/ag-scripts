@@ -1,6 +1,6 @@
 # Claude Usage Widget for Windows
 
-A lightweight Windows system tray widget that displays Claude Code CLI usage metrics within rolling time windows.
+A floating desktop widget that displays Claude Code API usage metrics via the Anthropic OAuth API.
 
 ## Table of Contents
 
@@ -9,40 +9,39 @@ A lightweight Windows system tray widget that displays Claude Code CLI usage met
 - [Installation](#installation)
 - [Usage](#usage)
 - [Configuration](#configuration)
-- [Calibration](#calibration)
-- [Limitations](#limitations)
+- [Architecture](#architecture)
 - [Development](#development)
 - [Changelog](#changelog)
 
 ## Features
 
-- Always-on-top floating widget with progress bar
+- Always-on-top floating widget with 5-hour utilization progress bar
+- Countdown timer to next usage window reset
+- 7-day utilization display
 - System tray icon with color-coded usage status
-- Real-time token consumption tracking
-- Right-click context menu on widget for quick settings access
-- Configurable budget (100k-2M), window duration (30min-12h), reset hour (0-23)
-- Snap-to-percentage calibration with live preview
+- Reads authoritative usage data from the Anthropic OAuth API (no local file parsing)
+- Automatic OAuth token refresh with exponential backoff
+- Draggable widget with position persistence
+- Right-click context menu (Refresh Now, Minimize to Tray, Exit)
+- Minimize to tray / restore from tray via left-click
+- Single-instance enforcement
 - Structured logging with `--debug` and `--no-gui` modes
-- Lightweight (~5MB dependencies vs ~50MB for PyQt alternatives)
 
 ## Requirements
 
 - Windows 10 or Windows 11
-- Python 3.10+
-- Claude Code CLI installed (`%USERPROFILE%\.claude\` directory must exist)
+- Python 3.12+
+- Claude Code CLI installed and logged in (`claude login`)
 
 ## Installation
 
 ```powershell
-# Clone or download the repository
 cd claude-usage-widget-windows
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Run
-python src/main.py
+python -m src.main
 ```
+
+Or run `install.bat` for guided setup with optional startup shortcut.
 
 ## Usage
 
@@ -53,96 +52,78 @@ python -m src.main           # Normal mode
 python -m src.main --debug   # With debug logging
 ```
 
-1. Run the widget - a floating widget appears on screen with progress bar
-2. **Right-click** the widget for settings menu (Budget, Window Duration, Reset Hour, Calibrate, Exit)
-3. **Drag** the widget to reposition it
-4. System tray icon also available for redundant access to settings
+- **Right-click** the widget for context menu
+- **Drag** the widget to reposition (position is saved)
+- **Minimize button** (─) hides to system tray
+- **Left-click tray icon** to show/hide widget
 
-### Console Mode (troubleshooting)
+### Console Mode
 
 ```powershell
-python -m src.main --no-gui          # Scan and print stats, then exit
-python -m src.main --no-gui --debug  # With verbose debug logging
+python -m src.main --no-gui          # Fetch and print usage
+python -m src.main --no-gui --debug  # With verbose logging
 ```
-
-Console mode is useful for:
-- Verifying the widget can find and parse your Claude session files
-- Debugging issues without starting the GUI
-- Scripting/automation
 
 ### CLI Options
 
 | Option | Description |
 |--------|-------------|
 | `--debug` | Enable verbose debug logging |
-| `--no-gui` | Run in console mode (scan and exit) |
-| `--log-file PATH` | Write logs to file (in addition to console) |
+| `--no-gui` | Fetch usage from API and print to console |
+| `--log-file PATH` | Write logs to file |
 
-### Tray Icon Colors
+### Status Colors
 
-| Color | Meaning |
-|-------|---------|
-| Green | Usage below 50% |
-| Yellow | Usage between 50-80% |
-| Red | Usage above 80% |
+| Color | 5-hour Utilization |
+|-------|-------------------|
+| Green | Below 50% |
+| Yellow | 50-80% |
+| Red | Above 80% |
 
 ## Configuration
 
-Settings are stored in `%APPDATA%\claude-usage-widget\config.json`:
+Settings stored in `%APPDATA%\claude-usage-widget\config.json`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `session_budget` | 500000 | Token budget for the session window |
-| `window_hours` | 4 | Duration of the rolling window |
-| `reset_hour` | 2 | Hour when Claude's billing window resets |
-| `token_offset` | 0 | Calibration adjustment |
-| `update_interval_seconds` | 30 | How often to refresh data |
+| `update_interval_seconds` | 30 | How often to poll the API |
+| `opacity` | 0.95 | Widget transparency (0.0-1.0) |
+| `widget_position` | null | Saved `[x, y]` position (auto bottom-right if null) |
 
-## Calibration
+## Architecture
 
-To sync with Claude's actual billing:
+```
+src/
+  main.py              # Entry point, QTimer, worker thread, single-instance
+  oauth.py             # OAuth credentials, token refresh, usage API, backoff
+  widget.py            # PySide6 floating widget (frameless, translucent)
+  tray.py              # QSystemTrayIcon with context menu
+  config.py            # Settings persistence
+  logging_config.py    # structlog setup
+```
 
-1. Run `/usage` in Claude CLI to see your current percentage
-2. Right-click the widget → **Calibrate...**
-3. Use the slider or enter the percentage (1-200% supported)
-4. Choose adjustment mode:
-   - **Adjust Budget** (recommended): Recalculates budget to match percentage
-   - **Adjust Token Count**: Adds token offset to match percentage
-5. Preview shows the calculation before applying
-6. Click **Apply** to save (confirmation shown before closing)
-
-## Limitations
-
-- Only tracks local CLI usage from `%USERPROFILE%\.claude\projects\`
-- Does NOT include usage from claude.ai web interface
-- Does NOT aggregate usage from other devices
-- Manual calibration required (no automatic sync with billing API)
+Data flow: A single `QTimer` triggers a worker `QThread` that calls the Anthropic OAuth usage API. The result is delivered via Qt signal to both the widget and tray icon — no duplicate API calls.
 
 ## Development
 
 ```powershell
-# Install dev dependencies
 pip install -r requirements-dev.txt
-
-# Run tests
 pytest tests/
-
-# Build standalone exe (optional)
-pyinstaller --onefile --windowed src/main.py
 ```
 
 ## Changelog
 
+### v2.0.0 (2026-03-04)
+
+- Complete rewrite: replaced JSONL file parsing with Anthropic OAuth usage API
+- Replaced CustomTkinter + pystray with PySide6 (QSystemTrayIcon, frameless QWidget)
+- Eliminated calibration (API provides authoritative utilization percentages)
+- Single QTimer + worker thread drives both widget and tray (no duplicate polling)
+- Added minimize-to-tray / restore from tray
+- Added single-instance enforcement via QLockFile
+- Removed dead code: popup.py, calibration.py, claude_stats.py
+- Simplified config: removed session_budget, window_hours, reset_hour, token_offset
+
 ### v0.1.0 (2025-02-02)
 
-- Initial release
-- Always-on-top floating widget with progress bar and drag support
-- System tray integration with color-coded status
-- Right-click context menu on widget for all settings
-- Configurable budget (100k-2M), window duration (30min-12h), reset hour (0-23)
-- Calibration dialog with slider (1-200%), live preview, and confirmation feedback
-- Escape key and X button close calibration dialog
-- Structured logging with structlog
-- `--debug` flag for verbose output
-- `--no-gui` mode for console-only troubleshooting
-- `--log-file` option for file logging
+- Initial release with CustomTkinter floating widget and pystray system tray
