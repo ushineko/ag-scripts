@@ -24,7 +24,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [browser-router](browser-router/) | Routes URLs to different browsers based on domain patterns. Workaround for Chromium lacking PipeWire camera support on Wayland. |
 | [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology. |
 | [claude-code-setup](claude-code-setup/) | Setup script for Claude Code CLI. Installs/updates Node.js and `@anthropic-ai/claude-code` globally. |
-| [claude-usage-widget-windows](claude-usage-widget-windows/) | Windows system tray widget displaying Claude Code CLI usage metrics with floating progress bar, calibration, and configurable session windows. |
+| [claude-usage-widget-windows](claude-usage-widget-windows/) | PySide6 floating widget and system tray icon displaying Claude Code usage from the Anthropic OAuth API. Color-coded progress bar, countdown timer, and model breakdowns. |
 | [docker-setup](docker-setup/) | Sets up Docker for the current user. Installs Docker if missing, enables the service, and adds user to the `docker` group. |
 | [fake-screensaver](fake-screensaver/) | PyQt-based fake screensaver that keeps the mouse cursor visible, plus a simple HTML blank page fallback. |
 | [foghorn-leghorn](foghorn-leghorn/) | Always-on-top countdown timer with system tray integration, desktop notifications, and attention-grabbing alarm sounds (foghorn, Wilhelm scream, air horn). |
