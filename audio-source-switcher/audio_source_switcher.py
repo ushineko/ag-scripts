@@ -1469,17 +1469,14 @@ class MainWindow(QMainWindow):
             # Safety Fix: Only enforce if JamesDSP has valid OUTPUT PORTS (is running correctly).
             # Circuit Breaker: Don't retry if we already failed this session.
             if jamesdsp_available and default_sink_name == target_name and default_sink_name != "jamesdsp_sink":
-                 if not self.jdsp_broken_state:
-                     pw = PipeWireController()
-                     if pw.get_jamesdsp_outputs():
-                         # print("DEBUG: Enforcing JamesDSP activation for current device.")
-                         should_switch = True
-                     else:
-                         # print("DEBUG: JamesDSP sink exists but has no outputs. Skipping.")
-                         pass
-                 else:
-                     # print("DEBUG: JamesDSP marked broken. Skipping enforcement.")
-                     pass
+                 pw = PipeWireController()
+                 has_outputs = bool(pw.get_jamesdsp_outputs())
+                 if self.jdsp_broken_state and has_outputs:
+                     # JamesDSP recovered — reset circuit breaker
+                     print("JamesDSP outputs restored. Resetting circuit breaker.")
+                     self.jdsp_broken_state = False
+                 if not self.jdsp_broken_state and has_outputs:
+                     should_switch = True
             
             # 3. JamesDSP Correctness:
             # If currently default IS "jamesdsp_sink", check routing.
@@ -1969,7 +1966,8 @@ class MainWindow(QMainWindow):
         # Simplest: Check if our list of sinks contains 'jamesdsp_sink' (it should if we refreshed).
         
         # Optimization: We only try this if the target is NOT JamesDSP itself.
-        if sink_name != jamesdsp_sink_name:
+        # Circuit breaker: skip JamesDSP entirely if relink previously failed
+        if sink_name != jamesdsp_sink_name and not self.jdsp_broken_state:
             # Check if JDSP is available
             pw = PipeWireController()
             jdsp_outs = pw.get_jamesdsp_outputs()
@@ -1990,13 +1988,17 @@ class MainWindow(QMainWindow):
             success = pw.relink_jamesdsp(sink_name)
             if success:
                 print(f"Rewired JamesDSP -> {sink_name}")
+                self.jdsp_broken_state = False
             else:
                 print("Failed to rewire JamesDSP. Fallback to direct switch.")
+                self.jdsp_broken_state = True
                 self.audio.set_default_sink(sink_name)
                 if self.move_streams_cb.isChecked():
                     self.audio.move_input_streams(sink_name)
 
         else:
+            self.audio.set_default_sink(sink_name)
+            if self.move_streams_cb.isChecked():
                 self.audio.move_input_streams(sink_name)
 
         # --- Microphone Association Logic ---
