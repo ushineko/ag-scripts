@@ -261,15 +261,18 @@ def fetch_claude_usage() -> dict | None:
     except urllib.error.HTTPError as e:
         _usage_fail_count += 1
         if e.code == 429:
-            # Respect Retry-After header if present, otherwise use default
+            # Exponential backoff: base * 2^(failures-1), floored at default, capped at max
+            exp_delay = min(_USAGE_429_DEFAULT_RETRY * (2 ** (_usage_fail_count - 1)),
+                            _USAGE_BACKOFF_CAP)
+            # If server sends a Retry-After header, use whichever is larger
             retry_after = e.headers.get("Retry-After") if e.headers else None
             if retry_after:
                 try:
-                    delay = int(retry_after)
+                    delay = max(int(retry_after), exp_delay)
                 except ValueError:
-                    delay = _USAGE_429_DEFAULT_RETRY
+                    delay = exp_delay
             else:
-                delay = _USAGE_429_DEFAULT_RETRY
+                delay = exp_delay
             _usage_backoff_until = time.monotonic() + delay
             if _usage_fail_count == 1:
                 log.warning("claude_usage_rate_limited", retry_after_secs=delay)
