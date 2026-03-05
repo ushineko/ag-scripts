@@ -797,6 +797,8 @@ class MainWindow(QMainWindow):
         
         # Circuit breaker for JamesDSP crashes/loops
         self.jdsp_broken_state = False
+        # Track last physical sink to suppress redundant notifications
+        self._last_physical_sink = None
 
         if self.target_device_cli:
             # Headless Mode
@@ -1277,7 +1279,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 11.7</b></p>
+            <p><b>Version 11.8</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
@@ -1485,18 +1487,22 @@ class MainWindow(QMainWindow):
                     pw = PipeWireController()
                     jdsp_target = pw.get_jamesdsp_target()
                     
+                    jdsp_has_outputs = bool(pw.get_jamesdsp_outputs())
                     if jdsp_target:
                         if jdsp_target != target_name:
                             # It's routed to wrong physical device!
-                            # print(f"DEBUG: JDSP routed to {jdsp_target}, want {target_name}. Switching.")
                             should_switch = True
                         else:
                             # Correctly routed. We are good.
-                            current_is_valid = True 
+                            current_is_valid = True
                             should_switch = False
+                    elif not jdsp_has_outputs:
+                        # JDSP plugin suspended (no outputs) — idle, not broken.
+                        # WirePlumber will reconnect when audio resumes.
+                        current_is_valid = True
+                        should_switch = False
                     else:
-                        # JDSP floating. Fix it.
-                        # print("DEBUG: JDSP floating. Switching.")
+                        # JDSP has outputs but no links — actually floating. Fix it.
                         should_switch = True
                         
                 except Exception:
@@ -2066,12 +2072,16 @@ class MainWindow(QMainWindow):
 
         # PA race condition fix: Wait for state to propagate before reading it back
         QTimer.singleShot(150, self.refresh_sinks_ui)
-        
+
         clean_text = display_text.replace(" (Active)", "")
         self.status_label.setText(f"Switched to: {clean_text}{mic_msg}")
-        
-        # System Notification
-        self.send_notification("Audio Switched", f"Output: {clean_text}\nInput: {mic_msg.replace(' + Mic: ', '') if mic_msg else 'Unchanged'}")
+
+        # Suppress notification if the physical output device hasn't changed
+        # (e.g. JamesDSP re-establishing routing after suspend)
+        physical_changed = (sink_name != self._last_physical_sink)
+        self._last_physical_sink = sink_name
+        if physical_changed:
+            self.send_notification("Audio Switched", f"Output: {clean_text}\nInput: {mic_msg.replace(' + Mic: ', '') if mic_msg else 'Unchanged'}")
 
     def get_selected_bt_mac(self):
         item = self.bt_list.currentItem()

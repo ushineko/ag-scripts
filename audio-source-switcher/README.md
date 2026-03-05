@@ -179,6 +179,11 @@ Device priority and settings are saved to `~/.config/audio-source-switcher/confi
 
 ## Changelog
 
+### v11.8
+- **JamesDSP Loop Fix**: Fixed auto-switch loop when JamesDSP relink fails (e.g. Bluetooth disconnected). Circuit breaker now activates on failure and auto-resets when JamesDSP recovers.
+- **Spurious Notification Fix**: Suppressed redundant "Audio Switched" notifications caused by JamesDSP suspend/resume cycles when audio starts/stops playing.
+- **Direct Switch Fix**: Fixed `switch_to_sink()` not setting default sink when bypassing JamesDSP.
+
 ### v11.7
 - **Bluetooth Naming Fix**: Replaced `bluetoothctl` CLI with D-Bus for device enumeration. Fixes blank Bluetooth device list and devices showing as MAC addresses instead of names after bluez 5.86 update.
 
