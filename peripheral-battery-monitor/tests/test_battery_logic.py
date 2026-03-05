@@ -492,6 +492,7 @@ class TestOAuthBackoff(unittest.TestCase):
     def setUp(self):
         """Reset backoff state before each test."""
         pb.reset_oauth_backoff()
+        pb.reset_usage_backoff()
         pb._oauth_creds_mtime = 0.0
 
     def test_backoff_engages_on_403(self):
@@ -617,6 +618,130 @@ class TestOAuthBackoff(unittest.TestCase):
 
         remaining = pb._oauth_backoff_until - time.monotonic()
         self.assertLessEqual(remaining, 301)  # 300s cap + small timing tolerance
+
+
+    def test_usage_429_engages_backoff(self):
+        """Behavioral contract: 429 from usage API engages backoff and returns rate_limited."""
+        from unittest.mock import patch, mock_open
+        import time
+        from http.client import HTTPMessage
+        from io import BytesIO
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "valid-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": int(time.time() * 1000) + 3600000,
+            }
+        }
+
+        headers = HTTPMessage()
+        headers["Retry-After"] = "180"
+        error_429 = pb.urllib.error.HTTPError(
+            url="https://example.com", code=429, msg="Too Many Requests",
+            hdrs=headers, fp=BytesIO(b""))
+
+        with patch('builtins.open', mock_open(read_data=json.dumps(sample_creds))):
+            with patch.object(pb.urllib.request, 'urlopen', side_effect=error_429):
+                with patch('pb.os.stat') as mock_stat:
+                    mock_stat.return_value = MagicMock(st_mtime=1.0)
+                    result = pb.fetch_claude_usage()
+
+        self.assertEqual(result["error"], "rate_limited")
+        self.assertEqual(pb._usage_fail_count, 1)
+        self.assertGreater(pb._usage_backoff_until, time.monotonic())
+        # Should respect the Retry-After header (180s)
+        remaining = pb._usage_backoff_until - time.monotonic()
+        self.assertGreater(remaining, 170)  # ~180s minus timing tolerance
+
+    def test_usage_429_skips_during_backoff(self):
+        """Behavioral contract: usage API calls are skipped during backoff."""
+        import time
+
+        pb._usage_fail_count = 1
+        pb._usage_backoff_until = time.monotonic() + 9999
+
+        result = pb.fetch_claude_usage()
+        self.assertEqual(result["error"], "rate_limited")
+
+    def test_usage_backoff_resets_on_success(self):
+        """Behavioral contract: successful usage API call resets usage backoff."""
+        from unittest.mock import patch, mock_open
+        import time
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "valid-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": int(time.time() * 1000) + 3600000,
+            }
+        }
+        usage_response = {
+            "five_hour": {"utilization": 50.0, "resets_at": "2026-02-16T22:00:00+00:00"},
+        }
+
+        def make_mock_response(data):
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(data).encode()
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        # Simulate prior usage backoff state (expired so call proceeds)
+        pb._usage_fail_count = 3
+        pb._usage_backoff_until = 0.0
+
+        with patch('builtins.open', mock_open(read_data=json.dumps(sample_creds))):
+            with patch.object(pb.urllib.request, 'urlopen',
+                              return_value=make_mock_response(usage_response)):
+                with patch('pb.os.stat') as mock_stat:
+                    mock_stat.return_value = MagicMock(st_mtime=1.0)
+                    result = pb.fetch_claude_usage()
+
+        self.assertIn("five_hour", result)
+        self.assertEqual(pb._usage_fail_count, 0)
+        self.assertEqual(pb._usage_backoff_until, 0.0)
+
+    def test_manual_refresh_resets_usage_backoff(self):
+        """Behavioral contract: reset_usage_backoff clears usage API backoff state."""
+        import time
+
+        pb._usage_fail_count = 5
+        pb._usage_backoff_until = time.monotonic() + 9999
+
+        pb.reset_usage_backoff()
+
+        self.assertEqual(pb._usage_fail_count, 0)
+        self.assertEqual(pb._usage_backoff_until, 0.0)
+
+    def test_usage_429_without_retry_after_uses_default(self):
+        """Behavioral contract: 429 without Retry-After header uses default delay."""
+        from unittest.mock import patch, mock_open
+        import time
+
+        sample_creds = {
+            "claudeAiOauth": {
+                "accessToken": "valid-token",
+                "refreshToken": "test-refresh",
+                "expiresAt": int(time.time() * 1000) + 3600000,
+            }
+        }
+
+        error_429 = pb.urllib.error.HTTPError(
+            url="https://example.com", code=429, msg="Too Many Requests",
+            hdrs=None, fp=None)
+
+        with patch('builtins.open', mock_open(read_data=json.dumps(sample_creds))):
+            with patch.object(pb.urllib.request, 'urlopen', side_effect=error_429):
+                with patch('pb.os.stat') as mock_stat:
+                    mock_stat.return_value = MagicMock(st_mtime=1.0)
+                    result = pb.fetch_claude_usage()
+
+        self.assertEqual(result["error"], "rate_limited")
+        remaining = pb._usage_backoff_until - time.monotonic()
+        # Should use _USAGE_429_DEFAULT_RETRY (120s)
+        self.assertGreater(remaining, 110)
+        self.assertLessEqual(remaining, 121)
 
 
 if __name__ == '__main__':

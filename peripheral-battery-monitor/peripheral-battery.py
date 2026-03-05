@@ -24,7 +24,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.4.1"
+__version__ = "1.4.2"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -40,6 +40,15 @@ _oauth_backoff_until: float = 0.0   # monotonic timestamp; skip refresh if now <
 _oauth_fail_count: int = 0          # consecutive refresh failures
 _oauth_creds_mtime: float = 0.0     # last-seen mtime of credentials file
 
+# Usage API backoff state (in-memory only, resets on app restart)
+_usage_backoff_until: float = 0.0   # monotonic timestamp; skip usage call if now < this
+_usage_fail_count: int = 0          # consecutive usage API failures
+
+# Usage API backoff constants (seconds)
+_USAGE_BACKOFF_BASE = 60            # base delay for usage API errors
+_USAGE_BACKOFF_CAP = 600            # max 10 minutes
+_USAGE_429_DEFAULT_RETRY = 120      # default retry delay for 429 if no Retry-After header
+
 # Backoff constants (seconds)
 _BACKOFF_TRANSIENT_BASE = 30        # base delay for transient errors (timeout, network)
 _BACKOFF_TRANSIENT_CAP = 300        # max 5 minutes
@@ -52,6 +61,13 @@ def reset_oauth_backoff():
     global _oauth_backoff_until, _oauth_fail_count
     _oauth_backoff_until = 0.0
     _oauth_fail_count = 0
+
+
+def reset_usage_backoff():
+    """Reset usage API backoff state, allowing the next call immediately."""
+    global _usage_backoff_until, _usage_fail_count
+    _usage_backoff_until = 0.0
+    _usage_fail_count = 0
 
 
 def is_claude_installed():
@@ -177,8 +193,13 @@ def fetch_claude_usage() -> dict | None:
     and calls GET /api/oauth/usage. Returns the parsed JSON response or None on error.
     Applies exponential backoff on repeated refresh failures.
     """
-    global _oauth_backoff_until, _oauth_fail_count
+    global _oauth_backoff_until, _oauth_fail_count, _usage_backoff_until, _usage_fail_count
     log = structlog.get_logger()
+
+    # Check usage API backoff before doing any work
+    if time.monotonic() < _usage_backoff_until:
+        log.debug("usage_api_skipped_backoff", fail_count=_usage_fail_count)
+        return {"error": "rate_limited"}
 
     _check_creds_mtime()
 
@@ -233,10 +254,37 @@ def fetch_claude_usage() -> dict | None:
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
+            # Success — reset usage backoff
+            if _usage_fail_count > 0:
+                reset_usage_backoff()
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        log.warning("claude_usage_api_error", status=e.code)
-        return {"error": "api_error"}
+        _usage_fail_count += 1
+        if e.code == 429:
+            # Respect Retry-After header if present, otherwise use default
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            if retry_after:
+                try:
+                    delay = int(retry_after)
+                except ValueError:
+                    delay = _USAGE_429_DEFAULT_RETRY
+            else:
+                delay = _USAGE_429_DEFAULT_RETRY
+            _usage_backoff_until = time.monotonic() + delay
+            if _usage_fail_count == 1:
+                log.warning("claude_usage_rate_limited", retry_after_secs=delay)
+            else:
+                log.debug("claude_usage_rate_limited", retry_after_secs=delay,
+                           fail_count=_usage_fail_count)
+            return {"error": "rate_limited"}
+        else:
+            # Other HTTP errors: apply exponential backoff
+            delay = min(_USAGE_BACKOFF_BASE * (2 ** (_usage_fail_count - 1)),
+                         _USAGE_BACKOFF_CAP)
+            _usage_backoff_until = time.monotonic() + delay
+            log.warning("claude_usage_api_error", status=e.code,
+                         backoff_secs=delay, fail_count=_usage_fail_count)
+            return {"error": "api_error"}
     except (urllib.error.URLError, TimeoutError) as e:
         log.warning("claude_usage_network_error", error=str(e))
         return {"error": "offline"}
@@ -727,8 +775,9 @@ class PeripheralMonitor(QWidget):
         self.timer.start(30000) 
 
     def _manual_refresh(self):
-        """Handle 'Refresh Now' from context menu — resets OAuth backoff and triggers update."""
+        """Handle 'Refresh Now' from context menu — resets all backoff and triggers update."""
         reset_oauth_backoff()
+        reset_usage_backoff()
         self.update_status()
 
     def update_status(self):
@@ -776,8 +825,10 @@ class PeripheralMonitor(QWidget):
             self.claude_progress.setValue(0)
             labels = {
                 "auth_expired": "Auth expired",
+                "auth_backoff": "Auth retry...",
                 "offline": "Offline",
                 "api_error": "API error",
+                "rate_limited": "Rate limited",
                 "invalid_response": "No data",
             }
             self.claude_five_hour_lbl.setText(labels.get(error, "Error"))
