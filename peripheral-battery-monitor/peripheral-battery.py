@@ -397,6 +397,8 @@ class PeripheralMonitor(QWidget):
         super().__init__()
         self.settings = self.load_settings()
         self.worker = None
+        self._last_good_usage: dict | None = None  # cached last successful API response
+        self._last_good_usage_time: float = 0.0     # monotonic timestamp of last good fetch
 
         self.initUI()
         self.setup_timer()
@@ -796,12 +798,25 @@ class PeripheralMonitor(QWidget):
         self.timer.timeout.connect(self.update_status)
         self.timer.start(600000)
 
+        # Staleness label update every 60 seconds (updates "Xm ago" while in backoff)
+        self.staleness_timer = QTimer(self)
+        self.staleness_timer.timeout.connect(self._tick_staleness)
+        self.staleness_timer.start(60000)
+
         # Activity check every 30 seconds — triggers early refresh if Claude session files change
         self._claude_last_activity_mtime: float = 0.0
         self._claude_activity_refreshed = False  # True once we've refreshed for this activity burst
         self.activity_timer = QTimer(self)
         self.activity_timer.timeout.connect(self._check_claude_activity)
         self.activity_timer.start(30000)
+
+    def _tick_staleness(self):
+        """Update the staleness label if we're showing cached data."""
+        if self._last_good_usage and self._last_good_usage_time > 0:
+            # Only update if data is stale (more than 60s since last good fetch)
+            elapsed = time.monotonic() - self._last_good_usage_time
+            if elapsed > 60:
+                self._update_staleness_label()
 
     def _check_claude_activity(self):
         """Check if Claude session files have been modified; trigger one early refresh per burst."""
@@ -891,6 +906,11 @@ class PeripheralMonitor(QWidget):
 
         error = usage_data.get("error")
         if error:
+            # For transient errors, show cached data if available
+            if error in ("rate_limited", "auth_backoff", "offline") and self._last_good_usage:
+                self._render_usage_data(self._last_good_usage)
+                self._update_staleness_label()
+                return
             self.claude_progress.setValue(0)
             labels = {
                 "auth_expired": "Auth expired",
@@ -905,6 +925,29 @@ class PeripheralMonitor(QWidget):
             self.claude_duration_lbl.setText("")
             return
 
+        # Success — cache and render
+        self._last_good_usage = usage_data
+        self._last_good_usage_time = time.monotonic()
+        self._render_usage_data(usage_data)
+
+    def _update_staleness_label(self):
+        """Show how long ago the last successful refresh was."""
+        if self._last_good_usage_time <= 0:
+            self.claude_duration_lbl.setText("")
+            return
+        elapsed = time.monotonic() - self._last_good_usage_time
+        minutes = int(elapsed // 60)
+        if minutes < 1:
+            self.claude_duration_lbl.setText("(<1m ago)")
+        elif minutes < 60:
+            self.claude_duration_lbl.setText(f"({minutes}m ago)")
+        else:
+            hours = minutes // 60
+            mins = minutes % 60
+            self.claude_duration_lbl.setText(f"({hours}h{mins}m ago)")
+
+    def _render_usage_data(self, usage_data: dict):
+        """Render usage data to the Claude section widgets."""
         five_hour = usage_data.get("five_hour", {})
         seven_day = usage_data.get("seven_day", {})
 
