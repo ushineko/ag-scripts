@@ -2,6 +2,7 @@
 import sys
 import json
 import unittest
+import unittest.mock
 from unittest.mock import MagicMock
 import importlib.util
 
@@ -52,6 +53,7 @@ class MockQLabel(MockQWidget):
     def setFixedSize(self, w, h): pass
     def setPixmap(self, pixmap): pass
     def setText(self, text): pass
+    def hide(self): pass
 
 class MockQAction:
     def __init__(self, *args, **kwargs): pass
@@ -742,6 +744,137 @@ class TestOAuthBackoff(unittest.TestCase):
         # Should use _USAGE_429_DEFAULT_RETRY (120s)
         self.assertGreater(remaining, 110)
         self.assertLessEqual(remaining, 121)
+
+
+class TestActivityCheckMultiRefresh(unittest.TestCase):
+    """Test that activity checks allow multiple refreshes per cycle."""
+
+    def setUp(self):
+        pb.reset_oauth_backoff()
+        pb.reset_usage_backoff()
+        pb._oauth_creds_mtime = 0.0
+
+    def test_activity_check_triggers_multiple_refreshes(self):
+        """Behavioral contract: activity check triggers refresh on every new mtime, not just once."""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+        monitor.update_status = MagicMock()
+
+        # First activity — should trigger
+        monitor._claude_last_activity_mtime = 0.0
+        with unittest.mock.patch.object(
+            pb.PeripheralMonitor, '_get_claude_latest_mtime', return_value=100.0
+        ):
+            monitor._check_claude_activity()
+        monitor.update_status.assert_called_once()
+        monitor.update_status.reset_mock()
+
+        # Second activity — should also trigger (no one-shot gate)
+        with unittest.mock.patch.object(
+            pb.PeripheralMonitor, '_get_claude_latest_mtime', return_value=200.0
+        ):
+            monitor._check_claude_activity()
+        monitor.update_status.assert_called_once()
+
+    def test_no_activity_no_refresh(self):
+        """Behavioral contract: no mtime change means no refresh."""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+        monitor.update_status = MagicMock()
+        monitor._claude_last_activity_mtime = 100.0
+
+        with unittest.mock.patch.object(
+            pb.PeripheralMonitor, '_get_claude_latest_mtime', return_value=100.0
+        ):
+            monitor._check_claude_activity()
+        monitor.update_status.assert_not_called()
+
+
+class TestBackoffIndicator(unittest.TestCase):
+    """Test backoff indicator visibility."""
+
+    def setUp(self):
+        pb.reset_oauth_backoff()
+        pb.reset_usage_backoff()
+        pb._oauth_creds_mtime = 0.0
+
+    def test_backoff_indicator_shown_during_backoff(self):
+        """Behavioral contract: backoff label is visible when usage backoff is active."""
+        import time
+
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={'claude_section_enabled': True})
+        monitor = pb.PeripheralMonitor()
+        monitor.claude_backoff_lbl = MagicMock()
+
+        pb._usage_backoff_until = time.monotonic() + 300
+
+        monitor._update_backoff_indicator()
+
+        monitor.claude_backoff_lbl.show.assert_called_once()
+        set_text_arg = monitor.claude_backoff_lbl.setText.call_args[0][0]
+        self.assertIn("Backoff", set_text_arg)
+
+    def test_backoff_indicator_hidden_when_no_backoff(self):
+        """Behavioral contract: backoff label is hidden when no backoff is active."""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={'claude_section_enabled': True})
+        monitor = pb.PeripheralMonitor()
+        monitor.claude_backoff_lbl = MagicMock()
+
+        monitor._update_backoff_indicator()
+
+        monitor.claude_backoff_lbl.hide.assert_called_once()
+
+
+class TestCachedDisplayOnError(unittest.TestCase):
+    """Test that cached data is shown on all error types."""
+
+    def setUp(self):
+        pb.reset_oauth_backoff()
+        pb.reset_usage_backoff()
+        pb._oauth_creds_mtime = 0.0
+
+    def _make_monitor(self):
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={'claude_section_enabled': True})
+        monitor = pb.PeripheralMonitor()
+        monitor.claude_frame = MagicMock()
+        monitor.claude_section_visible = True
+        monitor.claude_progress = MockQProgressBar()
+        monitor.claude_progress.setValue = MagicMock()
+        monitor.claude_progress.setStyleSheet = MagicMock()
+        monitor.claude_five_hour_lbl = MockQLabel()
+        monitor.claude_five_hour_lbl.setText = MagicMock()
+        monitor.claude_seven_day_lbl = MockQLabel()
+        monitor.claude_seven_day_lbl.setText = MagicMock()
+        monitor.claude_duration_lbl = MockQLabel()
+        monitor.claude_duration_lbl.setText = MagicMock()
+        monitor.claude_backoff_lbl = MagicMock()
+        return monitor
+
+    def test_none_result_shows_cached(self):
+        """Behavioral contract: None result falls back to cached data."""
+        monitor = self._make_monitor()
+        monitor._last_good_usage = {
+            "five_hour": {"utilization": 42.0, "resets_at": ""},
+            "seven_day": {"utilization": 10.0},
+        }
+        monitor._last_good_usage_time = 1.0
+
+        monitor.update_claude_section(None)
+
+        monitor.claude_five_hour_lbl.setText.assert_called_with("5h: 42%")
+
+    def test_api_error_shows_cached(self):
+        """Behavioral contract: api_error falls back to cached data."""
+        monitor = self._make_monitor()
+        monitor._last_good_usage = {
+            "five_hour": {"utilization": 55.0, "resets_at": ""},
+            "seven_day": {"utilization": 20.0},
+        }
+        monitor._last_good_usage_time = 1.0
+
+        monitor.update_claude_section({"error": "api_error"})
+
+        monitor.claude_five_hour_lbl.setText.assert_called_with("5h: 55%")
 
 
 if __name__ == '__main__':

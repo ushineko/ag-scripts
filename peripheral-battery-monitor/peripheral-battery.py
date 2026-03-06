@@ -24,7 +24,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.5.1"
+__version__ = "1.5.2"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -411,6 +411,7 @@ class PeripheralMonitor(QWidget):
             "opacity": 0.95,
             "font_scale": 1.0,
             "claude_section_enabled": True,
+            "claude_activity_interval": 2,  # minutes (1-5)
         }
         if os.path.exists(CONFIG_PATH):
             try:
@@ -592,6 +593,12 @@ class PeripheralMonitor(QWidget):
 
         claude_layout.addLayout(stats_row)
 
+        self.claude_backoff_lbl = QLabel("", self)
+        self.claude_backoff_lbl.setObjectName("ClaudeBackoff")
+        self.claude_backoff_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.claude_backoff_lbl.hide()
+        claude_layout.addWidget(self.claude_backoff_lbl)
+
         return self.claude_frame
 
     def update_style(self):
@@ -650,6 +657,10 @@ class PeripheralMonitor(QWidget):
             QLabel#ClaudeStats {{
                 font-size: {int(9 * scale)}px;
                 color: #888888;
+            }}
+            QLabel#ClaudeBackoff {{
+                font-size: {int(8 * scale)}px;
+                color: #ff9800;
             }}
             QProgressBar#ClaudeProgress {{
                 background-color: rgba(255, 255, 255, 0.1);
@@ -750,6 +761,18 @@ class PeripheralMonitor(QWidget):
             toggleAction.triggered.connect(self.toggle_claude_section)
             claudeMenu.addAction(toggleAction)
 
+            activityMenu = claudeMenu.addMenu("Activity Check Interval")
+            activity_group = QActionGroup(self)
+            current_interval = self.settings.get("claude_activity_interval", 2)
+            for minutes in (1, 2, 3, 5):
+                action = QAction(f"{minutes} min", self, checkable=True)
+                action.setData(minutes)
+                action.triggered.connect(lambda checked, m=minutes: self._set_activity_interval(m))
+                if current_interval == minutes:
+                    action.setChecked(True)
+                activity_group.addAction(action)
+                activityMenu.addAction(action)
+
         contextMenu.addSeparator()
 
         refreshAct = QAction("Refresh Now", self)
@@ -773,6 +796,12 @@ class PeripheralMonitor(QWidget):
         self.update_style()
         self.adjustSize()
         self.save_settings()
+
+    def _set_activity_interval(self, minutes):
+        """Change the Claude activity check interval."""
+        self.settings["claude_activity_interval"] = minutes
+        self.save_settings()
+        self.activity_timer.setInterval(minutes * 60000)
 
     def toggle_claude_section(self, checked):
         """Toggle Claude Code section visibility."""
@@ -803,33 +832,28 @@ class PeripheralMonitor(QWidget):
         self.staleness_timer.timeout.connect(self._tick_staleness)
         self.staleness_timer.start(60000)
 
-        # Activity check every 30 seconds — triggers early refresh if Claude session files change
+        # Activity check — triggers refresh when Claude session files change
         self._claude_last_activity_mtime: float = 0.0
-        self._claude_activity_refreshed = False  # True once we've refreshed for this activity burst
+        interval_min = max(1, min(5, self.settings.get("claude_activity_interval", 2)))
         self.activity_timer = QTimer(self)
         self.activity_timer.timeout.connect(self._check_claude_activity)
-        self.activity_timer.start(30000)
+        self.activity_timer.start(interval_min * 60000)
 
     def _tick_staleness(self):
-        """Update the staleness label if we're showing cached data."""
+        """Update the staleness label and backoff indicator if we're showing cached data."""
         if self._last_good_usage and self._last_good_usage_time > 0:
             # Only update if data is stale (more than 60s since last good fetch)
             elapsed = time.monotonic() - self._last_good_usage_time
             if elapsed > 60:
                 self._update_staleness_label()
+        self._update_backoff_indicator()
 
     def _check_claude_activity(self):
-        """Check if Claude session files have been modified; trigger one early refresh per burst."""
+        """Check if Claude session files have been modified; trigger refresh on new activity."""
         latest = self._get_claude_latest_mtime()
         if latest <= self._claude_last_activity_mtime:
-            # No new activity — reset the burst flag so next activity triggers a refresh
-            if self._claude_activity_refreshed:
-                self._claude_activity_refreshed = False
-            return
+            return  # No new activity
         self._claude_last_activity_mtime = latest
-        if self._claude_activity_refreshed:
-            return  # Already refreshed for this burst
-        self._claude_activity_refreshed = True
         log = structlog.get_logger()
         log.debug("claude_activity_detected")
         self.update_status()
@@ -862,9 +886,6 @@ class PeripheralMonitor(QWidget):
         self.update_status()
 
     def update_status(self):
-        # Reset activity flag so next Claude activity triggers a fresh refresh
-        self._claude_activity_refreshed = False
-
         # Prevent overlap
         if self.worker is not None:
             return
@@ -898,6 +919,11 @@ class PeripheralMonitor(QWidget):
             self.claude_section_visible = True
 
         if usage_data is None:
+            if self._last_good_usage:
+                self._render_usage_data(self._last_good_usage)
+                self._update_staleness_label()
+                self._update_backoff_indicator()
+                return
             self.claude_progress.setValue(0)
             self.claude_five_hour_lbl.setText("5h: --")
             self.claude_seven_day_lbl.setText("7d: --")
@@ -906,11 +932,13 @@ class PeripheralMonitor(QWidget):
 
         error = usage_data.get("error")
         if error:
-            # For transient errors, show cached data if available
-            if error in ("rate_limited", "auth_backoff", "offline") and self._last_good_usage:
+            # Show cached data if available during any error
+            if self._last_good_usage:
                 self._render_usage_data(self._last_good_usage)
                 self._update_staleness_label()
+                self._update_backoff_indicator()
                 return
+            # No cached data — show error state
             self.claude_progress.setValue(0)
             labels = {
                 "auth_expired": "Auth expired",
@@ -929,6 +957,21 @@ class PeripheralMonitor(QWidget):
         self._last_good_usage = usage_data
         self._last_good_usage_time = time.monotonic()
         self._render_usage_data(usage_data)
+        self._update_backoff_indicator()
+
+    def _update_backoff_indicator(self):
+        """Show/hide the backoff warning label based on current backoff state."""
+        if not hasattr(self, 'claude_backoff_lbl'):
+            return
+        now = time.monotonic()
+        if _usage_backoff_until > now or _oauth_backoff_until > now:
+            remaining = max(_usage_backoff_until, _oauth_backoff_until) - now
+            mins = int(remaining // 60) + 1
+            self.claude_backoff_lbl.setText(
+                f"⚠ Backoff ~{mins}m — increase activity interval")
+            self.claude_backoff_lbl.show()
+        else:
+            self.claude_backoff_lbl.hide()
 
     def _update_staleness_label(self):
         """Show how long ago the last successful refresh was."""
