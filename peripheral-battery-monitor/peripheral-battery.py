@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import (
     QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QProgressBar
+    QFrame, QProgressBar, QPushButton
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
@@ -558,6 +558,13 @@ class PeripheralMonitor(QWidget):
         self.claude_duration_lbl.setObjectName("ClaudeReset")
         header_row.addWidget(self.claude_duration_lbl)
 
+        refresh_btn = QPushButton("↻", self)
+        refresh_btn.setObjectName("ClaudeRefreshBtn")
+        refresh_btn.setFixedSize(18, 18)
+        refresh_btn.setToolTip("Refresh usage stats")
+        refresh_btn.clicked.connect(self._manual_refresh)
+        header_row.addWidget(refresh_btn)
+
         claude_layout.addLayout(header_row)
 
         self.claude_progress = QProgressBar(self)
@@ -650,6 +657,18 @@ class PeripheralMonitor(QWidget):
             QProgressBar#ClaudeProgress::chunk {{
                 background-color: #4caf50;
                 border-radius: 4px;
+            }}
+            QPushButton#ClaudeRefreshBtn {{
+                background-color: transparent;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 4px;
+                color: #888888;
+                font-size: {int(11 * scale)}px;
+                padding: 0px;
+            }}
+            QPushButton#ClaudeRefreshBtn:hover {{
+                background-color: rgba(255, 255, 255, 20);
+                color: #cccccc;
             }}
         """)
 
@@ -772,18 +791,65 @@ class PeripheralMonitor(QWidget):
         self.adjustSize()
 
     def setup_timer(self):
-        # Update every 30 seconds
+        # Full refresh every 10 minutes
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_status)
-        self.timer.start(30000) 
+        self.timer.start(600000)
+
+        # Activity check every 30 seconds — triggers early refresh if Claude session files change
+        self._claude_last_activity_mtime: float = 0.0
+        self._claude_activity_refreshed = False  # True once we've refreshed for this activity burst
+        self.activity_timer = QTimer(self)
+        self.activity_timer.timeout.connect(self._check_claude_activity)
+        self.activity_timer.start(30000)
+
+    def _check_claude_activity(self):
+        """Check if Claude session files have been modified; trigger one early refresh per burst."""
+        latest = self._get_claude_latest_mtime()
+        if latest <= self._claude_last_activity_mtime:
+            # No new activity — reset the burst flag so next activity triggers a refresh
+            if self._claude_activity_refreshed:
+                self._claude_activity_refreshed = False
+            return
+        self._claude_last_activity_mtime = latest
+        if self._claude_activity_refreshed:
+            return  # Already refreshed for this burst
+        self._claude_activity_refreshed = True
+        log = structlog.get_logger()
+        log.debug("claude_activity_detected")
+        self.update_status()
+
+    @staticmethod
+    def _get_claude_latest_mtime() -> float:
+        """Return the newest mtime of any .jsonl file in Claude's projects directory."""
+        projects_dir = os.path.expanduser("~/.claude/projects")
+        latest = 0.0
+        try:
+            for subdir in os.scandir(projects_dir):
+                if not subdir.is_dir():
+                    continue
+                for entry in os.scandir(subdir.path):
+                    if entry.name.endswith(".jsonl") and entry.is_file():
+                        try:
+                            mt = entry.stat().st_mtime
+                            if mt > latest:
+                                latest = mt
+                        except OSError:
+                            continue
+        except (OSError, PermissionError):
+            pass
+        return latest
 
     def _manual_refresh(self):
-        """Handle 'Refresh Now' from context menu — resets all backoff and triggers update."""
+        """Handle 'Refresh Now' from context menu or button — resets all backoff and triggers update."""
         reset_oauth_backoff()
         reset_usage_backoff()
         self.update_status()
 
     def update_status(self):
+        # Reset activity flag so next Claude activity triggers a fresh refresh
+        self._claude_activity_refreshed = False
+
         # Prevent overlap
         if self.worker is not None:
             return
