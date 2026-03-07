@@ -24,7 +24,13 @@ else
     exit 1
 fi
 
-# 3. Update database
+# 3. Install autostart entry
+AUTOSTART_DIR="$HOME/.config/autostart"
+mkdir -p "$AUTOSTART_DIR"
+echo "Installing autostart entry to $AUTOSTART_DIR/$DESKTOP_FILE"
+cp "$INSTALL_DIR/$DESKTOP_FILE" "$AUTOSTART_DIR/"
+
+# 4. Update database
 echo "Updating desktop database..."
 update-desktop-database "$INSTALL_DIR"
 

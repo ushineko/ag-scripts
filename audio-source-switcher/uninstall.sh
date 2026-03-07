@@ -14,6 +14,12 @@ else
     echo "Desktop file not found at $INSTALL_DIR/$DESKTOP_FILE"
 fi
 
+AUTOSTART_DIR="$HOME/.config/autostart"
+if [ -f "$AUTOSTART_DIR/$DESKTOP_FILE" ]; then
+    rm "$AUTOSTART_DIR/$DESKTOP_FILE"
+    echo "Removed autostart entry $AUTOSTART_DIR/$DESKTOP_FILE"
+fi
+
 echo "Updating desktop database..."
 update-desktop-database "$INSTALL_DIR"
 
