@@ -120,9 +120,12 @@ class HeadsetController:
 
 class AudioController:
     """Handles interactions with the system audio via pactl."""
-    
+
+    LOOPBACK_SERVICE = "audio-loopback.service"
+
     def __init__(self):
         self.headset = HeadsetController()
+        self._loopback_process = None  # Direct pw-loopback subprocess (tier 2)
 
     @staticmethod
     def run_command(args, ignore_errors=False):
@@ -298,48 +301,99 @@ class AudioController:
         self.run_command(['pactl', 'set-sink-volume', sink_name, f"{volume_percent}%"])
 
     def get_line_in_source(self):
-        """Finds the Line-In source name dynamically."""
-        # We look for a source containing 'Line__source'
-        output = self.run_command(['pactl', 'list', 'short', 'sources'])
-        if not output: return None
-        for line in output.split('\n'):
-            if "Line__source" in line:
-                return line.split()[1]
+        """Finds the Line-In source name dynamically by port type."""
+        json_output = self.run_command(['pactl', '--format=json', 'list', 'sources'])
+        if not json_output: return None
+        try:
+            sources = json.loads(json_output)
+        except json.JSONDecodeError:
+            return None
+        for source in sources:
+            name = source.get('name', '')
+            if '.monitor' in name:
+                continue
+            active_port = source.get('active_port', '')
+            for port in source.get('ports', []):
+                if port.get('name') == active_port and port.get('type') == 'Line':
+                    return name
         return None
+
+    def has_loopback_service(self):
+        """Check if audio-loopback.service is installed (not necessarily running)."""
+        result = self.run_command(
+            ['systemctl', '--user', 'cat', self.LOOPBACK_SERVICE],
+            ignore_errors=True
+        )
+        return result is not None
 
     def get_loopback_state(self, source_name):
         """
-        Returns (is_loaded, module_id).
-        Checks if module-loopback is loaded for the specific source.
+        Returns (is_active, mode) where mode is 'service', 'direct', or None.
+        Checks service first, then falls back to direct pw-loopback process.
         """
-        if not source_name: return (False, None)
-        
-        output = self.run_command(['pactl', 'list', 'short', 'modules'])
-        if not output: return (False, None)
-        
-        # Output format: ID module-name argument
-        # 536 module-loopback source=...
-        for line in output.split('\n'):
-            if "module-loopback" in line and f"source={source_name}" in line:
-                parts = line.split()
-                try:
-                    module_id = parts[0]
-                    return (True, module_id)
-                except IndexError:
-                    pass
-        return (False, None)
+        if not source_name:
+            return (False, None)
+
+        # Tier 1: check systemd service
+        if self.has_loopback_service():
+            result = self.run_command(
+                ['systemctl', '--user', 'is-active', self.LOOPBACK_SERVICE],
+                ignore_errors=True
+            )
+            is_active = result and result.strip() == 'active'
+            return (is_active, 'service')
+
+        # Tier 2: check direct pw-loopback process
+        if self._loopback_process and self._loopback_process.poll() is None:
+            return (True, 'direct')
+
+        return (False, 'direct')
+
+    def _get_loopback_target_sink(self):
+        """Determine the best sink for pw-loopback: JamesDSP if present, else default."""
+        sinks = self.run_command(['pactl', '--format=json', 'list', 'short', 'sinks'])
+        if sinks:
+            try:
+                for sink in json.loads(sinks):
+                    if 'jamesdsp' in sink.get('name', '').lower():
+                        return sink['name']
+            except (json.JSONDecodeError, KeyError):
+                pass
+        # Fall back to @DEFAULT_SINK@
+        return '@DEFAULT_SINK@'
 
     def set_loopback_state(self, enable, source_name):
-        is_loaded, module_id = self.get_loopback_state(source_name)
-        
-        if enable and not is_loaded:
-            print(f"Loading loopback for {source_name}")
-            # latency_msec=1 is too aggressive for USB audio. 50ms is stable.
-            self.run_command(['pactl', 'load-module', 'module-loopback', f'source={source_name}', 'latency_msec=50'])
-            
-        elif not enable and is_loaded:
-            print(f"Unloading loopback module {module_id}")
-            self.run_command(['pactl', 'unload-module', module_id])
+        is_active, mode = self.get_loopback_state(source_name)
+
+        if enable and not is_active:
+            if mode == 'service':
+                print(f"Starting {self.LOOPBACK_SERVICE} for {source_name}")
+                self.run_command(['systemctl', '--user', 'start', self.LOOPBACK_SERVICE])
+            else:
+                target_sink = self._get_loopback_target_sink()
+                print(f"Starting pw-loopback: {source_name} -> {target_sink}")
+                self._loopback_process = subprocess.Popen(
+                    ['pw-loopback', '-C', source_name, '-P', target_sink],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+
+        elif not enable and is_active:
+            if mode == 'service':
+                print(f"Stopping {self.LOOPBACK_SERVICE}")
+                self.run_command(['systemctl', '--user', 'stop', self.LOOPBACK_SERVICE])
+            else:
+                print("Stopping direct pw-loopback")
+                self.cleanup_loopback()
+
+    def cleanup_loopback(self):
+        """Kill any direct pw-loopback subprocess. Safe to call multiple times."""
+        if self._loopback_process and self._loopback_process.poll() is None:
+            self._loopback_process.terminate()
+            try:
+                self._loopback_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._loopback_process.kill()
+        self._loopback_process = None
 
     def get_sources(self, bt_cache=None):
         """Returns a list of source dicts."""
@@ -973,6 +1027,9 @@ class MainWindow(QMainWindow):
 
         self.refresh_all()
 
+        # Restore direct loopback from config (only if no service manages it)
+        self._restore_loopback_from_config()
+
         # System Tray Setup
         self.setup_tray()
 
@@ -1315,7 +1372,8 @@ class MainWindow(QMainWindow):
         </ul>
 
         <h3>🎙️ Line-In Loopback</h3>
-        <p>Use the <b>"Enable Line-In Loopback"</b> checkbox to listen to your Line-In device (e.g. game console input) through your current output. This toggles the system's <code>module-loopback</code>.</p>
+        <p>Use the <b>"Line-In Loopback"</b> checkbox to listen to your Line-In device (e.g. game console input, external mixer) through your current output.</p>
+        <p>If an <code>audio-loopback.service</code> systemd user service is installed, the checkbox controls that service. Otherwise, the app manages a <code>pw-loopback</code> process directly. The label indicates which mode is active.</p>
 
         <h3>🧠 Smart Jack Detection</h3>
         <p>The app intelligently detects if "Front Headphones" are physically unplugged. Unplugged devices are marked as <code>[Disconnected]</code> and skipped by the auto-switcher.</p>
@@ -1363,6 +1421,8 @@ class MainWindow(QMainWindow):
         # Save geometry before quitting
         self.config["window_geometry"] = self.saveGeometry().toHex().data().decode()
         self.config_mgr.save_config(self.config)
+        # Clean up direct pw-loopback subprocess (service-managed loopback is left running)
+        self.audio.cleanup_loopback()
         QApplication.quit()
 
     def on_auto_switch_toggled(self, checked):
@@ -1389,11 +1449,12 @@ class MainWindow(QMainWindow):
         # Fetch BT devices first (slowest part, but needed for names)
         # In a real async app we'd thread this. For now, it blocks briefly.
         self.cache_bt_devices = self.bt.get_devices()
-        
+
         self.refresh_bt_list_ui()
         self.refresh_sinks_ui()
         self.refresh_volume_ui()
-        
+        self.refresh_loopback_ui()
+
         if self.auto_switch_cb.isChecked():
             self.run_auto_switch()
 
@@ -1404,9 +1465,7 @@ class MainWindow(QMainWindow):
         
         # Get Current Default Info
         default_sink_name = next((s['name'] for s in sinks if s['is_default']), None)
-        
-        self.refresh_loopback_ui()
-        
+
         # Check if JamesDSP is available in the list
         jamesdsp_available = any(s['name'] == "jamesdsp_sink" for s in sinks)
         
@@ -1876,10 +1935,10 @@ class MainWindow(QMainWindow):
         source = self.audio.get_line_in_source()
         if source:
             self.audio.set_loopback_state(checked, source)
-            # Update visual state immediately (though refresh will check it too)
-            # Checked state is already set by click
             status = "Enabled" if checked else "Disabled"
             self.status_label.setText(f"Loopback {status}")
+            self.config["loopback_enabled"] = checked
+            self.config_mgr.save_config(self.config)
         else:
             self.status_label.setText("Line-In Source Not Found")
             self.loopback_cb.setChecked(False)
@@ -1943,18 +2002,38 @@ class MainWindow(QMainWindow):
         source = self.audio.get_line_in_source()
         if not source:
             self.loopback_cb.setEnabled(False)
-            self.loopback_cb.setText("Line-In Loopback (Not Found)")
+            self.loopback_cb.setText("Line-In Loopback (No Line-In Device Found)")
             return
-            
+
         self.loopback_cb.setEnabled(True)
-        self.loopback_cb.setText("Enable Line-In Loopback")
-        
-        is_loaded, _ = self.audio.get_loopback_state(source)
-        
+        is_active, mode = self.audio.get_loopback_state(source)
+
+        if mode == 'service':
+            self.loopback_cb.setText("Line-In Loopback (via audio-loopback service)")
+        else:
+            self.loopback_cb.setText("Line-In Loopback")
+
         # Block signals to prevent triggering toggle logic
         self.loopback_cb.blockSignals(True)
-        self.loopback_cb.setChecked(is_loaded)
+        self.loopback_cb.setChecked(is_active)
         self.loopback_cb.blockSignals(False)
+
+    def _restore_loopback_from_config(self):
+        """On startup, restore direct loopback if config says it was enabled
+        and no systemd service is managing it."""
+        if not self.config.get("loopback_enabled", False):
+            return
+        source = self.audio.get_line_in_source()
+        if not source:
+            return
+        if self.audio.has_loopback_service():
+            # Service mode: the service's own enabled/disabled state controls boot behavior.
+            # Don't override it from the switcher's config.
+            return
+        # Direct mode: restore the loopback
+        print(f"Restoring direct loopback from config for {source}")
+        self.audio.set_loopback_state(True, source)
+        self.refresh_loopback_ui()
 
     def switch_to_sink(self, sink_name, display_text):
         # JamesDSP Integration (Graph Rewiring)

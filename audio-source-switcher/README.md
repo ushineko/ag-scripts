@@ -179,6 +179,12 @@ Device priority and settings are saved to `~/.config/audio-source-switcher/confi
 
 ## Changelog
 
+### v11.9
+- **Line-In Detection**: Replaced name-based detection (`Line__source`) with port-type detection via `pactl --format=json`. Works with any USB audio interface that exposes a Line-In port.
+- **Tiered Loopback Control**: If `audio-loopback.service` is installed, the checkbox controls it. Otherwise, the app spawns `pw-loopback` directly. The label indicates which mode is active.
+- **Loopback State Persistence**: Loopback enabled/disabled state is saved to config and restored on startup (direct mode only; service mode defers to systemd).
+- **Installer**: Added autostart entry installation to `install.sh` and cleanup to `uninstall.sh`.
+
 ### v11.8
 - **JamesDSP Loop Fix**: Fixed auto-switch loop when JamesDSP relink fails (e.g. Bluetooth disconnected). Circuit breaker now activates on failure and auto-resets when JamesDSP recovers.
 - **Spurious Notification Fix**: Suppressed redundant "Audio Switched" notifications caused by JamesDSP suspend/resume cycles when audio starts/stops playing.
