@@ -40,6 +40,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [the-great-cachyos-move](the-great-cachyos-move/) | Migration toolkit for moving CachyOS (Btrfs) installations between drives using `btrfs send/receive`. |
 | [ufw-config](ufw-config/) | UFW/iptables configuration documentation and backups for a gateway/router setup with Pi-hole and VPN forwarding. |
 | [vpn-toggle](vpn-toggle/) | VPN manager with integrated monitoring, health checking, auto-reconnect, and persistent PyQt6 GUI for NetworkManager connections. |
+| [whoapipe](whoapipe/) | GUI launcher manager for waypipe SSH remote Wayland applications. Profile management, remote app browser with icon grid, failure detection with diagnostic hints, and dark theme support. |
 | [windows-setup-scripts](windows-setup-scripts/) | PowerShell scripts to automate Windows dev environment setup. Installs MSYS2, Neovim, Claude Code, Oh My Posh, Miniforge, and more with idempotent installation. |
 
 ## Usage
