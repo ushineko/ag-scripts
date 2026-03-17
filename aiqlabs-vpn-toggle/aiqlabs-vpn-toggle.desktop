@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=AIQLabs VPN Toggle
+Comment=Toggle aiqlabs OpenVPN3 connection on/off
+Exec=/home/nverenin/git/ag-scripts/aiqlabs-vpn-toggle/aiqlabs-vpn-toggle.sh toggle
+Icon=network-vpn
+Terminal=false
+Type=Application
+Categories=Utility;Network;
+Keywords=vpn;openvpn;aiqlabs;toggle;
+StartupNotify=false
