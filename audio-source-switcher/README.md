@@ -179,6 +179,13 @@ Device priority and settings are saved to `~/.config/audio-source-switcher/confi
 
 ## Changelog
 
+### v12.0
+- **Module Split**: Refactored monolithic 2500-line single file into a proper Python package (`audio_source_switcher/`) with separate modules for controllers, GUI, config, and CLI.
+- **Dead Code Removal**: Removed duplicate `get_sink_volume`/`set_sink_volume` methods in PipeWireController.
+- **Volume Sync Fix**: Consolidated duplicated volume sync logic into a single method using new `PipeWireController.find_linked_sink()` helper.
+- **Bug Fix**: Fixed unbound variable (`jdsp_outs`) in JamesDSP routing exception handler.
+- **Bug Fix**: Fixed `copy_switch_command` generating incorrect script path after module split.
+
 ### v11.9
 - **Line-In Detection**: Replaced name-based detection (`Line__source`) with port-type detection via `pactl --format=json`. Works with any USB audio interface that exposes a Line-In port.
 - **Tiered Loopback Control**: If `audio-loopback.service` is installed, the checkbox controls it. Otherwise, the app spawns `pw-loopback` directly. The label indicates which mode is active.
