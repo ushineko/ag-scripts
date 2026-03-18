@@ -20,10 +20,12 @@ if [[ -z "$url" ]]; then
     exit 1
 fi
 
-# Route Microsoft 365 / Office apps and Slack to Firefox (PipeWire camera support works there)
+# Route Teams links to teams-for-linux (camera, screen sharing, recording all work there)
 if [[ "$url" == *"teams.microsoft.com"* ]] || \
-   [[ "$url" == *"teams.live.com"* ]] || \
-   [[ "$url" == *"outlook.office.com"* ]] || \
+   [[ "$url" == *"teams.live.com"* ]]; then
+    exec teams-for-linux "$url"
+# Route other Microsoft 365 / Office apps and Slack to Firefox
+elif [[ "$url" == *"outlook.office.com"* ]] || \
    [[ "$url" == *"outlook.office365.com"* ]] || \
    [[ "$url" == *"outlook.live.com"* ]] || \
    [[ "$url" == *".sharepoint.com"* ]] || \
