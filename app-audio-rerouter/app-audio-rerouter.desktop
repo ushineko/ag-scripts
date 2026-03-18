@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=App Audio Rerouter
+Comment=Route application audio into a virtual mic for Teams meetings
+Exec=/usr/bin/python3 /home/nverenin/git/ag-scripts/app-audio-rerouter/app_audio_rerouter.py
+Icon=audio-input-microphone
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;
+Keywords=audio;reroute;teams;meeting;virtual;mic;
+StartupNotify=true
