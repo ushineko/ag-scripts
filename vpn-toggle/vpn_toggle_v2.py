@@ -75,7 +75,7 @@ def main():
         # Initialize components
         logger.info("Initializing VPN Toggle v2.0")
         config_manager = ConfigManager(args.config)
-        vpn_manager = VPNManager()
+        vpn_manager = VPNManager(config_manager=config_manager)
 
         # Start GUI
         app = QApplication(sys.argv)
@@ -119,7 +119,6 @@ def main():
         window = VPNToggleMainWindow(
             config_manager, vpn_manager, app_icon=icon,
             icon_path=icon_path if icon_path.exists() else None,
-            start_minimized=args.minimized,
         )
 
         # Connect single-instance server to bring window to front
