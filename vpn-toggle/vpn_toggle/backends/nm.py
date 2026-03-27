@@ -163,6 +163,32 @@ class NMBackend(VPNBackend):
             logger.error(message)
             return False, message
 
+    def get_vpn_details(self, vpn_name: str) -> dict:
+        if not self._available or not self.is_vpn_active(vpn_name):
+            return {}
+
+        success, output = self._run_nmcli(
+            ['-t', '-f', 'IP4.ADDRESS,IP4.ROUTE,GENERAL.DEVICES',
+             'connection', 'show', vpn_name]
+        )
+        if not success:
+            return {}
+
+        interface = ''
+        ip_addr = ''
+        routes = []
+        for line in output.split('\n'):
+            if line.startswith('GENERAL.DEVICES:'):
+                interface = line.split(':', 1)[1].strip()
+            elif line.startswith('IP4.ADDRESS'):
+                ip_addr = line.split(':', 1)[1].strip()
+            elif line.startswith('IP4.ROUTE'):
+                # Format: dst = X, nh = Y, mt = Z
+                route_part = line.split(':', 1)[1].strip()
+                routes.append(route_part)
+
+        return {'interface': interface, 'ip': ip_addr, 'routes': routes}
+
     def get_connection_timestamp(self, vpn_name: str) -> Optional[datetime]:
         success, output = self._run_nmcli(
             ['-t', '-f', 'connection.timestamp', 'connection', 'show', vpn_name]

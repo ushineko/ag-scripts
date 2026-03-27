@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QDialog,
 )
 from PyQt6.QtGui import QFont
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, pyqtSignal
 
 from .config import ConfigManager
 from .vpn_manager import VPNManager
@@ -23,6 +23,8 @@ logger = logging.getLogger('vpn_toggle.widgets')
 
 class VPNWidget(QFrame):
     """Widget representing a single VPN in the list"""
+
+    move_requested = pyqtSignal(str, int)  # vpn_name, direction (-1=up, +1=down)
 
     def __init__(self, vpn_name: str, display_name: str, vpn_manager: VPNManager,
                  config_manager: ConfigManager, monitor_thread: Optional[MonitorThread] = None,
@@ -114,11 +116,30 @@ class VPNWidget(QFrame):
         self.bounce_btn.clicked.connect(self.on_bounce)
         button_layout.addWidget(self.bounce_btn)
 
+        self.details_btn = QPushButton("Details")
+        self.details_btn.clicked.connect(self.on_details)
+        self.details_btn.setEnabled(False)
+        button_layout.addWidget(self.details_btn)
+
         self.configure_btn = QPushButton("Configure")
         self.configure_btn.clicked.connect(self.on_configure)
         button_layout.addWidget(self.configure_btn)
 
         button_layout.addStretch()
+
+        # Ordering buttons
+        self.move_up_btn = QPushButton("\u25B2")  # ▲
+        self.move_up_btn.setMaximumWidth(30)
+        self.move_up_btn.setToolTip("Move up")
+        self.move_up_btn.clicked.connect(lambda: self.move_requested.emit(self.vpn_name, -1))
+        button_layout.addWidget(self.move_up_btn)
+
+        self.move_down_btn = QPushButton("\u25BC")  # ▼
+        self.move_down_btn.setMaximumWidth(30)
+        self.move_down_btn.setToolTip("Move down")
+        self.move_down_btn.clicked.connect(lambda: self.move_requested.emit(self.vpn_name, 1))
+        button_layout.addWidget(self.move_down_btn)
+
         layout.addLayout(button_layout)
 
         self.setLayout(layout)
@@ -133,6 +154,7 @@ class VPNWidget(QFrame):
             self.connect_btn.setEnabled(False)
             self.disconnect_btn.setEnabled(True)
             self.bounce_btn.setEnabled(True)
+            self.details_btn.setEnabled(True)
 
             # Track connection start time (fetch from NM once, then cache)
             if self._connected_since is None:
@@ -187,6 +209,7 @@ class VPNWidget(QFrame):
             self.connect_btn.setEnabled(True)
             self.disconnect_btn.setEnabled(False)
             self.bounce_btn.setEnabled(False)
+            self.details_btn.setEnabled(False)
             self.info_label.setText("")
             self.stats_label.setText("")
             self._connected_since = None
@@ -267,6 +290,14 @@ class VPNWidget(QFrame):
             self.update_status()
 
         self._run_in_thread(do_bounce, on_done)
+
+    def on_details(self):
+        """Handle details button click — show VPN interface/routes."""
+        from .dialogs import VPNDetailsDialog
+
+        details = self.vpn_manager.get_vpn_details(self.vpn_name)
+        dialog = VPNDetailsDialog(self.display_name, details, self)
+        dialog.exec()
 
     def on_configure(self):
         """Handle configure button click"""

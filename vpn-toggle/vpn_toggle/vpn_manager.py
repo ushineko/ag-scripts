@@ -128,3 +128,6 @@ class VPNManager:
 
     def get_connection_timestamp(self, vpn_name: str) -> Optional[datetime]:
         return self._get_backend(vpn_name).get_connection_timestamp(vpn_name)
+
+    def get_vpn_details(self, vpn_name: str) -> dict:
+        return self._get_backend(vpn_name).get_vpn_details(vpn_name)

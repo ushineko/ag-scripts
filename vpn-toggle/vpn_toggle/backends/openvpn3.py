@@ -135,7 +135,7 @@ class OpenVPN3Backend(VPNBackend):
         """
         Parse openvpn3 sessions-list output into a list of session dicts.
 
-        Each dict has keys: path, config_name, status
+        Each dict has keys: path, config_name, status, device
         """
         sessions = []
         current = {}
@@ -153,6 +153,11 @@ class OpenVPN3Backend(VPNBackend):
             status_match = re.match(r'\s*Status:\s*(.+)', line)
             if status_match and current:
                 current['status'] = status_match.group(1).strip()
+
+            # Device is on the same line as Owner: "Owner: user   Device: tun1"
+            dev_match = re.search(r'Device:\s*(\S+)', line)
+            if dev_match and current:
+                current['device'] = dev_match.group(1).strip()
 
         if current:
             sessions.append(current)
@@ -299,6 +304,46 @@ class OpenVPN3Backend(VPNBackend):
             message = f"Some sessions failed to disconnect for {vpn_name} (OpenVPN3)"
             logger.warning(message)
             return False, message
+
+    def get_vpn_details(self, vpn_name: str) -> dict:
+        if not self._available or not self.is_vpn_active(vpn_name):
+            return {}
+
+        sessions = self._get_sessions_for_config(vpn_name)
+        if not sessions:
+            return {}
+
+        device = sessions[0].get('device', '')
+        if not device:
+            return {}
+
+        # Get IP and routes from system interfaces
+        ip_addr = ''
+        routes = []
+        try:
+            result = subprocess.run(
+                ['ip', 'addr', 'show', device],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    inet_match = re.match(r'\s+inet\s+(\S+)', line)
+                    if inet_match:
+                        ip_addr = inet_match.group(1)
+                        break
+
+            result = subprocess.run(
+                ['ip', 'route', 'show', 'dev', device],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        routes.append(line.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+        return {'interface': device, 'ip': ip_addr, 'routes': routes}
 
     def _raise_browser(self) -> None:
         """Raise the browser window to front for OIDC auth.

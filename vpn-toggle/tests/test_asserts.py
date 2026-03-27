@@ -9,6 +9,7 @@ from vpn_toggle.asserts import (
     VPNAssert,
     DNSLookupAssert,
     GeolocationAssert,
+    PingAssert,
     AssertResult,
     create_assert
 )
@@ -358,6 +359,55 @@ class TestGeolocationAssert:
         assert any('Tokyo' in call and 'Detected' in call for call in print_calls)
 
 
+class TestPingAssert:
+    """Test suite for PingAssert"""
+
+    @patch('subprocess.run')
+    def test_ping_success(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout='PING 172.16.0.1 (172.16.0.1) 56(84) bytes of data.\n'
+                   '64 bytes from 172.16.0.1: icmp_seq=1 ttl=64 time=13.5 ms\n'
+        )
+        assert_obj = PingAssert({'type': 'ping', 'host': '172.16.0.1'})
+        result = assert_obj.check()
+        assert result.success is True
+        assert '13.5' in result.message
+
+    @patch('subprocess.run')
+    def test_ping_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout='', stderr='')
+        assert_obj = PingAssert({'type': 'ping', 'host': '10.0.0.99'})
+        result = assert_obj.check()
+        assert result.success is False
+        assert 'unreachable' in result.message
+
+    @patch('subprocess.run')
+    def test_ping_timeout(self, mock_run):
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd='ping', timeout=5)
+        assert_obj = PingAssert({'type': 'ping', 'host': '10.0.0.99', 'timeout_seconds': 5})
+        result = assert_obj.check()
+        assert result.success is False
+        assert 'timed out' in result.message
+
+    def test_ping_missing_host(self):
+        assert_obj = PingAssert({'type': 'ping'})
+        result = assert_obj.check()
+        assert result.success is False
+        assert 'missing' in result.message.lower()
+
+    @patch('subprocess.run')
+    def test_ping_custom_timeout(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout='time=1.2 ms')
+        assert_obj = PingAssert({'type': 'ping', 'host': '1.1.1.1', 'timeout_seconds': 10})
+        assert_obj.check()
+        # Verify timeout was passed to ping command
+        call_args = mock_run.call_args[0][0]
+        assert '-W' in call_args
+        assert '10' in call_args
+
+
 class TestAssertFactory:
     """Test suite for create_assert factory function"""
 
@@ -384,6 +434,11 @@ class TestAssertFactory:
 
         assert isinstance(assert_obj, GeolocationAssert)
         assert assert_obj.config == config
+
+    def test_create_ping_assert(self):
+        config = {'type': 'ping', 'host': '10.0.0.1'}
+        assert_obj = create_assert(config)
+        assert isinstance(assert_obj, PingAssert)
 
     def test_create_unknown_assert_type(self):
         """Test creating assert with unknown type raises ValueError"""

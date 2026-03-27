@@ -2,7 +2,9 @@
 Assert system for VPN health checking
 """
 import logging
+import re
 import socket
+import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Any
@@ -233,6 +235,68 @@ class GeolocationAssert(VPNAssert):
             )
 
 
+class PingAssert(VPNAssert):
+    """
+    Ping Assert - Verifies a host is reachable via ICMP ping.
+
+    Useful for checking that internal hosts behind a VPN tunnel are accessible.
+    """
+
+    def check(self) -> AssertResult:
+        host = self.config.get('host')
+        timeout = self.config.get('timeout_seconds', 5)
+
+        if not host:
+            return AssertResult(
+                success=False,
+                message="Ping assert configuration missing 'host'",
+                details={'host': host}
+            )
+
+        try:
+            result = subprocess.run(
+                ['ping', '-c', '1', '-W', str(timeout), host],
+                capture_output=True, text=True, timeout=timeout + 2
+            )
+
+            if result.returncode == 0:
+                # Extract RTT from output (e.g., "time=13.5 ms")
+                rtt_match = re.search(r'time[=<]([\d.]+)\s*ms', result.stdout)
+                rtt = rtt_match.group(1) if rtt_match else "?"
+                message = f"Ping check PASSED: {host} reachable ({rtt}ms)"
+                logger.info(message)
+                return AssertResult(
+                    success=True,
+                    message=message,
+                    details={'host': host, 'rtt_ms': rtt}
+                )
+            else:
+                message = f"Ping check FAILED: {host} unreachable"
+                logger.warning(message)
+                return AssertResult(
+                    success=False,
+                    message=message,
+                    details={'host': host}
+                )
+
+        except subprocess.TimeoutExpired:
+            message = f"Ping check FAILED: {host} timed out after {timeout}s"
+            logger.error(message)
+            return AssertResult(
+                success=False,
+                message=message,
+                details={'host': host, 'timeout': timeout}
+            )
+        except Exception as e:
+            message = f"Ping check FAILED: {e}"
+            logger.error(message)
+            return AssertResult(
+                success=False,
+                message=message,
+                details={'host': host, 'error': str(e)}
+            )
+
+
 def create_assert(assert_config: Dict[str, Any]) -> VPNAssert:
     """
     Factory function to create assert instances from configuration.
@@ -252,5 +316,7 @@ def create_assert(assert_config: Dict[str, Any]) -> VPNAssert:
         return DNSLookupAssert(assert_config)
     elif assert_type == 'geolocation':
         return GeolocationAssert(assert_config)
+    elif assert_type == 'ping':
+        return PingAssert(assert_config)
     else:
         raise ValueError(f"Unknown assert type: {assert_type}")

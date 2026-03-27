@@ -45,7 +45,8 @@ class VPNToggleMainWindow(QMainWindow):
         self._icon_path = icon_path
         self._quitting = False
 
-        self.setWindowTitle("VPN Monitor v4.0")
+        from . import __version__
+        self.setWindowTitle(f"VPN Monitor v{__version__}")
         self.setup_ui()
         self.setup_monitor()
         self.tray = TrayManager(self, vpn_manager, self.monitor_checkbox,
@@ -141,7 +142,7 @@ class VPNToggleMainWindow(QMainWindow):
         central_widget.setLayout(main_layout)
 
     def populate_vpn_list(self):
-        """Populate the VPN list from available VPNs"""
+        """Populate the VPN list from available VPNs, sorted by saved order."""
         vpns = self.vpn_manager.list_vpns()
 
         if not vpns:
@@ -149,6 +150,14 @@ class VPNToggleMainWindow(QMainWindow):
             label.setStyleSheet("color: gray; padding: 20px;")
             self.vpn_list_layout.addWidget(label)
             return
+
+        # Sort by saved order; unknown VPNs go to the end
+        saved_order = self.config_manager.get_config().get('vpn_order', [])
+        order_map = {name: i for i, name in enumerate(saved_order)}
+        vpns.sort(key=lambda v: order_map.get(v.name, len(saved_order)))
+
+        # Track ordered names for button state
+        self._vpn_order = [vpn.name for vpn in vpns]
 
         for vpn in vpns:
             vpn_config = self.config_manager.get_vpn_config(vpn.name)
@@ -161,10 +170,53 @@ class VPNToggleMainWindow(QMainWindow):
                              self.config_manager, self.monitor_thread,
                              self.metrics_collector,
                              backend_type=vpn.connection_type)
+            widget.move_requested.connect(self._on_vpn_move)
             self.vpn_widgets[vpn.name] = widget
             self.vpn_list_layout.addWidget(widget)
 
         self.vpn_list_layout.addStretch()
+        self._update_move_buttons()
+
+    def _on_vpn_move(self, vpn_name: str, direction: int):
+        """Handle a VPN card move request (direction: -1=up, +1=down)."""
+        idx = self._vpn_order.index(vpn_name)
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(self._vpn_order):
+            return
+
+        # Swap in order list
+        self._vpn_order[idx], self._vpn_order[new_idx] = (
+            self._vpn_order[new_idx], self._vpn_order[idx]
+        )
+
+        # Rebuild the layout (remove all widgets, re-add in new order)
+        # Remove stretch item too
+        while self.vpn_list_layout.count():
+            item = self.vpn_list_layout.takeAt(0)
+            # Don't delete the widgets, just remove from layout
+            if item.widget():
+                item.widget().setParent(None)
+
+        for name in self._vpn_order:
+            self.vpn_list_layout.addWidget(self.vpn_widgets[name])
+        self.vpn_list_layout.addStretch()
+
+        self._update_move_buttons()
+        self._save_vpn_order()
+
+    def _update_move_buttons(self):
+        """Enable/disable up/down buttons based on position."""
+        for i, name in enumerate(self._vpn_order):
+            widget = self.vpn_widgets[name]
+            widget.move_up_btn.setEnabled(i > 0)
+            widget.move_down_btn.setEnabled(i < len(self._vpn_order) - 1)
+
+    def _save_vpn_order(self):
+        """Persist the current VPN order to config."""
+        config = self.config_manager.get_config()
+        config['vpn_order'] = list(self._vpn_order)
+        self.config_manager.config = config
+        self.config_manager.save_config()
 
     def setup_monitor(self):
         """Setup the monitor thread"""

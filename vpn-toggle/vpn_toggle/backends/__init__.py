@@ -55,6 +55,14 @@ class VPNBackend(ABC):
     def get_connection_timestamp(self, vpn_name: str) -> Optional[datetime]:
         """Get the timestamp when the VPN was last activated."""
 
+    @abstractmethod
+    def get_vpn_details(self, vpn_name: str) -> dict:
+        """Get details for a connected VPN.
+
+        Returns dict with keys: interface, ip, routes (list of strings).
+        Returns empty dict if VPN is not connected or details unavailable.
+        """
+
     def bounce_vpn(self, vpn_name: str, **kwargs) -> Tuple[bool, str]:
         """
         Bounce (disconnect + reconnect) a VPN connection.

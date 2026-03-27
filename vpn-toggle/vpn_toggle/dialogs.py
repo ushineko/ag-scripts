@@ -1,5 +1,5 @@
 """
-Configuration and settings dialogs for VPN Toggle
+Configuration, settings, and details dialogs for VPN Toggle
 """
 import logging
 import shutil
@@ -9,9 +9,10 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QVBoxLayout, QFormLayout,
     QLineEdit, QComboBox, QCheckBox, QSpinBox, QGroupBox,
-    QLabel,
+    QLabel, QTextEdit, QTabWidget, QWidget,
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 
 from .config import ConfigManager
 
@@ -19,7 +20,7 @@ logger = logging.getLogger('vpn_toggle.dialogs')
 
 
 class VPNConfigDialog(QDialog):
-    """Dialog for configuring VPN asserts"""
+    """Tabbed dialog for configuring a VPN's display name and health checks."""
 
     def __init__(self, vpn_name: str, display_name: str, config_manager: ConfigManager, parent=None):
         super().__init__(parent)
@@ -37,10 +38,9 @@ class VPNConfigDialog(QDialog):
         return None
 
     def setup_ui(self):
-        """Setup dialog UI"""
+        """Setup tabbed dialog UI"""
         layout = QVBoxLayout()
 
-        # Get current VPN config or create default
         vpn_config = self.config_manager.get_vpn_config(self.vpn_name)
         if not vpn_config:
             vpn_config = {
@@ -50,20 +50,32 @@ class VPNConfigDialog(QDialog):
                 'asserts': []
             }
 
-        # Display name
+        # Tab widget
+        self.tabs = QTabWidget()
+
+        # --- General tab ---
+        general_tab = QWidget()
+        general_layout = QVBoxLayout()
+
         form_layout = QFormLayout()
         self.display_name_edit = QLineEdit(vpn_config.get('display_name', self.display_name))
         form_layout.addRow("Display Name:", self.display_name_edit)
 
-        # Enabled checkbox
         self.enabled_checkbox = QCheckBox("Enable monitoring for this VPN")
         self.enabled_checkbox.setChecked(vpn_config.get('enabled', True))
         form_layout.addRow("", self.enabled_checkbox)
 
-        layout.addLayout(form_layout)
+        general_layout.addLayout(form_layout)
+        general_layout.addStretch()
+        general_tab.setLayout(general_layout)
+        self.tabs.addTab(general_tab, "General")
 
-        # DNS Assert section
-        dns_group = QGroupBox("DNS Lookup Assert")
+        # --- Health Checks tab ---
+        health_tab = QWidget()
+        health_layout = QVBoxLayout()
+
+        # DNS Assert
+        dns_group = QGroupBox("DNS Lookup")
         dns_layout = QFormLayout()
 
         dns_assert = self._find_assert_by_type(vpn_config, 'dns_lookup')
@@ -72,19 +84,23 @@ class VPNConfigDialog(QDialog):
         self.dns_enabled.setChecked(dns_assert is not None)
         dns_layout.addRow("", self.dns_enabled)
 
-        self.dns_hostname = QLineEdit(dns_assert.get('hostname', 'myip.opendns.com') if dns_assert else 'myip.opendns.com')
+        self.dns_hostname = QLineEdit(
+            dns_assert.get('hostname', 'myip.opendns.com') if dns_assert else 'myip.opendns.com'
+        )
         self.dns_hostname.setPlaceholderText("e.g., myip.opendns.com")
         dns_layout.addRow("Hostname:", self.dns_hostname)
 
-        self.dns_prefix = QLineEdit(dns_assert.get('expected_prefix', '100.') if dns_assert else '100.')
+        self.dns_prefix = QLineEdit(
+            dns_assert.get('expected_prefix', '100.') if dns_assert else '100.'
+        )
         self.dns_prefix.setPlaceholderText("e.g., 100. or 10.8.")
         dns_layout.addRow("Expected IP Prefix:", self.dns_prefix)
 
         dns_group.setLayout(dns_layout)
-        layout.addWidget(dns_group)
+        health_layout.addWidget(dns_group)
 
-        # Geolocation Assert section
-        geo_group = QGroupBox("Geolocation Assert")
+        # Geolocation Assert
+        geo_group = QGroupBox("Geolocation")
         geo_layout = QFormLayout()
 
         geo_assert = self._find_assert_by_type(vpn_config, 'geolocation')
@@ -102,24 +118,60 @@ class VPNConfigDialog(QDialog):
                 self.geo_field.setCurrentIndex(index)
         geo_layout.addRow("Location Field:", self.geo_field)
 
-        self.geo_value = QLineEdit(geo_assert.get('expected_value', '') if geo_assert else '')
+        self.geo_value = QLineEdit(
+            geo_assert.get('expected_value', '') if geo_assert else ''
+        )
         self.geo_value.setPlaceholderText("e.g., Las Vegas, Nevada, United States")
         geo_layout.addRow("Expected Value:", self.geo_value)
 
         geo_group.setLayout(geo_layout)
-        layout.addWidget(geo_group)
+        health_layout.addWidget(geo_group)
+
+        # Ping Assert
+        ping_group = QGroupBox("Ping")
+        ping_layout = QFormLayout()
+
+        ping_assert = self._find_assert_by_type(vpn_config, 'ping')
+
+        self.ping_enabled = QCheckBox("Enable ping check")
+        self.ping_enabled.setChecked(ping_assert is not None)
+        ping_layout.addRow("", self.ping_enabled)
+
+        self.ping_host = QLineEdit(
+            ping_assert.get('host', '') if ping_assert else ''
+        )
+        self.ping_host.setPlaceholderText("e.g., 172.16.0.1 or internal-host.local")
+        ping_layout.addRow("Host:", self.ping_host)
+
+        self.ping_timeout = QSpinBox()
+        self.ping_timeout.setRange(1, 30)
+        self.ping_timeout.setValue(
+            ping_assert.get('timeout_seconds', 5) if ping_assert else 5
+        )
+        self.ping_timeout.setSuffix(" seconds")
+        ping_layout.addRow("Timeout:", self.ping_timeout)
+
+        ping_group.setLayout(ping_layout)
+        health_layout.addWidget(ping_group)
 
         # Help text
         help_label = QLabel(
             "Tip: Run the VPN and check the Activity Log to see detected DNS IPs and locations.\n"
-            "Use partial matches (e.g., 'Vegas' matches 'Las Vegas')."
+            "Use partial matches for geolocation (e.g., 'Vegas' matches 'Las Vegas')."
         )
         help_label.setStyleSheet("color: gray; font-size: 10px; padding: 10px;")
         help_label.setWordWrap(True)
-        layout.addWidget(help_label)
+        health_layout.addWidget(help_label)
+
+        health_tab.setLayout(health_layout)
+        self.tabs.addTab(health_tab, "Health Checks")
+
+        layout.addWidget(self.tabs)
 
         # Buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
@@ -127,7 +179,7 @@ class VPNConfigDialog(QDialog):
         self.setLayout(layout)
 
     def get_config(self) -> dict:
-        """Get the configured VPN settings"""
+        """Get the configured VPN settings from all tabs."""
         asserts = []
 
         if self.dns_enabled.isChecked():
@@ -146,12 +198,60 @@ class VPNConfigDialog(QDialog):
                 'description': f"Geolocation: {self.geo_field.currentText()} = {self.geo_value.text()}"
             })
 
+        if self.ping_enabled.isChecked() and self.ping_host.text().strip():
+            asserts.append({
+                'type': 'ping',
+                'host': self.ping_host.text().strip(),
+                'timeout_seconds': self.ping_timeout.value(),
+                'description': f"Ping: {self.ping_host.text()}"
+            })
+
         return {
             'name': self.vpn_name,
             'display_name': self.display_name_edit.text().strip(),
             'enabled': self.enabled_checkbox.isChecked(),
             'asserts': asserts
         }
+
+
+class VPNDetailsDialog(QDialog):
+    """Read-only dialog showing VPN interface, IP, and routes."""
+
+    def __init__(self, display_name: str, details: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Details: {display_name}")
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(300)
+
+        layout = QVBoxLayout()
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setFont(QFont("monospace", 10))
+
+        if not details:
+            text.setPlainText("VPN is not connected or details unavailable.")
+        else:
+            lines = []
+            lines.append(f"Interface:  {details.get('interface', 'N/A')}")
+            lines.append(f"IP Address: {details.get('ip', 'N/A')}")
+            lines.append("")
+            routes = details.get('routes', [])
+            if routes:
+                lines.append(f"Routes ({len(routes)}):")
+                for route in routes:
+                    lines.append(f"  {route}")
+            else:
+                lines.append("Routes: none")
+            text.setPlainText('\n'.join(lines))
+
+        layout.addWidget(text)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
 
 
 class SettingsDialog(QDialog):
@@ -223,7 +323,9 @@ class SettingsDialog(QDialog):
         layout.addWidget(startup_group)
 
         # Buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)

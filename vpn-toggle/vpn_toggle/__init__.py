@@ -6,4 +6,4 @@ integrated monitoring, assert-based health checking, real-time metrics graphing,
 and system tray integration.
 """
 
-__version__ = "4.0.0"
+__version__ = "4.2.0"
