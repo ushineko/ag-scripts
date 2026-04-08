@@ -974,20 +974,32 @@ class PeripheralMonitor(QWidget):
             self.claude_backoff_lbl.hide()
 
     def _update_staleness_label(self):
-        """Show how long ago the last successful refresh was."""
+        """Show how long ago the last successful refresh was, plus cached reset time."""
         if self._last_good_usage_time <= 0:
             self.claude_duration_lbl.setText("")
             return
         elapsed = time.monotonic() - self._last_good_usage_time
         minutes = int(elapsed // 60)
         if minutes < 1:
-            self.claude_duration_lbl.setText("(<1m ago)")
+            ago = "(<1m ago)"
         elif minutes < 60:
-            self.claude_duration_lbl.setText(f"({minutes}m ago)")
+            ago = f"({minutes}m ago)"
         else:
             hours = minutes // 60
             mins = minutes % 60
-            self.claude_duration_lbl.setText(f"({hours}h{mins}m ago)")
+            ago = f"({hours}h{mins}m ago)"
+
+        # Include last-known reset countdown alongside staleness
+        reset_text = ""
+        if self._last_good_usage:
+            resets_at = self._last_good_usage.get("five_hour", {}).get("resets_at", "")
+            if resets_at:
+                reset_text = get_time_until_reset(resets_at)
+
+        if reset_text:
+            self.claude_duration_lbl.setText(f"{ago} {reset_text}")
+        else:
+            self.claude_duration_lbl.setText(ago)
 
     def _render_usage_data(self, usage_data: dict):
         """Render usage data to the Claude section widgets."""
