@@ -28,9 +28,18 @@ class BatteryInfo:
 
 def _setup_mocks():
     """
-    Sets up mocks for gi and evdev if they are missing or broken.
-    This is necessary because some environments have broken python bindings
-    for these libraries when run from CLI, even if they exist.
+    Sets up mocks for gi and evdev before importing logitech_receiver.
+
+    This MUST run before any solaar import.  Solaar's diversion module has a
+    module-level side effect: on Wayland it calls setup_uinput() which creates
+    a real "solaar-keyboard" kernel input device via evdev.uinput.UInput.
+    Because battery_reader.py runs as a short-lived subprocess every poll
+    cycle, each invocation would register a new kernel input device (visible
+    as input/inputN spam in dmesg).
+
+    Pre-mocking evdev ensures the UInput call returns a harmless MagicMock
+    instead.  Battery reading only needs hidraw (via logitech_receiver.base),
+    not evdev, so this is safe.
     """
     # Add solaar path explicitly as it might not be in the default path for this user/env
     solaar_path = '/usr/lib/python3.14/site-packages'
@@ -45,12 +54,16 @@ def _setup_mocks():
         'evdev',
         'evdev.device',
         'evdev.ecodes',
-        'evdev.util'
+        'evdev.util',
+        'evdev.uinput',
     ]
-    
+
     for module in modules_to_mock:
         if module not in sys.modules:
              sys.modules[module] = MagicMock()
+
+# MUST run before any logitech_receiver import to prevent uinput side effect
+_setup_mocks()
 
 _CACHED_MOUSE = None
 _CACHED_RECEIVER = None
@@ -82,26 +95,16 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
              _CACHED_MOUSE = None
              _close_cached_receiver()
 
-    # Try importing normally first
+    # Mocks are already installed at module level (before any solaar import)
+    # to prevent diversion.py's uinput side effect on Wayland.
     try:
         from logitech_receiver import base, device, receiver
-    except ImportError:
-        # If import fails, try patching modules and importing again
-        _setup_mocks()
-        try:
-            from logitech_receiver import base, device, receiver
-        except ImportError as e:
-             log.error("solaar_import_failed", error=str(e))
-             return None
+    except ImportError as e:
+        log.error("solaar_import_failed", error=str(e))
+        return None
     except Exception as e:
-         # Some other error during import (like the GI error we saw)
-         log.warning("initial_import_error", error=str(e))
-         _setup_mocks()
-         try:
-            from logitech_receiver import base, device, receiver
-         except ImportError as e:
-            log.error("mock_import_failed", error=str(e))
-            return None
+        log.error("solaar_import_error", error=str(e))
+        return None
 
     # Close any previous receiver before scanning to avoid fd leaks.
     # Each create_receiver() opens a new hidraw fd and registers a kernel
