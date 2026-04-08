@@ -799,30 +799,30 @@ class TestBackoffIndicator(unittest.TestCase):
         pb._oauth_creds_mtime = 0.0
 
     def test_backoff_indicator_shown_during_backoff(self):
-        """Behavioral contract: backoff label is visible when usage backoff is active."""
+        """Behavioral contract: backoff icon is visible with tooltip when usage backoff is active."""
         import time
 
         pb.PeripheralMonitor.load_settings = MagicMock(return_value={'claude_section_enabled': True})
         monitor = pb.PeripheralMonitor()
-        monitor.claude_backoff_lbl = MagicMock()
+        monitor.claude_backoff_icon = MagicMock()
 
         pb._usage_backoff_until = time.monotonic() + 300
 
         monitor._update_backoff_indicator()
 
-        monitor.claude_backoff_lbl.show.assert_called_once()
-        set_text_arg = monitor.claude_backoff_lbl.setText.call_args[0][0]
-        self.assertIn("Backoff", set_text_arg)
+        monitor.claude_backoff_icon.show.assert_called_once()
+        tooltip_arg = monitor.claude_backoff_icon.setToolTip.call_args[0][0]
+        self.assertIn("Backoff", tooltip_arg)
 
     def test_backoff_indicator_hidden_when_no_backoff(self):
-        """Behavioral contract: backoff label is hidden when no backoff is active."""
+        """Behavioral contract: backoff icon is hidden when no backoff is active."""
         pb.PeripheralMonitor.load_settings = MagicMock(return_value={'claude_section_enabled': True})
         monitor = pb.PeripheralMonitor()
-        monitor.claude_backoff_lbl = MagicMock()
+        monitor.claude_backoff_icon = MagicMock()
 
         monitor._update_backoff_indicator()
 
-        monitor.claude_backoff_lbl.hide.assert_called_once()
+        monitor.claude_backoff_icon.hide.assert_called_once()
 
 
 class TestCachedDisplayOnError(unittest.TestCase):
@@ -847,7 +847,7 @@ class TestCachedDisplayOnError(unittest.TestCase):
         monitor.claude_seven_day_lbl.setText = MagicMock()
         monitor.claude_duration_lbl = MockQLabel()
         monitor.claude_duration_lbl.setText = MagicMock()
-        monitor.claude_backoff_lbl = MagicMock()
+        monitor.claude_backoff_icon = MagicMock()
         return monitor
 
     def test_none_result_shows_cached(self):

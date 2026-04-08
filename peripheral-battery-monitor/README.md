@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.5.4
+Version 1.5.5
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
 
@@ -59,6 +59,9 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.5.5
+- Backoff warning now displays as a compact icon (⚠) in the header row with details on hover, instead of a full-width label that changed widget height and caused clipping at screen edges
 
 ### v1.5.4
 - Fix solaar-keyboard uinput leak: pre-mock evdev before importing solaar to prevent diversion module from creating a kernel input device on every subprocess poll

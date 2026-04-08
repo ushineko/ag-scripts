@@ -24,7 +24,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -561,6 +561,11 @@ class PeripheralMonitor(QWidget):
         self.claude_duration_lbl.setObjectName("ClaudeReset")
         header_row.addWidget(self.claude_duration_lbl)
 
+        self.claude_backoff_icon = QLabel("⚠", self)
+        self.claude_backoff_icon.setObjectName("ClaudeBackoff")
+        self.claude_backoff_icon.hide()
+        header_row.addWidget(self.claude_backoff_icon)
+
         refresh_btn = QPushButton("↻", self)
         refresh_btn.setObjectName("ClaudeRefreshBtn")
         refresh_btn.setFixedSize(18, 18)
@@ -592,12 +597,6 @@ class PeripheralMonitor(QWidget):
         stats_row.addWidget(self.claude_seven_day_lbl)
 
         claude_layout.addLayout(stats_row)
-
-        self.claude_backoff_lbl = QLabel("", self)
-        self.claude_backoff_lbl.setObjectName("ClaudeBackoff")
-        self.claude_backoff_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.claude_backoff_lbl.hide()
-        claude_layout.addWidget(self.claude_backoff_lbl)
 
         return self.claude_frame
 
@@ -960,18 +959,19 @@ class PeripheralMonitor(QWidget):
         self._update_backoff_indicator()
 
     def _update_backoff_indicator(self):
-        """Show/hide the backoff warning label based on current backoff state."""
-        if not hasattr(self, 'claude_backoff_lbl'):
+        """Show/hide the backoff warning icon based on current backoff state."""
+        if not hasattr(self, 'claude_backoff_icon'):
             return
         now = time.monotonic()
         if _usage_backoff_until > now or _oauth_backoff_until > now:
             remaining = max(_usage_backoff_until, _oauth_backoff_until) - now
             mins = int(remaining // 60) + 1
-            self.claude_backoff_lbl.setText(
-                f"⚠ Backoff ~{mins}m — increase activity interval")
-            self.claude_backoff_lbl.show()
+            self.claude_backoff_icon.setToolTip(
+                f"Backoff ~{mins}m — increase activity interval")
+            self.claude_backoff_icon.show()
         else:
-            self.claude_backoff_lbl.hide()
+            self.claude_backoff_icon.hide()
+            self.claude_backoff_icon.setToolTip("")
 
     def _update_staleness_label(self):
         """Show how long ago the last successful refresh was, plus cached reset time."""
