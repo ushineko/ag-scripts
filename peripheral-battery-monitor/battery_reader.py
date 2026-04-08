@@ -53,14 +53,26 @@ def _setup_mocks():
              sys.modules[module] = MagicMock()
 
 _CACHED_MOUSE = None
+_CACHED_RECEIVER = None
+
+def _close_cached_receiver():
+    """Close the cached receiver to release its hidraw fd and prevent kernel input device leaks."""
+    global _CACHED_RECEIVER
+    if _CACHED_RECEIVER:
+        try:
+            _CACHED_RECEIVER.close()
+            log.debug("receiver_closed")
+        except Exception:
+            pass
+        _CACHED_RECEIVER = None
 
 def get_mouse_battery() -> Optional[BatteryInfo]:
     """
     Attempts to retrieve battery information for the first found Logitech mouse.
     Returns BatteryInfo object or None if no mouse found.
     """
-    global _CACHED_MOUSE
-    
+    global _CACHED_MOUSE, _CACHED_RECEIVER
+
     if _CACHED_MOUSE:
         try:
              log.debug("using_cached_mouse")
@@ -68,7 +80,8 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
         except Exception as e:
              log.warning("cached_mouse_failed_rescanning", error=str(e))
              _CACHED_MOUSE = None
-    
+             _close_cached_receiver()
+
     # Try importing normally first
     try:
         from logitech_receiver import base, device, receiver
@@ -90,32 +103,29 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
             log.error("mock_import_failed", error=str(e))
             return None
 
-    # Constants helper
-    # We might need to map status enums to string if we can't import the constants/enums due to dependencies
-    # But usually BatteryStatus is in common.py which is safe.
-    
+    # Close any previous receiver before scanning to avoid fd leaks.
+    # Each create_receiver() opens a new hidraw fd and registers a kernel
+    # input device ("solaar-keyboard"). Without closing, these accumulate.
+    _close_cached_receiver()
+
     try:
-        # Solaar libraries are available now
-        
-        # Iterate through receivers and devices
         for dev_info in base.receivers_and_devices():
             try:
                 candidate = None
                 if dev_info.isDevice:
                     candidate = device.create_device(base, dev_info)
                 else:
-                    # It's a receiver
                     rec = receiver.create_receiver(base, dev_info)
                     if rec:
-                        # Check paired devices
                         for paired in rec:
                             if paired and paired.kind == 'mouse':
-                                # Found a mouse on this receiver
-                                # We prioritize the first mouse we find for now
                                 _CACHED_MOUSE = paired
+                                _CACHED_RECEIVER = rec
                                 log.info("new_mouse_cached", device=paired.name)
                                 return _extract_battery(paired)
-                
+                        # No mouse found on this receiver, close it
+                        rec.close()
+
                 if candidate and candidate.kind == 'mouse':
                     _CACHED_MOUSE = candidate
                     log.info("new_mouse_cached", device=candidate.name)
@@ -123,7 +133,7 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
 
             except Exception:
                 continue
-                
+
     except Exception as e:
         log.error("device_check_failed", error=str(e))
         return None
