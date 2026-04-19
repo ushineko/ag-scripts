@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VSCode Launcher
+Comment=Bulk-launch VSCode workspaces with auto window placement and tmux switching
+Exec=vscode-launcher
+Icon=visual-studio-code
+Terminal=false
+Categories=Development;Utility;
+Keywords=vscode;launcher;workspace;tmux;
+StartupWMClass=vscode-launcher

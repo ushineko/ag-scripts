@@ -1,0 +1,114 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_NAME="vscode-launcher"
+LOOKUP_NAME="vscl-tmux-lookup"
+INSTALL_DIR="$HOME/.local/bin"
+DESKTOP_DIR="$HOME/.local/share/applications"
+MAIN_SCRIPT="$SCRIPT_DIR/vscode_launcher.py"
+LOOKUP_SCRIPT="$SCRIPT_DIR/tmux_lookup.py"
+HOOK_FILE="$SCRIPT_DIR/tmux_hook.zsh"
+ZSHRC="$HOME/.zshrc"
+
+BEGIN_MARKER="# --- vscode-launcher tmux hook (BEGIN) ---"
+END_MARKER="# --- vscode-launcher tmux hook (END) ---"
+
+echo "Installing VSCode Launcher..."
+
+# --- Dependencies ---
+if ! command -v python3 &>/dev/null; then
+    echo "Error: python3 is required but not found."
+    exit 1
+fi
+
+if ! python3 -c "import PyQt6" &>/dev/null; then
+    echo "Error: PyQt6 is required. Install it with: pip install PyQt6"
+    exit 1
+fi
+
+if ! command -v tmux &>/dev/null; then
+    echo "Warning: tmux not found on PATH. The launcher will run but session switching will be disabled."
+fi
+
+if ! command -v code &>/dev/null; then
+    echo "Warning: 'code' (VSCode CLI) not found on PATH. The launcher will run but cannot open workspaces."
+fi
+
+if ! command -v vscode-gather &>/dev/null; then
+    echo "Warning: 'vscode-gather' not found on PATH. Windows will not be auto-placed/maximized."
+    echo "         Install the sibling 'vscode-gather' sub-project to enable this."
+fi
+
+# --- Create dirs ---
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$DESKTOP_DIR"
+
+# --- Make scripts executable + symlink ---
+chmod +x "$MAIN_SCRIPT" "$LOOKUP_SCRIPT"
+
+ln -sf "$MAIN_SCRIPT" "$INSTALL_DIR/$APP_NAME"
+echo "  Symlink: $INSTALL_DIR/$APP_NAME -> $MAIN_SCRIPT"
+
+ln -sf "$LOOKUP_SCRIPT" "$INSTALL_DIR/$LOOKUP_NAME"
+echo "  Symlink: $INSTALL_DIR/$LOOKUP_NAME -> $LOOKUP_SCRIPT"
+
+# --- Desktop entry ---
+cp "$SCRIPT_DIR/$APP_NAME.desktop" "$DESKTOP_DIR/$APP_NAME.desktop"
+echo "  Desktop entry: $DESKTOP_DIR/$APP_NAME.desktop"
+update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+
+# --- Install zsh hook idempotently ---
+if [ ! -f "$ZSHRC" ]; then
+    echo "  Creating $ZSHRC"
+    touch "$ZSHRC"
+fi
+
+if grep -Fq "$BEGIN_MARKER" "$ZSHRC"; then
+    # Replace existing block IN PLACE so users always get the latest hook without
+    # moving it (we assume the block is already where the user wants it).
+    awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" -v hook_file="$HOOK_FILE" '
+        BEGIN { skipping = 0 }
+        {
+            if ($0 == begin) {
+                skipping = 1
+                while ((getline line < hook_file) > 0) print line
+                close(hook_file)
+                next
+            }
+            if (skipping && $0 == end) { skipping = 0; next }
+            if (!skipping) print
+        }
+    ' "$ZSHRC" > "$ZSHRC.vscode-launcher.tmp"
+    mv "$ZSHRC.vscode-launcher.tmp" "$ZSHRC"
+    echo "  Replaced existing zsh hook in $ZSHRC (updated to latest, position unchanged)"
+else
+    # Fresh install: find the first line that auto-attaches to tmux and insert BEFORE it.
+    # Falls back to appending at end if no such line is detected.
+    # Detection patterns (case-insensitive):
+    #   tmux new-session / tmux attach / tmux a / initialize_tmux / bare `tmux` call
+    insert_line=$(awk '
+        /^[[:space:]]*(initialize_tmux|tmux[[:space:]]+(new-session|attach|a)([[:space:]]|$))/ {
+            print NR; exit
+        }
+    ' "$ZSHRC")
+
+    if [[ -n "$insert_line" ]]; then
+        head -n $((insert_line - 1)) "$ZSHRC" > "$ZSHRC.vscode-launcher.tmp"
+        cat "$HOOK_FILE" >> "$ZSHRC.vscode-launcher.tmp"
+        echo "" >> "$ZSHRC.vscode-launcher.tmp"
+        tail -n +$insert_line "$ZSHRC" >> "$ZSHRC.vscode-launcher.tmp"
+        mv "$ZSHRC.vscode-launcher.tmp" "$ZSHRC"
+        echo "  Installed zsh hook into $ZSHRC (before tmux auto-attach on line $insert_line)"
+    else
+        echo "" >> "$ZSHRC"
+        cat "$HOOK_FILE" >> "$ZSHRC"
+        echo "  Installed zsh hook at end of $ZSHRC"
+        echo "  NOTE: if your zshrc auto-attaches to tmux (e.g. \"tmux new-session\" or"
+        echo "        \"initialize_tmux\"), move the hook block to run BEFORE that line."
+    fi
+fi
+echo "  (Open a new zsh session for the hook to take effect.)"
+
+echo "Installation complete!"
+echo "Run with: $APP_NAME"
