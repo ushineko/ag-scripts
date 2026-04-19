@@ -4,6 +4,29 @@ import sys
 from pathlib import Path
 import subprocess
 
+# Stale keys from <=2.x installs: positioning and maximize are now owned by
+# the Alacritty Maximizer KWin script. Re-install strips them so the rule
+# sections don't keep racing the script.
+STALE_RULE_KEYS = (
+    'position', 'positionrule',
+    'maximizevert', 'maximizevertrule',
+    'maximizehoriz', 'maximizehorizrule',
+    'activity', 'activityrule',
+    'screen', 'screenrule',
+)
+
+
+def apply_rule_keys(rule, rule_name, description):
+    for stale_key in STALE_RULE_KEYS:
+        if stale_key in rule:
+            del rule[stale_key]
+    rule['Description'] = description
+    rule['wmclass'] = rule_name
+    rule['wmclassmatch'] = '1'
+    rule['noborder'] = 'true'
+    rule['noborderrule'] = '2'
+
+
 def run_kwin_reconfigure():
     # Try different dbus commands to reload kwin
     commands = [
@@ -103,30 +126,7 @@ def install_rules():
             config[target_section] = {}
             
         rule = config[target_section]
-        rule['Description'] = description
-        rule['wmclass'] = rule_name
-        rule['wmclassmatch'] = '1' # Exact match
-        
-        # SCREEN RULE - REMOVED (Unreliable)
-        # rule['screen'] = str(i)
-        # rule['screenrule'] = '2'
-        
-        # POSITION RULE - NEW (Reliable)
-        rule['position'] = position_str
-        rule['positionrule'] = '4' # Apply Initially (Allows moving later)
-        
-        # Maximize Rules
-        rule['maximizevert'] = 'true'
-        rule['maximizevertrule'] = '4' # Apply Initially
-        rule['maximizehoriz'] = 'true'
-        rule['maximizehorizrule'] = '4' # Apply Initially
-        
-        rule['activity'] = 'All Desktops'
-        rule['activityrule'] = '4' # Apply Initially
-        
-        # Ensure minimal decoration
-        rule['noborder'] = 'true'
-        rule['noborderrule'] = '2' # Force (Keep it borderless always)
+        apply_rule_keys(rule, rule_name, description)
 
 
     try:

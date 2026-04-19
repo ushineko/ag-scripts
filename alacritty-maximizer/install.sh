@@ -5,11 +5,37 @@ cd "$(dirname "$0")"
 
 echo "Installing Alacritty Maximizer..."
 
-# 1. Install KWin Rules
+# 1. Install KWin Rules (noborder only — positioning is handled by the script below)
 echo "Installing KWin Rules..."
 python3 install_kwin_rules.py
 
-# 2. Install Desktop File
+# 2. Install KWin Script (handles screen placement + maximize)
+SCRIPT_SRC="$(pwd)/kwin-script"
+SCRIPT_DEST="$HOME/.local/share/kwin/scripts/alacritty-maximizer"
+echo "Installing KWin script to $SCRIPT_DEST..."
+mkdir -p "$(dirname "$SCRIPT_DEST")"
+rm -rf "$SCRIPT_DEST"
+cp -r "$SCRIPT_SRC" "$SCRIPT_DEST"
+
+# Enable the script in kwinrc. The plugin key is <Id>Enabled where Id comes
+# from metadata.json (lowercased first letter per KWin convention).
+if command -v kwriteconfig6 >/dev/null 2>&1; then
+    kwriteconfig6 --file kwinrc --group Plugins --key alacrittyMaximizerEnabled true
+elif command -v kwriteconfig5 >/dev/null 2>&1; then
+    kwriteconfig5 --file kwinrc --group Plugins --key alacrittyMaximizerEnabled true
+else
+    echo "Warning: kwriteconfig6/5 not found; enable 'Alacritty Maximizer' manually under System Settings → Window Management → KWin Scripts."
+fi
+echo "Enabled KWin script."
+
+# Reload KWin so the newly enabled script is loaded.
+if command -v qdbus6 >/dev/null 2>&1; then
+    qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+elif command -v qdbus >/dev/null 2>&1; then
+    qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+fi
+
+# 3. Install Desktop File
 APP_DIR="$HOME/.local/share/applications"
 mkdir -p "$APP_DIR"
 
@@ -30,7 +56,7 @@ mv "$DESKTOP_FILE.tmp" "$TARGET_PATH"
 
 echo "Installed desktop file to $TARGET_PATH"
 
-# 3. Install Autostart Entry
+# 4. Install Autostart Entry
 AUTOSTART_DIR="$HOME/.config/autostart"
 mkdir -p "$AUTOSTART_DIR"
 

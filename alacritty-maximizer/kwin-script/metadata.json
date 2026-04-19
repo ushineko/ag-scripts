@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "ag-scripts"
+            }
+        ],
+        "Description": "Places windows with class 'alacritty-pos-X_Y' on the screen whose geometry contains (X, Y) and maximizes them. Re-evaluates on screen hotplug so windows return to their home monitor after disconnect/reconnect events (e.g. OLED pixel refresh).",
+        "Id": "alacrittyMaximizer",
+        "License": "MIT",
+        "Name": "Alacritty Maximizer",
+        "Version": "3.0.0"
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js"
+}

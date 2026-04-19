@@ -1,4 +1,4 @@
-# Alacritty Maximizer (v2.1.1)
+# Alacritty Maximizer (v3.0.0)
 
 A simple tool to launch Alacritty either normally or maximized on a specific monitor, with optional auto-launch to a saved default and KDE session autostart.
 
@@ -106,11 +106,18 @@ python3 main.py [OPTIONS]
 ## Files
 - `main.py`: The PyQt GUI launcher with auto-launch and autostart support.
 - `config.py`: Configuration persistence (default monitor, autostart).
-- `install_kwin_rules.py`: Script to inject KWin rules.
+- `install_kwin_rules.py`: Installs the noborder KWin rule (positioning is handled by the KWin script).
+- `kwin-script/`: KWin script that places `alacritty-pos-X_Y` windows on the matching monitor and maximizes them. Installed to `~/.local/share/kwin/scripts/alacritty-maximizer/`.
 - `install.sh`: Master installation script.
 - `uninstall.sh`: Removal script.
 
 ## Changelog
+
+### v3.0.0
+- Positioning and maximize moved from KWin window rules to a KWin script (`kwin-script/`). Rules used "Apply Initially" semantics, which raced kscreen at fresh login and did not re-fire on monitor hotplug — the script listens to `windowAdded` + `screensChanged` and re-evaluates placement when screens change.
+- Windows whose target monitor is temporarily offline (during OLED pixel refresh or fresh-login initialization) are now repositioned once the monitor returns.
+- `install_kwin_rules.py` now writes only the `noborder` rule; installing this version automatically strips stale position/maximize/activity keys from previously-installed rule sections.
+- Debug logging toggle: set `debugMode=true` in the KWin script's config (System Settings → Window Management → KWin Scripts → Alacritty Maximizer → Configure) to log placement decisions via `console.debug`. Read back with `journalctl --user -f | grep alacritty-maximizer`.
 
 ### v2.1.1
 - Fixed mirrored monitors showing duplicate entries in the GUI

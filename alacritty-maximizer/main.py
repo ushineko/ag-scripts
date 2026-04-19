@@ -12,7 +12,7 @@ from config import (get_default_monitor, set_default_monitor, clear_default_moni
                      is_autostart_enabled, set_autostart, install_autostart_entry,
                      remove_autostart_entry)
 
-__version__ = "2.1.1"
+__version__ = "3.0.0"
 
 
 def get_screen_positions(app: QApplication) -> list[dict]:
