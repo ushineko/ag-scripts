@@ -6,9 +6,11 @@ APP_NAME="vscode-launcher"
 LOOKUP_NAME="vscl-tmux-lookup"
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 MAIN_SCRIPT="$SCRIPT_DIR/vscode_launcher.py"
 LOOKUP_SCRIPT="$SCRIPT_DIR/tmux_lookup.py"
 HOOK_FILE="$SCRIPT_DIR/tmux_hook.zsh"
+ICON_SOURCE="$SCRIPT_DIR/$APP_NAME.svg"
 ZSHRC="$HOME/.zshrc"
 
 BEGIN_MARKER="# --- vscode-launcher tmux hook (BEGIN) ---"
@@ -43,6 +45,14 @@ fi
 # --- Create dirs ---
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$DESKTOP_DIR"
+mkdir -p "$ICON_DIR"
+
+# --- Install icon ---
+if [ -f "$ICON_SOURCE" ]; then
+    cp "$ICON_SOURCE" "$ICON_DIR/$APP_NAME.svg"
+    echo "  Icon: $ICON_DIR/$APP_NAME.svg"
+    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+fi
 
 # --- Make scripts executable + symlink ---
 chmod +x "$MAIN_SCRIPT" "$LOOKUP_SCRIPT"
@@ -57,6 +67,10 @@ echo "  Symlink: $INSTALL_DIR/$LOOKUP_NAME -> $LOOKUP_SCRIPT"
 cp "$SCRIPT_DIR/$APP_NAME.desktop" "$DESKTOP_DIR/$APP_NAME.desktop"
 echo "  Desktop entry: $DESKTOP_DIR/$APP_NAME.desktop"
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+# KDE's sycoca caches desktop-entry Icon= values; without an explicit rebuild,
+# KRunner and the app menu keep showing the old icon (or a blank fallback
+# when the old Icon= name is renamed). kbuildsycoca6 is the canonical refresh.
+kbuildsycoca6 --noincremental 2>/dev/null || kbuildsycoca5 --noincremental 2>/dev/null || true
 
 # --- Install zsh hook idempotently ---
 if [ ! -f "$ZSHRC" ]; then

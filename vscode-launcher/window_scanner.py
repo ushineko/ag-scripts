@@ -21,7 +21,12 @@ import time
 from typing import Iterable
 
 SCRIPT_NAME = "vscode-launcher-scanner"
+ACTION_SCRIPT_NAME = "vscode-launcher-action"
 LOG_PREFIX = "VSCL_CAPTIONS:"
+ACTION_LOG_PREFIX = "VSCL_ACTION_OK:"
+
+ACTION_CLOSE = "close"
+ACTION_ACTIVATE = "activate"
 
 KWIN_ENUMERATE_SCRIPT = """
 (function() {
@@ -36,6 +41,45 @@ KWIN_ENUMERATE_SCRIPT = """
     console.log("%s" + JSON.stringify(captions));
 })();
 """ % LOG_PREFIX
+
+
+def _build_action_script(label: str, action: str) -> str:
+    """Return a KWin JS script that finds the first VSCode window whose caption
+    contains `label` as a ` - `-separated token and performs the named action.
+
+    `label` is JSON-encoded so embedded quotes, backslashes, and newlines are
+    safe in the JS source.
+    """
+    label_literal = json.dumps(label)
+    # Pick the action branch at generation time so the script doesn't need to
+    # string-compare on each iteration.
+    if action == ACTION_CLOSE:
+        action_js = "w.closeWindow();"
+    elif action == ACTION_ACTIVATE:
+        action_js = "workspace.activeWindow = w;"
+    else:
+        raise ValueError(f"unsupported action: {action!r}")
+
+    return (
+        "(function() {"
+        "  var target = %s;"
+        "  var windows = workspace.windowList();"
+        "  for (var i = 0; i < windows.length; i++) {"
+        "    var w = windows[i];"
+        '    if (w.resourceClass !== "code") continue;'
+        "    if (w.skipTaskbar || w.specialWindow) continue;"
+        '    var parts = w.caption.split(" - ");'
+        "    var hit = false;"
+        "    for (var j = 0; j < parts.length; j++) {"
+        "      if (parts[j] === target) { hit = true; break; }"
+        "    }"
+        "    if (!hit) continue;"
+        "    %s"
+        '    console.log("%s" + w.caption);'
+        "    break;"
+        "  }"
+        "})();"
+    ) % (label_literal, action_js, ACTION_LOG_PREFIX)
 
 
 def caption_matches_label(caption: str, label: str) -> bool:
@@ -70,6 +114,106 @@ class WindowScanner:
 
     def available(self) -> bool:
         return bool(shutil.which(self.qdbus_cmd) and shutil.which("journalctl"))
+
+    def perform_window_action(self, label: str, action: str) -> bool:
+        """Find the first VSCode window matching `label` and run `action` on it.
+
+        Supported actions: `close` (via `w.closeWindow()`), `activate` (via
+        `workspace.activeWindow = w`). Returns True if the journal shows the
+        action was applied, False otherwise (no match, KWin error, tooling
+        missing).
+        """
+        if action not in (ACTION_CLOSE, ACTION_ACTIVATE):
+            raise ValueError(f"unsupported action: {action!r}")
+        if not self.available():
+            return False
+
+        script_path: str | None = None
+        try:
+            script_body = _build_action_script(label, action)
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".js", prefix=f"{ACTION_SCRIPT_NAME}-", delete=False
+            ) as f:
+                f.write(script_body)
+                script_path = f.name
+
+            load = subprocess.run(
+                [
+                    self.qdbus_cmd,
+                    "org.kde.KWin",
+                    "/Scripting",
+                    "org.kde.kwin.Scripting.loadScript",
+                    script_path,
+                    ACTION_SCRIPT_NAME,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if load.returncode != 0:
+                return False
+            try:
+                script_id = int(load.stdout.strip())
+            except ValueError:
+                return False
+            if script_id < 0:
+                return False
+
+            subprocess.run(
+                [
+                    self.qdbus_cmd,
+                    "org.kde.KWin",
+                    f"/Scripting/Script{script_id}",
+                    "org.kde.kwin.Script.run",
+                ],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+
+            time.sleep(0.3)
+
+            log = subprocess.run(
+                [
+                    "journalctl",
+                    "--user",
+                    "-u",
+                    self.kwin_journal_unit,
+                    "--since",
+                    "3 seconds ago",
+                    "--no-pager",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+
+            return action_succeeded(log.stdout)
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        finally:
+            if script_path:
+                try:
+                    os.unlink(script_path)
+                except OSError:
+                    pass
+            try:
+                subprocess.run(
+                    [
+                        self.qdbus_cmd,
+                        "org.kde.KWin",
+                        "/Scripting",
+                        "org.kde.kwin.Scripting.unloadScript",
+                        ACTION_SCRIPT_NAME,
+                    ],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                pass
 
     def list_vscode_captions(self) -> list[str] | None:
         """Return list of VSCode window captions, or None if the scan failed.
@@ -168,6 +312,16 @@ class WindowScanner:
                 )
             except (subprocess.TimeoutExpired, OSError):
                 pass
+
+
+def action_succeeded(journal_text: str) -> bool:
+    """Return True if any `VSCL_ACTION_OK:` marker appears in the recent log."""
+    if not journal_text:
+        return False
+    for line in journal_text.splitlines():
+        if ACTION_LOG_PREFIX in line:
+            return True
+    return False
 
 
 def parse_captions_from_journal(journal_text: str) -> list[str] | None:

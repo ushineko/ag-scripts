@@ -502,6 +502,99 @@ class TestMainWindowSmoke:
             False,
         ]
 
+    def test_row_buttons_reflect_running_state(
+        self, qapp, tmp_path, fake_vscode_db
+    ):
+        """Running rows show Activate + Stop; non-running rows show only Start."""
+        from PyQt6.QtWidgets import QPushButton
+
+        from vscode_launcher import MainWindow
+
+        db_path, build = fake_vscode_db
+        build(
+            [
+                {"folderUri": "file:///home/u/git/running-one"},
+                {"folderUri": "file:///home/u/git/idle-one"},
+            ]
+        )
+
+        class FakeScanner:
+            def list_vscode_captions(self):
+                return ["file.py - running-one - Visual Studio Code"]
+
+        window = MainWindow(
+            ConfigManager(tmp_path / "workspaces.json"),
+            Launcher(),
+            VSCodeRecentsReader(db_path=db_path),
+            window_scanner=FakeScanner(),
+        )
+
+        def buttons_for_row(i):
+            item = window.list_widget.item(i)
+            row = window.list_widget.itemWidget(item)
+            return [b.text() for b in row.findChildren(QPushButton)]
+
+        # running-one sorts first; buttons are Activate + Stop
+        assert buttons_for_row(0) == ["Activate", "Stop"]
+        # idle-one is second; only Start
+        assert buttons_for_row(1) == ["Start"]
+
+    def test_stop_handler_invokes_scanner_with_close_action(
+        self, qapp, tmp_path, fake_vscode_db
+    ):
+        from vscode_launcher import MainWindow
+        from window_scanner import ACTION_CLOSE
+
+        db_path, build = fake_vscode_db
+        build([{"folderUri": "file:///home/u/git/a"}])
+
+        calls = []
+
+        class RecordingScanner:
+            def list_vscode_captions(self):
+                return ["file - a - Visual Studio Code"]
+
+            def perform_window_action(self, label, action):
+                calls.append((label, action))
+                return True
+
+        window = MainWindow(
+            ConfigManager(tmp_path / "workspaces.json"),
+            Launcher(),
+            VSCodeRecentsReader(db_path=db_path),
+            window_scanner=RecordingScanner(),
+        )
+        window._on_stop_requested("/home/u/git/a")
+        assert calls == [("a", ACTION_CLOSE)]
+
+    def test_activate_handler_invokes_scanner_with_activate_action(
+        self, qapp, tmp_path, fake_vscode_db
+    ):
+        from vscode_launcher import MainWindow
+        from window_scanner import ACTION_ACTIVATE
+
+        db_path, build = fake_vscode_db
+        build([{"folderUri": "file:///home/u/git/a"}])
+
+        calls = []
+
+        class RecordingScanner:
+            def list_vscode_captions(self):
+                return ["file - a - Visual Studio Code"]
+
+            def perform_window_action(self, label, action):
+                calls.append((label, action))
+                return True
+
+        window = MainWindow(
+            ConfigManager(tmp_path / "workspaces.json"),
+            Launcher(),
+            VSCodeRecentsReader(db_path=db_path),
+            window_scanner=RecordingScanner(),
+        )
+        window._on_activate_requested("/home/u/git/a")
+        assert calls == [("a", ACTION_ACTIVATE)]
+
     def test_scanner_none_result_does_not_break_list(
         self, qapp, tmp_path, fake_vscode_db
     ):

@@ -23,6 +23,7 @@ Solves three recurring pain points:
 
 - Reads your workspace list live from VSCode's own Recent history — nothing to maintain by hand
 - **Shows which workspaces are currently open**, with running ones sorted to the top and a `● running` badge — prompts before double-launching
+- **Per-row Start / Stop / Activate buttons**: Start (non-running) launches the workspace; Activate (running) raises and focuses its VSCode window; Stop (running) closes the window via KWin while leaving the main VSCode process alive
 - PyQt6 GUI with multi-select checkboxes; bulk-launch with one click
 - Per-workspace tmux-session mapping, editable via a dropdown populated from `tmux list-sessions`
 - Hide / Unhide workspaces you don't want cluttering the launcher
@@ -100,6 +101,16 @@ Click **Refresh** to re-read VSCode's state DB AND re-scan which VSCode windows 
 Each row shows a green `● running` badge when the workspace is already open in a VSCode window. Running workspaces sort ahead of the rest, and within each group (running / not running) MRU order from VSCode's Recent list is preserved.
 
 If you tick a running workspace and click Launch Selected (or Launch All while any are running), you get a 3-button prompt: **Launch Anyway** (accepts the duplicate), **Skip Running** (launches only the ones that aren't open), or **Cancel**. Detection uses KWin scripting via D-Bus — the same mechanism the sibling `vscode-gather` tool uses — and silently degrades (no badges, no prompt) if `qdbus6` or `journalctl` aren't available.
+
+### Per-row actions
+
+Each row has contextual buttons on the right:
+
+- **Start** (non-running rows) — launches that single workspace (same flow as Launch Selected for one entry)
+- **Activate** (running rows) — raises and focuses the existing VSCode window via KWin `workspace.activeWindow = w`
+- **Stop** (running rows) — closes the VSCode window via KWin `w.closeWindow()`. VSCode's own "unsaved changes?" dialog still appears if applicable; Stop does not bypass it. The VSCode main process is not killed — other windows stay open.
+
+Stop does not auto-refresh the list because an unsaved-changes prompt may stall the close. Click **Refresh** once you've resolved any save prompt to see updated running state.
 
 ## How It Works
 
@@ -185,6 +196,11 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`). You are prompted before the config directory is deleted.
 
 ## Changelog
+
+### v1.4
+
+- New: per-row **Start** (non-running) / **Stop** + **Activate** (running) buttons. Activate raises and focuses the matching VSCode window via KWin `workspace.activeWindow = w`; Stop closes the window via `w.closeWindow()` without killing the shared VSCode main process. Labels are JSON-encoded when injected into the KWin JS source.
+- UX: the list widget now uses `ClickFocus`, so no row is highlighted on startup — a row only lights up when the user actively clicks it.
 
 ### v1.3
 

@@ -25,10 +25,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction, QIcon
 
-from window_scanner import WindowScanner, running_labels
+from window_scanner import ACTION_ACTIVATE, ACTION_CLOSE, WindowScanner, running_labels
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -49,7 +49,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 CONFIG_DIR = Path.home() / ".config" / "vscode-launcher"
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -399,9 +399,18 @@ class TmuxSessionDialog(QDialog):
 class WorkspaceListWidget(QListWidget):
     """Read-only list of workspaces sourced from VSCode recents."""
 
+    # Emitted with the workspace path when a per-row button is clicked.
+    start_requested = pyqtSignal(str)
+    stop_requested = pyqtSignal(str)
+    activate_requested = pyqtSignal(str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Only take focus when the user actually clicks a row — otherwise Qt
+        # draws a "current item" indicator on the first row on startup, which
+        # looks confusingly similar to but distinct from actual selection.
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
     def add_workspace_row(self, workspace: Workspace) -> None:
         item = QListWidgetItem()
@@ -433,6 +442,23 @@ class WorkspaceListWidget(QListWidget):
         )
         label.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(label, stretch=1)
+
+        path = workspace.path
+        if workspace.is_running:
+            btn_activate = QPushButton("Activate")
+            btn_activate.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn_activate.clicked.connect(lambda _=False, p=path: self.activate_requested.emit(p))
+            layout.addWidget(btn_activate)
+
+            btn_stop = QPushButton("Stop")
+            btn_stop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn_stop.clicked.connect(lambda _=False, p=path: self.stop_requested.emit(p))
+            layout.addWidget(btn_stop)
+        else:
+            btn_start = QPushButton("Start")
+            btn_start.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn_start.clicked.connect(lambda _=False, p=path: self.start_requested.emit(p))
+            layout.addWidget(btn_start)
 
         return widget
 
@@ -531,6 +557,9 @@ class MainWindow(QMainWindow):
         self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.list_widget.start_requested.connect(self._on_start_requested)
+        self.list_widget.stop_requested.connect(self._on_stop_requested)
+        self.list_widget.activate_requested.connect(self._on_activate_requested)
         layout.addWidget(self.list_widget)
 
     def _refresh(self) -> None:
@@ -567,6 +596,11 @@ class MainWindow(QMainWindow):
         self.list_widget.clear()
         for w in self.workspaces:
             self.list_widget.add_workspace_row(w)
+        # Start with no current/selected row so Qt doesn't show the (subtle)
+        # "current item" indicator on the first row by default. A row only
+        # becomes highlighted when the user actively clicks one.
+        self.list_widget.setCurrentRow(-1)
+        self.list_widget.clearSelection()
 
         if self.workspaces:
             self.empty_label.setVisible(False)
@@ -653,6 +687,29 @@ class MainWindow(QMainWindow):
         if ws is None:
             return
         self._launch_paths([ws.path])
+
+    def _on_start_requested(self, path: str) -> None:
+        self._launch_paths([path])
+
+    def _on_stop_requested(self, path: str) -> None:
+        ws = self._find_workspace_by_path(path)
+        if ws is None or self.window_scanner is None:
+            return
+        # VSCode's own "unsaved changes?" dialog runs inside KWin's async action;
+        # we don't auto-refresh because the close may not complete immediately.
+        self.window_scanner.perform_window_action(ws.label, ACTION_CLOSE)
+
+    def _on_activate_requested(self, path: str) -> None:
+        ws = self._find_workspace_by_path(path)
+        if ws is None or self.window_scanner is None:
+            return
+        self.window_scanner.perform_window_action(ws.label, ACTION_ACTIVATE)
+
+    def _find_workspace_by_path(self, path: str) -> Workspace | None:
+        for w in self.workspaces:
+            if w.path == path:
+                return w
+        return None
 
     def _launch_selected(self) -> None:
         paths = self.list_widget.checked_workspace_paths()
@@ -750,10 +807,24 @@ class MainWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 
 
+def _resolve_app_icon() -> QIcon:
+    """Prefer the installed theme icon; fall back to the bundled SVG next to
+    this file so the app shows the right icon even when run from the source
+    checkout before install.sh has copied it into hicolor."""
+    themed = QIcon.fromTheme("vscode-launcher")
+    if not themed.isNull():
+        return themed
+    bundled = Path(__file__).resolve().parent / "vscode-launcher.svg"
+    if bundled.is_file():
+        return QIcon(str(bundled))
+    return QIcon()
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("vscode-launcher")
     app.setDesktopFileName("vscode-launcher")
+    app.setWindowIcon(_resolve_app_icon())
     config = ConfigManager()
     launcher = Launcher()
     recents = VSCodeRecentsReader()

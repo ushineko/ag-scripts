@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Rounded-square background in deep amber (distinct from VSCode blue). -->
+  <rect x="4" y="4" width="120" height="120" rx="22" ry="22" fill="#EA580C"/>
+
+  <!-- Three workspace "rows" (like our list UI). Top two show the running dot. -->
+  <!-- Row 1 (running) -->
+  <rect x="22" y="32" width="72" height="14" rx="5" ry="5" fill="#FFFFFF"/>
+  <circle cx="102" cy="39" r="6" fill="#22C55E" stroke="#FFFFFF" stroke-width="1.5"/>
+
+  <!-- Row 2 (running) -->
+  <rect x="22" y="58" width="72" height="14" rx="5" ry="5" fill="#FFFFFF"/>
+  <circle cx="102" cy="65" r="6" fill="#22C55E" stroke="#FFFFFF" stroke-width="1.5"/>
+
+  <!-- Row 3 (not running) -->
+  <rect x="22" y="84" width="72" height="14" rx="5" ry="5" fill="#FFFFFF" fill-opacity="0.55"/>
+</svg>

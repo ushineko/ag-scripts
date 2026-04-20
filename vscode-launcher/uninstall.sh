@@ -5,6 +5,7 @@ APP_NAME="vscode-launcher"
 LOOKUP_NAME="vscl-tmux-lookup"
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 CONFIG_DIR="$HOME/.config/vscode-launcher"
 ZSHRC="$HOME/.zshrc"
 
@@ -30,6 +31,16 @@ if [ -f "$DESKTOP_DIR/$APP_NAME.desktop" ]; then
     echo "  Removed desktop entry: $DESKTOP_DIR/$APP_NAME.desktop"
 fi
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+
+# --- Remove icon ---
+if [ -f "$ICON_DIR/$APP_NAME.svg" ]; then
+    rm "$ICON_DIR/$APP_NAME.svg"
+    echo "  Removed icon: $ICON_DIR/$APP_NAME.svg"
+    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+fi
+
+# Rebuild KDE sycoca so KRunner / app menu drop the cached entry immediately.
+kbuildsycoca6 --noincremental 2>/dev/null || kbuildsycoca5 --noincremental 2>/dev/null || true
 
 # --- Remove zsh hook block (inclusive) ---
 if [ -f "$ZSHRC" ] && grep -Fq "$BEGIN_MARKER" "$ZSHRC"; then

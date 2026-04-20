@@ -15,8 +15,13 @@ from unittest.mock import patch
 import pytest
 
 from window_scanner import (
+    ACTION_ACTIVATE,
+    ACTION_CLOSE,
+    ACTION_LOG_PREFIX,
     LOG_PREFIX,
     WindowScanner,
+    _build_action_script,
+    action_succeeded,
     caption_matches_label,
     parse_captions_from_journal,
     running_labels,
@@ -127,6 +132,57 @@ class TestParseCaptionsFromJournal:
 
 
 # ---------------------------------------------------------------------------
+# action_succeeded
+# ---------------------------------------------------------------------------
+
+
+class TestActionSucceeded:
+    def test_marker_present(self):
+        assert (
+            action_succeeded(
+                f"Apr 19 host kwin[1]: {ACTION_LOG_PREFIX}any caption here\n"
+            )
+            is True
+        )
+
+    def test_marker_absent(self):
+        assert action_succeeded("some other journal content\n") is False
+
+    def test_empty_journal(self):
+        assert action_succeeded("") is False
+
+
+# ---------------------------------------------------------------------------
+# _build_action_script
+# ---------------------------------------------------------------------------
+
+
+class TestBuildActionScript:
+    def test_close_script_contains_closeWindow(self):
+        js = _build_action_script("ag-scripts", ACTION_CLOSE)
+        assert "w.closeWindow()" in js
+        assert '"ag-scripts"' in js  # JSON-encoded label literal
+        assert ACTION_LOG_PREFIX in js
+
+    def test_activate_script_sets_active_window(self):
+        js = _build_action_script("ag-scripts", ACTION_ACTIVATE)
+        assert "workspace.activeWindow = w" in js
+        assert '"ag-scripts"' in js
+
+    def test_label_with_quotes_is_escaped(self):
+        """A label containing a quote must not break out of the JS string literal."""
+        # Contrived — VSCode labels don't normally include quotes, but JSON
+        # encoding should handle them regardless (defense in depth).
+        js = _build_action_script('weird"label', ACTION_CLOSE)
+        # Embedded quote must be backslash-escaped inside the JS literal
+        assert '"weird\\"label"' in js
+
+    def test_unknown_action_raises(self):
+        with pytest.raises(ValueError):
+            _build_action_script("x", "nuke")
+
+
+# ---------------------------------------------------------------------------
 # WindowScanner — high-level wiring (mocked)
 # ---------------------------------------------------------------------------
 
@@ -172,6 +228,63 @@ class TestWindowScanner:
             return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="err"),
         ), patch("window_scanner.time.sleep"):
             assert scanner.list_vscode_captions() is None
+
+    def test_perform_action_happy_path(self):
+        scanner = WindowScanner()
+
+        def fake_run(cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "loadScript" in joined:
+                return subprocess.CompletedProcess(cmd, 0, stdout="11", stderr="")
+            if "journalctl" in joined:
+                out = (
+                    "Apr 19 host kwin[1]: "
+                    f"{ACTION_LOG_PREFIX}x - ag-scripts - Visual Studio Code\n"
+                )
+                return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch(
+            "window_scanner.shutil.which", side_effect=lambda _: "/usr/bin/stub"
+        ), patch("window_scanner.subprocess.run", side_effect=fake_run), patch(
+            "window_scanner.time.sleep"
+        ):
+            assert (
+                scanner.perform_window_action("ag-scripts", ACTION_CLOSE) is True
+            )
+
+    def test_perform_action_returns_false_when_no_match(self):
+        scanner = WindowScanner()
+
+        def fake_run(cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "loadScript" in joined:
+                return subprocess.CompletedProcess(cmd, 0, stdout="12", stderr="")
+            if "journalctl" in joined:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="unrelated log line\n", stderr=""
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch(
+            "window_scanner.shutil.which", side_effect=lambda _: "/usr/bin/stub"
+        ), patch("window_scanner.subprocess.run", side_effect=fake_run), patch(
+            "window_scanner.time.sleep"
+        ):
+            assert (
+                scanner.perform_window_action("no-such-label", ACTION_ACTIVATE)
+                is False
+            )
+
+    def test_perform_action_rejects_unknown_action(self):
+        scanner = WindowScanner()
+        with pytest.raises(ValueError):
+            scanner.perform_window_action("any", "launch-nukes")
+
+    def test_perform_action_unavailable_tooling_returns_false(self):
+        scanner = WindowScanner()
+        with patch("window_scanner.shutil.which", return_value=None):
+            assert scanner.perform_window_action("any", ACTION_CLOSE) is False
 
     def test_returns_none_when_script_id_non_numeric(self):
         scanner = WindowScanner()
