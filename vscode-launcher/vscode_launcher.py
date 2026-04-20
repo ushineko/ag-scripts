@@ -27,6 +27,8 @@ from urllib.parse import unquote, urlparse
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction
+
+from window_scanner import WindowScanner, running_labels
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -47,7 +49,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 CONFIG_DIR = Path.home() / ".config" / "vscode-launcher"
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -79,6 +81,7 @@ class Workspace:
     path: str
     tmux_session: str = ""
     is_workspace_file: bool = False
+    is_running: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -418,8 +421,13 @@ class WorkspaceListWidget(QListWidget):
         layout.addWidget(checkbox)
 
         tmux_display = workspace.tmux_session or "—"
+        running_badge = (
+            " <span style='color:#4caf50'>● running</span>"
+            if workspace.is_running
+            else ""
+        )
         label = QLabel(
-            f"<b>{workspace.label}</b>"
+            f"<b>{workspace.label}</b>{running_badge}"
             f"<br><small>{workspace.path}</small>"
             f"<br><small>tmux: {tmux_display}</small>"
         )
@@ -452,12 +460,14 @@ class MainWindow(QMainWindow):
         config_manager: ConfigManager,
         launcher: Launcher,
         recents_reader: VSCodeRecentsReader,
+        window_scanner: WindowScanner | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"VSCode Launcher v{__version__}")
         self.config_manager = config_manager
         self.launcher = launcher
         self.recents_reader = recents_reader
+        self.window_scanner = window_scanner
 
         raw = self.config_manager.load()
         self.tmux_mappings: dict[str, str] = dict(raw.get("tmux_mappings", {}) or {})
@@ -536,6 +546,21 @@ class MainWindow(QMainWindow):
                 continue
             ws.tmux_session = self.tmux_mappings.get(ws.path, "")
             visible.append(ws)
+
+        # Mark which workspaces are currently open and sort running-first.
+        # VSCode's recents are returned in MRU order (most-recent-first); a
+        # stable sort by `is_running` groups running workspaces to the top
+        # while preserving MRU order within each group.
+        # The scanner returns None when KWin/journalctl aren't available;
+        # in that case we silently skip the running-state pass.
+        if self.window_scanner is not None:
+            captions = self.window_scanner.list_vscode_captions()
+            if captions is not None:
+                running = running_labels(captions, (w.label for w in visible))
+                for ws in visible:
+                    ws.is_running = ws.label in running
+                visible.sort(key=lambda w: 0 if w.is_running else 1)
+
         return visible
 
     def _reload_list(self) -> None:
@@ -654,12 +679,37 @@ class MainWindow(QMainWindow):
                 "The `code` command is not on PATH. Install VSCode or its CLI shim.",
             )
             return
-        launched = 0
+
         by_path = {w.path: w for w in self.workspaces}
-        for path in paths:
-            ws = by_path.get(path)
-            if ws is None:
-                continue
+        targets = [by_path[p] for p in paths if p in by_path]
+        already_running = [w for w in targets if w.is_running]
+
+        if already_running:
+            names = "\n".join(f"  • {w.label}" for w in already_running)
+            box = QMessageBox(self)
+            box.setWindowTitle("Already running")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText(
+                f"{len(already_running)} of the selected workspaces "
+                f"appear to be open already:\n\n{names}\n\n"
+                "Launch anyway (opens duplicate windows), skip them, or cancel?"
+            )
+            launch_anyway = box.addButton(
+                "Launch Anyway", QMessageBox.ButtonRole.AcceptRole
+            )
+            skip = box.addButton("Skip Running", QMessageBox.ButtonRole.DestructiveRole)
+            cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(skip)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is cancel:
+                return
+            if clicked is skip:
+                running_labels_set = {w.label for w in already_running}
+                targets = [w for w in targets if w.label not in running_labels_set]
+
+        launched = 0
+        for ws in targets:
             proc = self.launcher.launch_workspace(ws)
             if proc is not None:
                 launched += 1
@@ -707,7 +757,8 @@ def main() -> int:
     config = ConfigManager()
     launcher = Launcher()
     recents = VSCodeRecentsReader()
-    window = MainWindow(config, launcher, recents)
+    scanner = WindowScanner()
+    window = MainWindow(config, launcher, recents, window_scanner=scanner)
     window.show()
     return app.exec()
 

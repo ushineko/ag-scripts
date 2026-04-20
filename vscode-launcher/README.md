@@ -22,6 +22,7 @@ Solves three recurring pain points:
 ## Features
 
 - Reads your workspace list live from VSCode's own Recent history — nothing to maintain by hand
+- **Shows which workspaces are currently open**, with running ones sorted to the top and a `● running` badge — prompts before double-launching
 - PyQt6 GUI with multi-select checkboxes; bulk-launch with one click
 - Per-workspace tmux-session mapping, editable via a dropdown populated from `tmux list-sessions`
 - Hide / Unhide workspaces you don't want cluttering the launcher
@@ -92,7 +93,13 @@ VSCode keeps every workspace you've ever touched in its Recent list. To declutte
 
 ### Refreshing
 
-Click **Refresh** to re-read VSCode's state DB — useful after you've opened a new workspace in VSCode and want it to show up here without restarting the launcher.
+Click **Refresh** to re-read VSCode's state DB AND re-scan which VSCode windows are currently open — useful after you've opened or closed a workspace in VSCode and want the launcher to reflect the new state without restarting.
+
+### Running workspaces
+
+Each row shows a green `● running` badge when the workspace is already open in a VSCode window. Running workspaces sort ahead of the rest, and within each group (running / not running) MRU order from VSCode's Recent list is preserved.
+
+If you tick a running workspace and click Launch Selected (or Launch All while any are running), you get a 3-button prompt: **Launch Anyway** (accepts the duplicate), **Skip Running** (launches only the ones that aren't open), or **Cancel**. Detection uses KWin scripting via D-Bus — the same mechanism the sibling `vscode-gather` tool uses — and silently degrades (no badges, no prompt) if `qdbus6` or `journalctl` aren't available.
 
 ## How It Works
 
@@ -178,6 +185,12 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`). You are prompted before the config directory is deleted.
 
 ## Changelog
+
+### v1.3
+
+- New: running-workspace detection. The launcher enumerates VSCode windows via KWin scripting, marks each already-open workspace with a `● running` badge, and sorts running ones to the top. MRU order from VSCode's Recent list is preserved within each group (running then non-running, both MRU-ordered).
+- New: launching a workspace that is already open now shows a 3-button prompt (Launch Anyway / Skip Running / Cancel) instead of silently producing a duplicate VSCode window.
+- Feature degrades silently when `qdbus6` or `journalctl` are unavailable (no badges, no prompt).
 
 ### v1.2
 

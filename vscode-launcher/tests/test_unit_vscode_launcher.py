@@ -451,3 +451,76 @@ class TestMainWindowSmoke:
         window = MainWindow(cm, Launcher(), VSCodeRecentsReader(db_path=db_path))
         assert window.list_widget.count() == 1
         assert window.workspaces[0].path == "/home/u/git/a"
+
+    def test_running_workspaces_sort_first_preserving_mru(
+        self, qapp, tmp_path, fake_vscode_db
+    ):
+        """Ordering contract: running group first in MRU order, then non-running
+        in MRU order. Python's stable sort guarantees this."""
+        from vscode_launcher import MainWindow
+
+        db_path, build = fake_vscode_db
+        # VSCode recents are stored most-recent-first. Interleave running/not.
+        build(
+            [
+                {"folderUri": "file:///home/u/git/a"},  # not running (MRU 1)
+                {"folderUri": "file:///home/u/git/b"},  # RUNNING (MRU 2)
+                {"folderUri": "file:///home/u/git/c"},  # not running (MRU 3)
+                {"folderUri": "file:///home/u/git/d"},  # RUNNING (MRU 4)
+                {"folderUri": "file:///home/u/git/e"},  # not running (MRU 5)
+            ]
+        )
+        cm = ConfigManager(tmp_path / "workspaces.json")
+
+        class FakeScanner:
+            def list_vscode_captions(self):
+                return [
+                    "file.py - b - Visual Studio Code",
+                    "other.py - d - Visual Studio Code",
+                ]
+
+        window = MainWindow(
+            cm,
+            Launcher(),
+            VSCodeRecentsReader(db_path=db_path),
+            window_scanner=FakeScanner(),
+        )
+        paths = [w.path for w in window.workspaces]
+        # Running first in MRU order (b before d), then non-running in MRU order (a, c, e).
+        assert paths == [
+            "/home/u/git/b",
+            "/home/u/git/d",
+            "/home/u/git/a",
+            "/home/u/git/c",
+            "/home/u/git/e",
+        ]
+        assert [w.is_running for w in window.workspaces] == [
+            True,
+            True,
+            False,
+            False,
+            False,
+        ]
+
+    def test_scanner_none_result_does_not_break_list(
+        self, qapp, tmp_path, fake_vscode_db
+    ):
+        """If the scanner returns None (KWin/journalctl unavailable), the
+        list still renders with no running state."""
+        from vscode_launcher import MainWindow
+
+        db_path, build = fake_vscode_db
+        build([{"folderUri": "file:///home/u/git/a"}])
+
+        class NullScanner:
+            def list_vscode_captions(self):
+                return None
+
+        window = MainWindow(
+            ConfigManager(tmp_path / "workspaces.json"),
+            Launcher(),
+            VSCodeRecentsReader(db_path=db_path),
+            window_scanner=NullScanner(),
+        )
+        assert window.list_widget.count() == 1
+        assert window.workspaces[0].is_running is False
