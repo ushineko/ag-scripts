@@ -94,13 +94,17 @@ VSCode keeps every workspace you've ever touched in its Recent list. To declutte
 
 ### Refreshing
 
-Click **Refresh** to re-read VSCode's state DB AND re-scan which VSCode windows are currently open — useful after you've opened or closed a workspace in VSCode and want the launcher to reflect the new state without restarting.
+The running-state column auto-refreshes in the background every 5 seconds, so opening or closing a VSCode window shows up in the launcher within 5 s without user action. Rows update in place — no scroll or selection loss. Auto-refresh pauses while the launcher window is minimized.
+
+Click **Refresh** when you want the full pass: re-read VSCode's state DB (to pick up newly-added workspaces) AND re-sort the list so running rows move back to the top.
 
 ### Running workspaces
 
-Each row shows a green `● running` badge when the workspace is already open in a VSCode window. Running workspaces sort ahead of the rest, and within each group (running / not running) MRU order from VSCode's Recent list is preserved.
+The **Status** column shows `● running` (green) when the workspace is already open in a VSCode window. Running workspaces sort ahead of the rest, and within each group (running / not running) MRU order from VSCode's Recent list is preserved.
 
-If you tick a running workspace and click Launch Selected (or Launch All while any are running), you get a 3-button prompt: **Launch Anyway** (accepts the duplicate), **Skip Running** (launches only the ones that aren't open), or **Cancel**. Detection uses KWin scripting via D-Bus — the same mechanism the sibling `vscode-gather` tool uses — and silently degrades (no badges, no prompt) if `qdbus6` or `journalctl` aren't available.
+Running rows have their checkbox disabled — you can't accidentally bulk-re-launch something that's already open. Use the **Activate** button to bring the existing window to the front, or **Stop** to close it. If you genuinely want to open a duplicate window, right-click the row and choose **Launch**.
+
+Detection uses KWin scripting via D-Bus — the same mechanism the sibling `vscode-gather` tool uses — and silently degrades (no badges, no button filtering) if `qdbus6` or `journalctl` aren't available.
 
 ### Per-row actions
 
@@ -196,6 +200,33 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`). You are prompted before the config directory is deleted.
 
 ## Changelog
+
+### v1.8
+
+- New: **Launched** column between Status and Tmux showing how long ago each running workspace was opened (`5m ago`, `2h ago`, `3d ago`). Non-running rows show an em-dash.
+- Precedence: workspaces you open via the launcher's Start button (or context-menu Launch) get an exact, per-window timestamp recorded at spawn time. Workspaces VSCode already had open before the launcher started fall back to the VSCode-main-started time (same for all such windows — a lower bound, since KWin's per-window PID is really the main Electron process).
+- Relative times update in place on every 5 s auto-refresh tick without a full list rebuild.
+
+### v1.7
+
+- Refactor: the background auto-refresh introduced in v1.6 is now driven by a `QProcess` state machine instead of a `QThread` + worker. No threads are spawned; each subprocess call is event-driven via Qt's event loop.
+- Same 5 s polling cadence and no-UI-freeze guarantee, but with a strictly better failure mode: no PyQt thread/worker GC pitfalls, no `wrapped C/C++ object deleted` class of crash.
+- Behavior change: auto-refresh now re-sorts the list running-first when it detects a state change (a row flipping between running and not-running). Polls without state changes still leave the list untouched.
+- Internal: `WindowScanner` is now a `QObject` exposing `scan_finished`. The sync `list_vscode_captions()` is kept for the manual Refresh path.
+
+### v1.6
+
+- New: **background auto-refresh of running state** every 5 seconds. The status column, action buttons, and checkbox enablement for each row update without user interaction — open a VSCode window and the launcher reflects it within 5 s.
+- Rows update **in place**: no re-sort, no scroll / selection loss. Manual Refresh still does a full re-read + re-sort.
+- The scan runs on a background thread so the UI never freezes. No overhead while the launcher window is minimized.
+
+### v1.5
+
+- UI: replaced the single-column list with a 5-column grid — **Checkbox · Workspace · Status · Tmux · Actions**. Values line up cleanly across rows.
+- **Status** is now its own column (green `● running` or blank), replacing the inline badge next to the label.
+- Checkbox is disabled on running rows — you can't accidentally bulk-re-launch something that's already open. The old "Already running?" 3-button dialog is gone as a result.
+- Right-click Launch still works as an escape hatch if you intentionally want to duplicate a running window.
+- `Launch All` silently skips running workspaces.
 
 ### v1.4
 

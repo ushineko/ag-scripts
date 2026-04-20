@@ -16,10 +16,12 @@ tmux-session mappings and hide flags are persisted in this tool's own config.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,7 +30,13 @@ from urllib.parse import unquote, urlparse
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon
 
-from window_scanner import ACTION_ACTIVATE, ACTION_CLOSE, WindowScanner, running_labels
+from window_scanner import (
+    ACTION_ACTIVATE,
+    ACTION_CLOSE,
+    WindowScanner,
+    get_process_start_time,
+    running_labels,
+)
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -37,19 +45,19 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
+    QTableWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-__version__ = "1.4"
+__version__ = "1.8"
 
 CONFIG_DIR = Path.home() / ".config" / "vscode-launcher"
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -63,6 +71,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 GATHER_DELAY_MS = 1500
+AUTO_REFRESH_INTERVAL_MS = 5000
+
+# Enable with `VSCODE_LAUNCHER_DEBUG=1 vscode-launcher` for diagnostic logging
+# of the auto-refresh cycle (timer ticks, scan launches, result processing).
+_DEBUG = os.environ.get("VSCODE_LAUNCHER_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _dlog(msg: str) -> None:
+    if _DEBUG:
+        print(f"[vscl] {msg}", flush=True)
 
 VSCODE_DB_PATH = (
     Path.home() / ".config" / "Code" / "User" / "globalStorage" / "state.vscdb"
@@ -82,6 +100,39 @@ class Workspace:
     tmux_session: str = ""
     is_workspace_file: bool = False
     is_running: bool = False
+    # Unix timestamp (seconds since epoch) when the VSCode window backing this
+    # workspace was launched. Populated from /proc/<pid>/stat when the scan
+    # reports this workspace as running. None for non-running rows or when
+    # pid lookup fails (older KWin, race, permission).
+    launched_at: float | None = None
+
+
+def _normalize_scan_result(result: list) -> list[dict]:
+    """Accept either v1.8 entries `[{c, p}, ...]` or legacy captions
+    `["caption", ...]`. Always returns the entries shape."""
+    out: list[dict] = []
+    for item in result:
+        if isinstance(item, dict) and "c" in item:
+            out.append(item)
+        elif isinstance(item, str):
+            out.append({"c": item, "p": None})
+    return out
+
+
+def format_relative_time(ts: float | None, now: float | None = None) -> str:
+    """Short relative time string like '5m ago', '2h ago', '3d ago'.
+    Returns an em-dash for None inputs (non-running rows)."""
+    if ts is None:
+        return "—"
+    reference = now if now is not None else time.time()
+    delta = reference - ts
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    return f"{int(delta // 86400)}d ago"
 
 
 # ---------------------------------------------------------------------------
@@ -396,8 +447,26 @@ class TmuxSessionDialog(QDialog):
         return self.combo.currentText().strip()
 
 
-class WorkspaceListWidget(QListWidget):
-    """Read-only list of workspaces sourced from VSCode recents."""
+class WorkspaceTableWidget(QTableWidget):
+    """Grid of workspaces sourced from VSCode recents.
+
+    Columns (no header row — personal tool, column purposes are obvious):
+      0: Checkbox (disabled for running rows — running workspaces can't be
+         bulk-re-launched; user uses [Activate] / [Stop] buttons instead)
+      1: Workspace — label (bold) + path (small, 2nd line)
+      2: Status — "● running" (green) or blank
+      3: Launched — relative time since the VSCode window started (e.g.
+         "5m ago"), em-dash for non-running rows
+      4: Tmux session name (or em-dash)
+      5: Actions — [Activate][Stop] for running, [Start] for non-running
+    """
+
+    COL_CHECK = 0
+    COL_WORKSPACE = 1
+    COL_STATUS = 2
+    COL_LAUNCHED = 3
+    COL_TMUX = 4
+    COL_ACTIONS = 5
 
     # Emitted with the workspace path when a per-row button is clicked.
     start_requested = pyqtSignal(str)
@@ -405,78 +474,180 @@ class WorkspaceListWidget(QListWidget):
     activate_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+        super().__init__(0, 6, parent)
+        self.horizontalHeader().setVisible(False)
+        self.verticalHeader().setVisible(False)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        # Only take focus when the user actually clicks a row — otherwise Qt
-        # draws a "current item" indicator on the first row on startup, which
-        # looks confusingly similar to but distinct from actual selection.
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setShowGrid(False)
+        # Only take focus when the user clicks a row — otherwise Qt draws a
+        # "current item" indicator on the first row on startup.
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(self.COL_CHECK, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(self.COL_CHECK, 40)
+        header.setSectionResizeMode(self.COL_WORKSPACE, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(self.COL_STATUS, 90)
+        header.setSectionResizeMode(self.COL_LAUNCHED, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(self.COL_LAUNCHED, 100)
+        header.setSectionResizeMode(self.COL_TMUX, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(self.COL_TMUX, 160)
+        header.setSectionResizeMode(self.COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(self.COL_ACTIONS, 180)
+
+        self._path_by_row: dict[int, str] = {}
+
+    # --- population ---
+
+    def clear_workspaces(self) -> None:
+        self.setRowCount(0)
+        self._path_by_row.clear()
+
     def add_workspace_row(self, workspace: Workspace) -> None:
-        item = QListWidgetItem()
-        item.setData(Qt.ItemDataRole.UserRole, workspace.path)
-        self.addItem(item)
-        widget = self._build_row_widget(workspace)
-        item.setSizeHint(widget.sizeHint())
-        self.setItemWidget(item, widget)
+        row = self.rowCount()
+        self.insertRow(row)
+        self.setRowHeight(row, 54)
+        self._path_by_row[row] = workspace.path
 
-    def _build_row_widget(self, workspace: Workspace) -> QWidget:
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(6, 4, 6, 4)
+        self.setCellWidget(row, self.COL_CHECK, self._build_checkbox_cell(workspace))
+        self.setCellWidget(
+            row, self.COL_WORKSPACE, self._build_workspace_cell(workspace)
+        )
+        self.setCellWidget(row, self.COL_STATUS, self._build_status_cell(workspace))
+        self.setCellWidget(
+            row, self.COL_LAUNCHED, self._build_launched_cell(workspace)
+        )
+        self.setCellWidget(row, self.COL_TMUX, self._build_tmux_cell(workspace))
+        self.setCellWidget(row, self.COL_ACTIONS, self._build_actions_cell(workspace))
 
+    @staticmethod
+    def _build_checkbox_cell(workspace: Workspace) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         checkbox = QCheckBox()
         checkbox.setObjectName("select_checkbox")
+        # Running workspaces can't be bulk-launched — checkbox disabled.
+        # (Advanced: users who genuinely want to duplicate a window can use
+        # the right-click "Launch" context-menu item.)
+        if workspace.is_running:
+            checkbox.setEnabled(False)
         layout.addWidget(checkbox)
+        return container
 
-        tmux_display = workspace.tmux_session or "—"
-        running_badge = (
-            " <span style='color:#4caf50'>● running</span>"
+    @staticmethod
+    def _build_workspace_cell(workspace: Workspace) -> QWidget:
+        label = QLabel(
+            f"<b>{workspace.label}</b>"
+            f"<br><small style='color:gray'>{workspace.path}</small>"
+        )
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setContentsMargins(8, 0, 8, 0)
+        return label
+
+    @staticmethod
+    def _build_status_cell(workspace: Workspace) -> QWidget:
+        text = (
+            "<span style='color:#4caf50'>● running</span>"
             if workspace.is_running
             else ""
         )
-        label = QLabel(
-            f"<b>{workspace.label}</b>{running_badge}"
-            f"<br><small>{workspace.path}</small>"
-            f"<br><small>tmux: {tmux_display}</small>"
-        )
+        label = QLabel(text)
         label.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(label, stretch=1)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return label
+
+    @staticmethod
+    def _build_launched_cell(workspace: Workspace) -> QWidget:
+        label = QLabel(
+            format_relative_time(workspace.launched_at if workspace.is_running else None)
+        )
+        label.setContentsMargins(8, 0, 8, 0)
+        label.setStyleSheet("QLabel { color: gray; }")
+        return label
+
+    def refresh_launched_cells(
+        self, workspaces_by_path: dict[str, "Workspace"]
+    ) -> None:
+        """Rewrite only the Launched column for every row. Called on each
+        auto-refresh tick so relative times ('5m ago' → '6m ago') stay
+        current without rebuilding the whole table.
+
+        `workspaces_by_path` must contain the current Workspace objects with
+        up-to-date `launched_at` values."""
+        for row in range(self.rowCount()):
+            path = self._path_by_row.get(row)
+            if path is None:
+                continue
+            ws = workspaces_by_path.get(path)
+            if ws is None:
+                continue
+            self.setCellWidget(row, self.COL_LAUNCHED, self._build_launched_cell(ws))
+
+    @staticmethod
+    def _build_tmux_cell(workspace: Workspace) -> QWidget:
+        label = QLabel(workspace.tmux_session or "—")
+        label.setContentsMargins(8, 0, 8, 0)
+        return label
+
+    def _build_actions_cell(self, workspace: Workspace) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(4)
 
         path = workspace.path
         if workspace.is_running:
             btn_activate = QPushButton("Activate")
             btn_activate.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn_activate.clicked.connect(lambda _=False, p=path: self.activate_requested.emit(p))
+            btn_activate.clicked.connect(
+                lambda _=False, p=path: self.activate_requested.emit(p)
+            )
             layout.addWidget(btn_activate)
 
             btn_stop = QPushButton("Stop")
             btn_stop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn_stop.clicked.connect(lambda _=False, p=path: self.stop_requested.emit(p))
+            btn_stop.clicked.connect(
+                lambda _=False, p=path: self.stop_requested.emit(p)
+            )
             layout.addWidget(btn_stop)
         else:
             btn_start = QPushButton("Start")
             btn_start.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn_start.clicked.connect(lambda _=False, p=path: self.start_requested.emit(p))
+            btn_start.clicked.connect(
+                lambda _=False, p=path: self.start_requested.emit(p)
+            )
             layout.addWidget(btn_start)
 
-        return widget
+        return container
+
+    # --- query helpers ---
+
+    def path_at_row(self, row: int) -> str | None:
+        return self._path_by_row.get(row)
 
     def checked_workspace_paths(self) -> list[str]:
         paths: list[str] = []
-        for i in range(self.count()):
-            item = self.item(i)
-            w = self.itemWidget(item)
-            if w is None:
+        for row in range(self.rowCount()):
+            container = self.cellWidget(row, self.COL_CHECK)
+            if container is None:
                 continue
-            cb = w.findChild(QCheckBox, "select_checkbox")
+            cb = container.findChild(QCheckBox, "select_checkbox")
             if cb is not None and cb.isChecked():
-                paths.append(item.data(Qt.ItemDataRole.UserRole))
+                p = self._path_by_row.get(row)
+                if p:
+                    paths.append(p)
         return paths
 
     def all_workspace_paths(self) -> list[str]:
         return [
-            self.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.count())
+            self._path_by_row[row]
+            for row in range(self.rowCount())
+            if row in self._path_by_row
         ]
 
 
@@ -494,6 +665,20 @@ class MainWindow(QMainWindow):
         self.launcher = launcher
         self.recents_reader = recents_reader
         self.window_scanner = window_scanner
+        # Scanner is a QObject that emits scan_finished when its QProcess
+        # state machine completes. No threads, no GC invariants. (Test fakes
+        # sometimes implement only the sync API, so guard the connect.)
+        if self.window_scanner is not None and hasattr(
+            self.window_scanner, "scan_finished"
+        ):
+            self.window_scanner.scan_finished.connect(self._on_background_scan_done)
+        self._auto_refresh_timer: QTimer | None = None
+        # Per-path launch timestamps we record ourselves when the launcher
+        # spawns `code --new-window`. Preferred source for the Launched
+        # column since KWin reports the main-VSCode PID for every window
+        # (Electron single-process-owns-all-windows) — /proc on that PID
+        # would show the same "VSCode started" time for every row.
+        self._launched_at_by_path: dict[str, float] = {}
 
         raw = self.config_manager.load()
         self.tmux_mappings: dict[str, str] = dict(raw.get("tmux_mappings", {}) or {})
@@ -509,6 +694,93 @@ class MainWindow(QMainWindow):
         self.workspaces: list[Workspace] = []
         self._build_ui()
         self._refresh()
+        self._start_auto_refresh()
+
+    def _start_auto_refresh(self) -> None:
+        """Poll the window scanner on an interval so the running-state column
+        updates without user interaction. No-ops if no scanner is configured."""
+        if self.window_scanner is None:
+            _dlog("auto-refresh disabled: no window_scanner configured")
+            return
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.timeout.connect(self._trigger_background_scan)
+        self._auto_refresh_timer.start(AUTO_REFRESH_INTERVAL_MS)
+        _dlog(f"auto-refresh timer started at {AUTO_REFRESH_INTERVAL_MS} ms")
+
+    def _trigger_background_scan(self) -> None:
+        """Kick off an async scan unless the window is hidden. The scanner
+        self-manages its in-flight state, so reentrance guards aren't needed
+        here — a second call while a scan is in progress is a silent no-op."""
+        if self.window_scanner is None:
+            return
+        if not self.isVisible():
+            _dlog("tick: skipping, window not visible")
+            return
+        _dlog("tick: starting async scan")
+        self.window_scanner.start_async_scan()
+
+    def _on_background_scan_done(self, result: Any) -> None:
+        """If any row's running state changed, re-read VSCode recents (to
+        pick up fresh MRU — a just-launched workspace bumps to position 0
+        in state.vscdb) and rebuild the list so it moves to the top of the
+        running group.
+
+        When no flips are detected, we still refresh the Launched column in
+        place so its relative times ('5m ago' → '6m ago') stay current.
+        """
+        if result is None:
+            _dlog("scan result: None (scanner unavailable)")
+            return
+        # Accept either the v1.8 entries shape (list of dicts) or the legacy
+        # captions shape (list of strings) — test fakes sometimes still use
+        # the latter.
+        entries = _normalize_scan_result(result)
+        captions = [e["c"] for e in entries]
+        running = running_labels(captions, (w.label for w in self.workspaces))
+        flips = sum(
+            1 for ws in self.workspaces if ws.is_running != (ws.label in running)
+        )
+        if flips > 0:
+            visible = self._load_visible_workspaces()
+            self._apply_running_and_sort(visible, entries)
+            self.workspaces = visible
+            self._reload_list()
+        else:
+            # Refresh launched_at for running rows (process starts don't
+            # shift, but this catches races where pid was temporarily None)
+            # and update only the Launched column in place.
+            self._refresh_launched_at(entries)
+            self.list_widget.refresh_launched_cells(
+                {w.path: w for w in self.workspaces}
+            )
+        _dlog(
+            f"scan result: {len(entries)} entry(ies), "
+            f"running={sorted(running)}, {flips} flip(s)"
+            + (
+                " (recents re-read + resorted)"
+                if flips > 0
+                else " (launched column refreshed)"
+            )
+        )
+
+    def _refresh_launched_at(self, entries: list[dict]) -> None:
+        """Re-derive each running workspace's launched_at from the latest
+        scan entries (in case pid was None on a prior scan but became
+        available later). Non-running workspaces get launched_at = None."""
+        pid_by_label: dict[str, int | None] = {}
+        for entry in entries:
+            parts = entry["c"].split(" - ")
+            for ws in self.workspaces:
+                if ws.label not in pid_by_label and ws.label in parts:
+                    pid_by_label[ws.label] = entry.get("p")
+                    break
+        for ws in self.workspaces:
+            if ws.is_running:
+                pid = pid_by_label.get(ws.label)
+                if isinstance(pid, int) and ws.launched_at is None:
+                    ws.launched_at = get_process_start_time(pid)
+            else:
+                ws.launched_at = None
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -553,10 +825,10 @@ class MainWindow(QMainWindow):
         self.empty_label.setStyleSheet("QLabel { color: gray; padding: 40px; }")
         layout.addWidget(self.empty_label)
 
-        self.list_widget = WorkspaceListWidget()
+        self.list_widget = WorkspaceTableWidget()
         self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
-        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.list_widget.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.list_widget.start_requested.connect(self._on_start_requested)
         self.list_widget.stop_requested.connect(self._on_stop_requested)
         self.list_widget.activate_requested.connect(self._on_activate_requested)
@@ -567,7 +839,10 @@ class MainWindow(QMainWindow):
         self.workspaces = self._build_workspace_list()
         self._reload_list()
 
-    def _build_workspace_list(self) -> list[Workspace]:
+    def _load_visible_workspaces(self) -> list[Workspace]:
+        """Read recents, apply hidden-path filter and tmux mappings. Running
+        state is *not* marked here — callers layer that on via
+        `_apply_running_and_sort` using either sync or async scan data."""
         recents = self.recents_reader.read_recents()
         visible: list[Workspace] = []
         for ws in recents:
@@ -575,31 +850,83 @@ class MainWindow(QMainWindow):
                 continue
             ws.tmux_session = self.tmux_mappings.get(ws.path, "")
             visible.append(ws)
+        return visible
 
-        # Mark which workspaces are currently open and sort running-first.
-        # VSCode's recents are returned in MRU order (most-recent-first); a
-        # stable sort by `is_running` groups running workspaces to the top
-        # while preserving MRU order within each group.
-        # The scanner returns None when KWin/journalctl aren't available;
-        # in that case we silently skip the running-state pass.
-        if self.window_scanner is not None:
+    def _apply_running_and_sort(
+        self, workspaces: list[Workspace], entries: list[dict]
+    ) -> None:
+        """Mark each workspace's is_running + launched_at based on scan
+        `entries` (list of {"c": caption, "p": pid}) and sort running-first.
+        Stable sort → MRU order preserved within each group, which —
+        combined with a fresh read of VSCode recents — makes a just-launched
+        workspace bubble to the top of the running group.
+
+        `launched_at` precedence:
+          1. An in-memory timestamp we recorded when the launcher itself
+             spawned `code --new-window` (exact, per-window)
+          2. /proc fallback on the window's PID (KWin reports the main
+             VSCode PID for every window, so this is "VSCode-started-at"
+             — a lower bound that's still informative when the window was
+             opened before the launcher itself started)
+          3. None (em-dash in the UI) if neither is available
+        """
+        captions = [e["c"] for e in entries]
+        pid_by_label: dict[str, int | None] = {}
+        for entry in entries:
+            for ws in workspaces:
+                if ws.label not in pid_by_label and ws.label in entry["c"].split(
+                    " - "
+                ):
+                    pid_by_label[ws.label] = entry.get("p")
+                    break
+        running = running_labels(captions, (w.label for w in workspaces))
+        for ws in workspaces:
+            ws.is_running = ws.label in running
+            if ws.is_running:
+                tracked = self._launched_at_by_path.get(ws.path)
+                if tracked is not None:
+                    ws.launched_at = tracked
+                else:
+                    pid = pid_by_label.get(ws.label)
+                    ws.launched_at = (
+                        get_process_start_time(pid)
+                        if isinstance(pid, int)
+                        else None
+                    )
+            else:
+                ws.launched_at = None
+                # A workspace that's no longer running invalidates our tracked
+                # timestamp — if it gets relaunched later, we'll record afresh.
+                self._launched_at_by_path.pop(ws.path, None)
+        workspaces.sort(key=lambda w: 0 if w.is_running else 1)
+
+    def _build_workspace_list(self) -> list[Workspace]:
+        """Called by manual Refresh and by __init__. Uses the sync scan path
+        so the initial populate is deterministic (no event loop dance)."""
+        visible = self._load_visible_workspaces()
+        if self.window_scanner is not None and hasattr(
+            self.window_scanner, "list_vscode_entries"
+        ):
+            entries = self.window_scanner.list_vscode_entries()
+            if entries is not None:
+                self._apply_running_and_sort(visible, entries)
+        elif self.window_scanner is not None:
+            # Test fakes that only implement the legacy captions-only API
             captions = self.window_scanner.list_vscode_captions()
             if captions is not None:
-                running = running_labels(captions, (w.label for w in visible))
-                for ws in visible:
-                    ws.is_running = ws.label in running
-                visible.sort(key=lambda w: 0 if w.is_running else 1)
-
+                self._apply_running_and_sort(
+                    visible, [{"c": c, "p": None} for c in captions]
+                )
         return visible
 
     def _reload_list(self) -> None:
-        self.list_widget.clear()
+        self.list_widget.clear_workspaces()
         for w in self.workspaces:
             self.list_widget.add_workspace_row(w)
         # Start with no current/selected row so Qt doesn't show the (subtle)
         # "current item" indicator on the first row by default. A row only
         # becomes highlighted when the user actively clicks one.
-        self.list_widget.setCurrentRow(-1)
+        self.list_widget.setCurrentCell(-1, -1)
         self.list_widget.clearSelection()
 
         if self.workspaces:
@@ -627,25 +954,26 @@ class MainWindow(QMainWindow):
             self.empty_label.setVisible(True)
 
     def _current_workspace(self) -> Workspace | None:
-        item = self.list_widget.currentItem()
-        if item is None:
+        row = self.list_widget.currentRow()
+        if row < 0:
             return None
-        path = item.data(Qt.ItemDataRole.UserRole)
-        for w in self.workspaces:
-            if w.path == path:
-                return w
-        return None
+        path = self.list_widget.path_at_row(row)
+        if path is None:
+            return None
+        return self._find_workspace_by_path(path)
 
-    def _on_item_double_clicked(self, _item: Any) -> None:
+    def _on_cell_double_clicked(self, _row: int, _col: int) -> None:
         self._set_tmux_for_current()
 
     def _show_context_menu(self, pos: Any) -> None:
-        item = self.list_widget.itemAt(pos)
-        if item is None:
+        row = self.list_widget.rowAt(pos.y())
+        if row < 0:
             return
-        self.list_widget.setCurrentItem(item)
+        self.list_widget.selectRow(row)
         menu = QMenu(self)
-        menu.addAction("Launch", self._launch_current)
+        # Context-menu Launch is the power-user escape hatch: it forces a
+        # launch even for running workspaces, producing a duplicate window.
+        menu.addAction("Launch", lambda: self._launch_current(allow_running=True))
         menu.addAction("Set Tmux Session…", self._set_tmux_for_current)
         menu.addSeparator()
         menu.addAction("Hide", self._hide_current)
@@ -682,14 +1010,17 @@ class MainWindow(QMainWindow):
         self._save()
         self._refresh()
 
-    def _launch_current(self) -> None:
+    def _launch_current(self, allow_running: bool = True) -> None:
         ws = self._current_workspace()
         if ws is None:
             return
-        self._launch_paths([ws.path])
+        self._launch_paths([ws.path], allow_running=allow_running)
 
     def _on_start_requested(self, path: str) -> None:
-        self._launch_paths([path])
+        # Per-row Start button only appears on non-running rows, so skipping
+        # running would be a no-op. Pass allow_running=True to be explicit
+        # that this intentional single-row start should always proceed.
+        self._launch_paths([path], allow_running=True)
 
     def _on_stop_requested(self, path: str) -> None:
         ws = self._find_workspace_by_path(path)
@@ -728,7 +1059,7 @@ class MainWindow(QMainWindow):
             return
         self._launch_paths(paths)
 
-    def _launch_paths(self, paths: list[str]) -> None:
+    def _launch_paths(self, paths: list[str], allow_running: bool = False) -> None:
         if not shutil.which("code"):
             QMessageBox.critical(
                 self,
@@ -739,36 +1070,22 @@ class MainWindow(QMainWindow):
 
         by_path = {w.path: w for w in self.workspaces}
         targets = [by_path[p] for p in paths if p in by_path]
-        already_running = [w for w in targets if w.is_running]
-
-        if already_running:
-            names = "\n".join(f"  • {w.label}" for w in already_running)
-            box = QMessageBox(self)
-            box.setWindowTitle("Already running")
-            box.setIcon(QMessageBox.Icon.Question)
-            box.setText(
-                f"{len(already_running)} of the selected workspaces "
-                f"appear to be open already:\n\n{names}\n\n"
-                "Launch anyway (opens duplicate windows), skip them, or cancel?"
-            )
-            launch_anyway = box.addButton(
-                "Launch Anyway", QMessageBox.ButtonRole.AcceptRole
-            )
-            skip = box.addButton("Skip Running", QMessageBox.ButtonRole.DestructiveRole)
-            cancel = box.addButton(QMessageBox.StandardButton.Cancel)
-            box.setDefaultButton(skip)
-            box.exec()
-            clicked = box.clickedButton()
-            if clicked is cancel:
-                return
-            if clicked is skip:
-                running_labels_set = {w.label for w in already_running}
-                targets = [w for w in targets if w.label not in running_labels_set]
+        if not allow_running:
+            # Bulk launch paths (Launch Selected / Launch All) silently skip
+            # running workspaces — they can't be re-launched into duplicate
+            # windows without the user explicitly using the context-menu
+            # "Launch" action. The checkbox is disabled on running rows as
+            # the primary signal, so this branch normally filters nothing.
+            targets = [w for w in targets if not w.is_running]
 
         launched = 0
         for ws in targets:
             proc = self.launcher.launch_workspace(ws)
             if proc is not None:
+                # Record our own launch timestamp for this path — the auto-
+                # refresh uses this in preference to /proc (which can only
+                # give us "when VSCode itself started", not per-window).
+                self._launched_at_by_path[ws.path] = time.time()
                 launched += 1
         if launched > 0:
             QTimer.singleShot(GATHER_DELAY_MS, self._run_gather)
@@ -798,6 +1115,10 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: Any) -> None:
+        if self._auto_refresh_timer is not None:
+            self._auto_refresh_timer.stop()
+        # No thread to wait on — any in-flight QProcess will be cleaned up
+        # by the scanner's parent-child tree when the app exits.
         self._save()
         super().closeEvent(event)
 
