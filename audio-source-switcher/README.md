@@ -121,23 +121,31 @@ python3 audio_source_switcher.py --connect "AirPods Pro"
 
 To ensure your volume keys control the hardware (bypassing JamesDSP), you must rebind them to this app.
 
-1.  **Open Shortcuts**: Go to **System Settings** -> **Shortcuts**.
-2.  **Unbind Defaults**:
-    -   Search for **"Audio Volume"**.
-    -   Find "Volume Up" and set it to **None** (or Custom).
-    -   Find "Volume Down" and set it to **None**.
-3.  **Create Custom Shortcuts**:
-    -   Click **Add New**.
-    -   **Name**: "Smart Volume Up".
-    -   **Command**: `python3 /path/to/audio-source-switcher/audio_source_switcher.py --vol-up`
-    -   **Shortcut**: Press your physical `Volume Up` key.
-    -   Repeat for "Smart Volume Down" using `--vol-down`.
+**Step 1 — Release Plasma's default Volume Up/Down bindings.**
+
+The installer can do this idempotently (originals backed up to `~/.config/audio-source-switcher/volume-keys-backup.ini`):
+
+```bash
+./install.sh --bind-volume-keys
+```
+
+Then **log out and back in** so `kglobalaccel` picks up the change. To reverse later: `./uninstall.sh --unbind-volume-keys`. A full `./uninstall.sh` also restores the originals automatically.
+
+If you'd rather do it manually: **System Settings → Shortcuts → Audio Volume**, set *Increase Volume* and *Decrease Volume* to **None**.
+
+**Step 2 — Create custom shortcuts.**
+
+1. **System Settings → Shortcuts → Add New → Command**.
+2. **Trigger**: press your physical `Volume Up` key (or twist your USB volume knob).
+3. **Command**: `audio-source-switcher --vol-up` (the installer puts a symlink in `~/.local/bin`).
+4. Repeat for `Volume Down` → `audio-source-switcher --vol-down`.
+5. Optional: also bind `Meta + Numpad +` / `Meta + Numpad -` to the same commands for a keyboard-only fallback.
 
 > [!TIP]
 > **Locked Media Keys?**
 > If your system refuses to unbind the standard media keys (e.g., Fn+F12), try binding a combination like `Alt+F12` (or `Alt+VolumeUp`) instead. This is often easier to configure and reliable on all keyboards.
 
-**Note**: The app will now show a visual satisfaction bar (OSD) when you change volume, confirming it's working.
+**Note**: The app will show a visual satisfaction bar (OSD) when you change volume, confirming it's working. Plasma's own audio OSD may also pop up showing `jamesdsp_sink` at 100%; this is cosmetic — the real hardware volume change is what the app's OSD reports.
 
 - Python 3
 - `PyQt6`
@@ -178,6 +186,14 @@ To ensure your volume keys control the hardware (bypassing JamesDSP), you must r
 Device priority and settings are saved to `~/.config/audio-source-switcher/config.json`.
 
 ## Changelog
+
+### v12.1
+
+- **Volume Slider Fix**: Clicking the slider groove, pressing arrow keys, or scrolling the mouse wheel now actually applies the volume change. Previously only dragging the handle worked, because the app listened to `sliderReleased` (which does not fire for groove-clicks or page-step events).
+- **Volume Slider Range**: Extended from 0-100% to 0-150% to match the backend's 150% cap.
+- **CLI Symlink**: `install.sh` now drops a symlink at `~/.local/bin/audio-source-switcher`, so KDE custom shortcuts can use a stable command (no hardcoded paths).
+- **Volume Key Rebinding**: New optional `install.sh --bind-volume-keys` releases Plasma's default `Increase/Decrease Volume` shortcuts (kmix component) so you can bind your USB volume knob or media keys directly to `--vol-up` / `--vol-down`. Originals are backed up and restored by `uninstall.sh --unbind-volume-keys` (or on full uninstall).
+- **Docs**: Rewrote the "Override System Volume Shortcuts" section to reflect the new installer flag and symlink command.
 
 ### v12.0
 - **Module Split**: Refactored monolithic 2500-line single file into a proper Python package (`audio_source_switcher/`) with separate modules for controllers, GUI, config, and CLI.

@@ -136,7 +136,7 @@ class MainWindow(QMainWindow):
         vol_layout.addWidget(self.vol_label)
 
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
-        self.vol_slider.setRange(0, 100)
+        self.vol_slider.setRange(0, 150)
         self.vol_slider.valueChanged.connect(self.on_vol_slider_changed)
         self.vol_slider.sliderReleased.connect(self.on_vol_slider_released)
         vol_layout.addWidget(self.vol_slider)
@@ -247,9 +247,16 @@ class MainWindow(QMainWindow):
 
     def on_vol_slider_changed(self, value: int):
         self.vol_label.setText(f"Volume: {value}%")
+        # sliderReleased only fires for handle drags. Click-on-groove, keyboard,
+        # and wheel emit valueChanged without any press/release — push here when
+        # the user isn't mid-drag so those paths actually apply.
+        if not self.vol_slider.isSliderDown():
+            self._apply_slider_volume(value)
 
     def on_vol_slider_released(self):
-        val = self.vol_slider.value()
+        self._apply_slider_volume(self.vol_slider.value())
+
+    def _apply_slider_volume(self, val: int):
         target_name = self.get_actual_active_sink_name()
         if target_name:
             print(f"Setting volume of {target_name} to {val}%")
@@ -346,7 +353,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 12.0</b></p>
+            <p><b>Version 12.1</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
