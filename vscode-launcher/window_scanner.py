@@ -1,13 +1,16 @@
-"""KWin-backed enumeration of currently-open VSCode windows.
+"""Window enumeration + window actions for vscode-launcher.
 
-Loads a small KWin script via D-Bus that dumps the captions of every VSCode
-window (`resourceClass == "code"`) to the compositor log, then reads the log
-line back through journalctl and parses the JSON payload.
+v2.0: scanning switched from KWin-scripting-via-journalctl to VSCode's own
+internal IPC protocol (see `vscode_ipc.py`). The new path is ~170× faster
+(~3 ms vs ~500 ms), returns accurate per-window renderer PIDs and real
+folder URIs, and works on any platform where VSCode itself runs. The
+entire v1.6/v1.7/v1.8.1 machinery — QProcess state machine, per-scan
+nonces, journalctl-race workaround — is no longer needed and has been
+removed.
 
-Mirrors the approach used by the sibling `vscode-gather` tool, which has
-proven reliable on KDE Plasma 6 (Wayland). All failure modes return None
-so callers can gracefully degrade (no running-state shown) when KWin or
-journalctl are unavailable.
+Actions (Close / Activate) still use KWin scripting. Porting them to IPC
+(`launch.start` for activate via `--reuse-window`, unknown for close)
+is a separate investigation.
 """
 
 from __future__ import annotations
@@ -18,75 +21,27 @@ import shutil
 import subprocess
 import tempfile
 import time
-import uuid
 from typing import Iterable
 
-from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
+from vscode_ipc import list_vscode_windows
+# Re-exported so existing callers keep working after the move to
+# platform_support.py. New code should import directly from platform_support.
+from platform_support import process_start_time as get_process_start_time
 
-SCRIPT_NAME = "vscode-launcher-scanner"
 ACTION_SCRIPT_NAME = "vscode-launcher-action"
-LOG_PREFIX = "VSCL_CAPTIONS:"
-# Per-scan markers look like "VSCL_CAPTIONS_<nonce>:". A unique nonce per scan
-# prevents the journal-race bug where a previous scan's log line is still in
-# `journalctl --since "3 seconds ago"` output but the current scan's line
-# hasn't flushed yet — without a nonce we'd accept the stale line.
-SCAN_MARKER_PREFIX = "VSCL_CAPTIONS_"
 ACTION_LOG_PREFIX = "VSCL_ACTION_OK:"
-
-
-def _new_scan_nonce() -> str:
-    return uuid.uuid4().hex[:12]
-
-
-def build_enumerate_script(nonce: str) -> str:
-    """Build the KWin JS enumeration script with `nonce` baked into the log
-    marker so stale journal lines can be unambiguously rejected."""
-    marker = SCAN_MARKER_PREFIX + nonce + ":"
-    return (
-        "(function() {"
-        "  var windows = workspace.windowList();"
-        "  var entries = [];"
-        "  for (var i = 0; i < windows.length; i++) {"
-        "    var w = windows[i];"
-        '    if (w.resourceClass !== "code") continue;'
-        "    if (w.skipTaskbar || w.specialWindow) continue;"
-        "    entries.push({c: w.caption, p: w.pid});"
-        "  }"
-        '  console.log("%s" + JSON.stringify(entries));'
-        "})();"
-    ) % marker
 
 ACTION_CLOSE = "close"
 ACTION_ACTIVATE = "activate"
 
-# Kept for test compatibility — legacy tests inject journal text using the
-# bare `VSCL_CAPTIONS:` prefix (pre-nonce). Production scans always use
-# `build_enumerate_script(nonce)` and the nonce-aware parser.
-KWIN_ENUMERATE_SCRIPT = """
-(function() {
-    var windows = workspace.windowList();
-    var entries = [];
-    for (var i = 0; i < windows.length; i++) {
-        var w = windows[i];
-        if (w.resourceClass !== "code") continue;
-        if (w.skipTaskbar || w.specialWindow) continue;
-        entries.push({c: w.caption, p: w.pid});
-    }
-    console.log("%s" + JSON.stringify(entries));
-})();
-""" % LOG_PREFIX
-
 
 def _build_action_script(label: str, action: str) -> str:
-    """Return a KWin JS script that finds the first VSCode window whose caption
-    contains `label` as a ` - `-separated token and performs the named action.
+    """Build the KWin JS script that closes or activates the first VSCode
+    window whose caption contains `label` as a ` - `-separated token.
 
-    `label` is JSON-encoded so embedded quotes, backslashes, and newlines are
-    safe in the JS source.
+    `label` is JSON-encoded to safely handle quotes / newlines / backslashes.
     """
     label_literal = json.dumps(label)
-    # Pick the action branch at generation time so the script doesn't need to
-    # string-compare on each iteration.
     if action == ACTION_CLOSE:
         action_js = "w.closeWindow();"
     elif action == ACTION_ACTIVATE:
@@ -117,12 +72,9 @@ def _build_action_script(label: str, action: str) -> str:
 
 
 def caption_matches_label(caption: str, label: str) -> bool:
-    """Return True if `label` appears as a whole token in a VSCode window caption.
-
-    VSCode captions look like `<file> - <label> - Visual Studio Code`. A direct
-    substring check would produce false positives for labels that are prefixes
-    of others (e.g. `aiq-ralph` inside `aiq-ralphbox`). Splitting on the
-    well-known ` - ` delimiter and checking token equality avoids that.
+    """Return True if `label` appears as a whole ` - `-separated token in a
+    VSCode window caption. Token-split instead of substring so that e.g.
+    `aiq-ralph` doesn't spuriously match an `aiq-ralphbox` window's caption.
     """
     if not label or not caption:
         return False
@@ -135,221 +87,86 @@ def running_labels(captions: Iterable[str], labels: Iterable[str]) -> set[str]:
     return {label for label in labels if any(caption_matches_label(c, label) for c in cap_list)}
 
 
-class WindowScanner(QObject):
-    """Enumerate VSCode window captions via KWin scripting.
+def action_succeeded(journal_text: str) -> bool:
+    """True if any `VSCL_ACTION_OK:` marker appears in the recent log."""
+    if not journal_text:
+        return False
+    return any(ACTION_LOG_PREFIX in line for line in journal_text.splitlines())
 
-    Exposes two APIs for the same operation:
 
-    * `start_async_scan()` — event-driven. Result delivered via the
-      `scan_finished` signal. Uses QProcess, so no thread is spawned. This
-      is what the background auto-refresh path uses — it can be invoked
-      every N seconds without blocking the UI thread or tripping the PyQt
-      QThread + QObject worker GC invariants.
-    * `list_vscode_captions()` — synchronous, blocks on subprocess calls.
-      Kept for rare sync callers (manual Refresh at startup, tests).
+def _ipc_entries_to_legacy_shape(entries: list[dict] | None) -> list[dict] | None:
+    """Translate `vscode_ipc.WindowEntry` → the `{c: caption, p: pid}` shape
+    MainWindow has always consumed. Keeps the backend swap invisible to the
+    rest of the app."""
+    if entries is None:
+        return None
+    out: list[dict] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        title = e.get("title")
+        pid = e.get("pid")
+        if isinstance(title, str):
+            out.append(
+                {
+                    "c": title,
+                    "p": int(pid) if isinstance(pid, int) else None,
+                }
+            )
+    return out
 
-    The two implementations share the parsing helpers (`_build_action_script`,
-    `parse_captions_from_journal`, etc.) but the subprocess/event-loop
-    plumbing is separate because mixing synchronous `subprocess.run` with
-    asynchronous `QProcess` in one function is a footgun.
+
+class WindowScanner:
+    """Enumerate VSCode windows (via IPC) and perform window actions (via KWin).
+
+    Scanning is synchronous and fast enough (~3 ms) to invoke directly from
+    the UI thread — no QThread, no QProcess, no signals required. Actions
+    (Close / Activate) still use KWin scripting; see perform_window_action.
     """
-
-    # Payload: list of {"c": caption, "p": pid | None} dicts, or None on failure.
-    scan_finished = pyqtSignal(object)
 
     def __init__(
         self,
         qdbus_cmd: str = "qdbus6",
         kwin_journal_unit: str = "plasma-kwin_wayland",
-        parent: QObject | None = None,
     ) -> None:
-        super().__init__(parent)
         self.qdbus_cmd = qdbus_cmd
         self.kwin_journal_unit = kwin_journal_unit
-        # Async state machine — set during an in-flight scan.
-        self._scan_in_progress = False
-        self._script_path: str | None = None
-        self._script_id: int | None = None
-        self._scan_nonce: str | None = None
-        self._load_proc: QProcess | None = None
-        self._run_proc: QProcess | None = None
-        self._log_proc: QProcess | None = None
-        self._delay_timer: QTimer | None = None
 
     def available(self) -> bool:
-        return bool(shutil.which(self.qdbus_cmd) and shutil.which("journalctl"))
+        """Scanning is always available — the IPC path degrades to []
+        when VSCode isn't running. (Actions need qdbus6, but callers
+        don't need to check availability for reads.)"""
+        return True
 
     # ------------------------------------------------------------------
-    # Async (event-driven) scan — preferred for the background auto-refresh.
+    # Scanning (IPC)
     # ------------------------------------------------------------------
 
-    def start_async_scan(self) -> None:
-        """Start a non-blocking scan. Result arrives via `scan_finished`.
+    def list_vscode_entries(self) -> list[dict] | None:
+        """Return `[{c: caption, p: pid}, ...]` for every open VSCode window,
+        or None on transient IPC failure. Returns [] when VSCode isn't
+        running (no socket found)."""
+        entries = list_vscode_windows()
+        return _ipc_entries_to_legacy_shape(entries)
 
-        If a scan is already in flight, the call is a silent no-op — callers
-        don't need their own reentrance guards.
-        """
-        if self._scan_in_progress:
-            return
-        if not self.available():
-            self.scan_finished.emit(None)
-            return
-
-        self._scan_in_progress = True
-        self._scan_nonce = _new_scan_nonce()
-        self._script_path = self._write_script(
-            build_enumerate_script(self._scan_nonce)
-        )
-        if self._script_path is None:
-            self._finish_async(None)
-            return
-
-        self._load_proc = QProcess(self)
-        self._load_proc.finished.connect(self._on_load_finished)
-        self._load_proc.errorOccurred.connect(self._on_async_error)
-        self._load_proc.start(
-            self.qdbus_cmd,
-            [
-                "org.kde.KWin",
-                "/Scripting",
-                "org.kde.kwin.Scripting.loadScript",
-                self._script_path,
-                SCRIPT_NAME,
-            ],
-        )
-
-    def _on_load_finished(self, exit_code: int, _exit_status: object) -> None:
-        if exit_code != 0 or self._load_proc is None:
-            self._finish_async(None)
-            return
-        raw = bytes(self._load_proc.readAllStandardOutput()).decode(
-            errors="replace"
-        ).strip()
-        try:
-            self._script_id = int(raw)
-        except ValueError:
-            self._finish_async(None)
-            return
-        if self._script_id < 0:
-            self._finish_async(None)
-            return
-
-        self._run_proc = QProcess(self)
-        self._run_proc.finished.connect(self._on_run_finished)
-        self._run_proc.errorOccurred.connect(self._on_async_error)
-        self._run_proc.start(
-            self.qdbus_cmd,
-            [
-                "org.kde.KWin",
-                f"/Scripting/Script{self._script_id}",
-                "org.kde.kwin.Script.run",
-            ],
-        )
-
-    def _on_run_finished(self, *_args: object) -> None:
-        # KWin's `console.log` is flushed to the journal asynchronously;
-        # wait briefly before reading it back.
-        self._delay_timer = QTimer(self)
-        self._delay_timer.setSingleShot(True)
-        self._delay_timer.timeout.connect(self._start_journal_read)
-        self._delay_timer.start(300)
-
-    def _start_journal_read(self) -> None:
-        self._log_proc = QProcess(self)
-        self._log_proc.finished.connect(self._on_log_finished)
-        self._log_proc.errorOccurred.connect(self._on_async_error)
-        self._log_proc.start(
-            "journalctl",
-            [
-                "--user",
-                "-u",
-                self.kwin_journal_unit,
-                "--since",
-                "3 seconds ago",
-                "--no-pager",
-            ],
-        )
-
-    def _on_log_finished(self, *_args: object) -> None:
-        if self._log_proc is None or self._scan_nonce is None:
-            self._finish_async(None)
-            return
-        log_text = bytes(self._log_proc.readAllStandardOutput()).decode(
-            errors="replace"
-        )
-        marker = SCAN_MARKER_PREFIX + self._scan_nonce + ":"
-        self._finish_async(parse_scan_entries_from_journal(log_text, marker))
-
-    def _on_async_error(self, *_args: object) -> None:
-        self._finish_async(None)
-
-    def _finish_async(self, result: list[dict] | None) -> None:
-        """Emit the result, tear down any in-flight state, and fire an unload
-        for the KWin script (fire-and-forget — we don't wait for its result).
-        """
-        # Fire-and-forget unload so KWin doesn't keep the named script around.
-        if self._script_id is not None and self._script_id >= 0:
-            unload = QProcess(self)
-            unload.finished.connect(unload.deleteLater)
-            unload.errorOccurred.connect(unload.deleteLater)
-            unload.start(
-                self.qdbus_cmd,
-                [
-                    "org.kde.KWin",
-                    "/Scripting",
-                    "org.kde.kwin.Scripting.unloadScript",
-                    SCRIPT_NAME,
-                ],
-            )
-
-        if self._script_path:
-            try:
-                os.unlink(self._script_path)
-            except OSError:
-                pass
-
-        for proc in (self._load_proc, self._run_proc, self._log_proc):
-            if proc is not None:
-                proc.deleteLater()
-        if self._delay_timer is not None:
-            self._delay_timer.deleteLater()
-
-        self._script_path = None
-        self._script_id = None
-        self._scan_nonce = None
-        self._load_proc = None
-        self._run_proc = None
-        self._log_proc = None
-        self._delay_timer = None
-        self._scan_in_progress = False
-        self.scan_finished.emit(result)
-
-    @staticmethod
-    def _write_script(body: str) -> str | None:
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".js", prefix=f"{SCRIPT_NAME}-", delete=False
-            ) as f:
-                f.write(body)
-                return f.name
-        except OSError:
+    def list_vscode_captions(self) -> list[str] | None:
+        """Backward-compat wrapper returning only caption strings."""
+        entries = self.list_vscode_entries()
+        if entries is None:
             return None
+        return [e["c"] for e in entries]
 
     # ------------------------------------------------------------------
-    # Synchronous scan — used by manual Refresh and tests.
+    # Actions (KWin scripting)
     # ------------------------------------------------------------------
 
     def perform_window_action(self, label: str, action: str) -> bool:
-        """Find the first VSCode window matching `label` and run `action` on it.
-
-        Supported actions: `close` (via `w.closeWindow()`), `activate` (via
-        `workspace.activeWindow = w`). Returns True if the journal shows the
-        action was applied, False otherwise (no match, KWin error, tooling
-        missing).
-        """
+        """Close or activate the first VSCode window whose caption contains
+        `label` as a token. Returns True if the KWin script emitted the
+        success marker, False otherwise (no match, tooling missing, error)."""
         if action not in (ACTION_CLOSE, ACTION_ACTIVATE):
             raise ValueError(f"unsupported action: {action!r}")
-        if not self.available():
+        if not self._kwin_available():
             return False
 
         script_path: str | None = None
@@ -439,214 +256,5 @@ class WindowScanner(QObject):
             except (subprocess.TimeoutExpired, OSError):
                 pass
 
-    def list_vscode_entries(self) -> list[dict] | None:
-        """Return list of `{"c": caption, "p": pid | None}` dicts, or None if
-        the scan failed. Pid may be None on KWin versions that don't expose
-        it — callers should handle that gracefully.
-
-        None signals "can't tell" — callers should treat this as "no running
-        state is known" rather than "no VSCode windows are open".
-        """
-        if not self.available():
-            return None
-
-        script_path: str | None = None
-        nonce = _new_scan_nonce()
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".js", prefix=f"{SCRIPT_NAME}-", delete=False
-            ) as f:
-                f.write(build_enumerate_script(nonce))
-                script_path = f.name
-
-            load = subprocess.run(
-                [
-                    self.qdbus_cmd,
-                    "org.kde.KWin",
-                    "/Scripting",
-                    "org.kde.kwin.Scripting.loadScript",
-                    script_path,
-                    SCRIPT_NAME,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            if load.returncode != 0:
-                return None
-            script_id_str = load.stdout.strip()
-            try:
-                script_id = int(script_id_str)
-            except ValueError:
-                return None
-            if script_id < 0:
-                return None
-
-            subprocess.run(
-                [
-                    self.qdbus_cmd,
-                    "org.kde.KWin",
-                    f"/Scripting/Script{script_id}",
-                    "org.kde.kwin.Script.run",
-                ],
-                capture_output=True,
-                timeout=5,
-                check=False,
-            )
-
-            # KWin logs `console.log` output asynchronously; give it a moment.
-            time.sleep(0.3)
-
-            log = subprocess.run(
-                [
-                    "journalctl",
-                    "--user",
-                    "-u",
-                    self.kwin_journal_unit,
-                    "--since",
-                    "3 seconds ago",
-                    "--no-pager",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-
-            marker = SCAN_MARKER_PREFIX + nonce + ":"
-            return parse_scan_entries_from_journal(log.stdout, marker)
-        except (subprocess.TimeoutExpired, OSError):
-            return None
-        finally:
-            if script_path:
-                try:
-                    os.unlink(script_path)
-                except OSError:
-                    pass
-            # Best-effort unload; ignore any errors
-            try:
-                subprocess.run(
-                    [
-                        self.qdbus_cmd,
-                        "org.kde.KWin",
-                        "/Scripting",
-                        "org.kde.kwin.Scripting.unloadScript",
-                        SCRIPT_NAME,
-                    ],
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                )
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-
-    def list_vscode_captions(self) -> list[str] | None:
-        """Backward-compat wrapper over `list_vscode_entries` returning only
-        caption strings. Preferred when the caller doesn't care about pids."""
-        entries = self.list_vscode_entries()
-        if entries is None:
-            return None
-        return [e["c"] for e in entries]
-
-
-def action_succeeded(journal_text: str) -> bool:
-    """Return True if any `VSCL_ACTION_OK:` marker appears in the recent log."""
-    if not journal_text:
-        return False
-    for line in journal_text.splitlines():
-        if ACTION_LOG_PREFIX in line:
-            return True
-    return False
-
-
-def parse_scan_entries_from_journal(
-    journal_text: str,
-    marker: str = LOG_PREFIX,
-) -> list[dict] | None:
-    """Pull the most recent `<marker>[...]` payload from journalctl output.
-
-    `marker` defaults to the legacy bare `VSCL_CAPTIONS:` prefix (accepted by
-    legacy tests and the backward-compat code path). Production scans pass
-    a per-scan `VSCL_CAPTIONS_<nonce>:` marker so stale journal lines from
-    previous scans can't spoof the result when KWin's log flush is delayed.
-
-    Returns the parsed entries list, or None if no matching line is found
-    or the JSON payload is malformed.
-    """
-    if not journal_text:
-        return None
-    for line in reversed(journal_text.splitlines()):
-        idx = line.find(marker)
-        if idx < 0:
-            continue
-        payload = line[idx + len(marker):].strip()
-        try:
-            parsed = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(parsed, list):
-            continue
-        result: list[dict] = []
-        for item in parsed:
-            if isinstance(item, dict) and "c" in item:
-                pid = item.get("p")
-                result.append(
-                    {"c": str(item["c"]), "p": int(pid) if isinstance(pid, int) else None}
-                )
-            elif isinstance(item, str):
-                # Legacy format — caption without pid
-                result.append({"c": item, "p": None})
-        return result
-    return None
-
-
-def parse_captions_from_journal(journal_text: str) -> list[str] | None:
-    """Backward-compatible wrapper returning just the caption strings."""
-    entries = parse_scan_entries_from_journal(journal_text)
-    if entries is None:
-        return None
-    return [e["c"] for e in entries]
-
-
-def get_process_start_time(pid: int) -> float | None:
-    """Return the Unix timestamp when the process `pid` was started, or None
-    on any failure (bad pid, race, permission, exotic system). Reads
-    `/proc/<pid>/stat` field 22 (starttime in clock ticks since boot) and
-    combines with `/proc/stat` `btime` (seconds since epoch at boot).
-    """
-    try:
-        with open(f"/proc/{pid}/stat", "rb") as f:
-            data = f.read()
-    except OSError:
-        return None
-    try:
-        # comm may contain spaces and parens; rsplit on last ")" is the safe cut.
-        close_paren = data.rindex(b")")
-    except ValueError:
-        return None
-    after_comm = data[close_paren + 2:].split()
-    try:
-        # After skipping pid and (comm), field 22 (starttime) is at index 19.
-        starttime_ticks = int(after_comm[19])
-    except (IndexError, ValueError):
-        return None
-    try:
-        hz = os.sysconf("SC_CLK_TCK")
-    except (OSError, ValueError):
-        return None
-    try:
-        with open("/proc/stat", "r") as f:
-            btime: int | None = None
-            for line in f:
-                if line.startswith("btime "):
-                    try:
-                        btime = int(line.split()[1])
-                    except (IndexError, ValueError):
-                        return None
-                    break
-    except OSError:
-        return None
-    if btime is None:
-        return None
-    return btime + starttime_ticks / hz
+    def _kwin_available(self) -> bool:
+        return bool(shutil.which(self.qdbus_cmd) and shutil.which("journalctl"))

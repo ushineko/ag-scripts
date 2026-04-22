@@ -609,7 +609,7 @@ class TestMainWindowSmoke:
         nine_hours_ago = 1_000_000.0 - 9 * 3600
         five_minutes_ago = 1_000_000.0 - 5 * 60
         with patch(
-            "vscode_launcher.get_process_start_time", return_value=nine_hours_ago
+            "vscode_launcher.process_start_time", return_value=nine_hours_ago
         ):
             window = MainWindow(
                 ConfigManager(tmp_path / "workspaces.json"),
@@ -681,7 +681,7 @@ class TestMainWindowSmoke:
         ten_min_ago = fake_now - 600
 
         with patch(
-            "vscode_launcher.get_process_start_time", return_value=ten_min_ago
+            "vscode_launcher.process_start_time", return_value=ten_min_ago
         ), patch("vscode_launcher.time.time", return_value=fake_now):
             window = MainWindow(
                 ConfigManager(tmp_path / "workspaces.json"),
@@ -902,10 +902,16 @@ class TestMainWindowSmoke:
             "/home/u/git/c",
         ]
 
-        # Simulate a background scan result arriving: only `b` is now open.
-        window._on_background_scan_done(
-            ["file.py - b - Visual Studio Code"]
-        )
+        # Simulate a scan tick: swap the scanner to one that reports `b` as
+        # running, then drive the poll. _trigger_background_scan bails when
+        # the window isn't visible, so patch that.
+        class NowRunningScanner:
+            def list_vscode_entries(self):
+                return [{"c": "file.py - b - Visual Studio Code", "p": 100}]
+
+        window.window_scanner = NowRunningScanner()
+        with patch.object(window, "isVisible", return_value=True):
+            window._trigger_background_scan()
 
         # Running-first sort: b moves to row 0, a and c retain their relative
         # order (stable) below it.
@@ -974,8 +980,14 @@ class TestMainWindowSmoke:
                 {"folderUri": "file:///home/u/git/c"},
             ]
         )
-        # Next background scan picks up X as running
-        window._on_background_scan_done(["file.py - x - Visual Studio Code"])
+        # Next scan tick — swap in a scanner that reports x as running.
+        class NowRunningScanner:
+            def list_vscode_entries(self):
+                return [{"c": "file.py - x - Visual Studio Code", "p": 100}]
+
+        window.window_scanner = NowRunningScanner()
+        with patch.object(window, "isVisible", return_value=True):
+            window._trigger_background_scan()
 
         # X should be at row 0 (running + freshly MRU'd).
         assert [w.path for w in window.workspaces] == [
@@ -1004,6 +1016,9 @@ class TestMainWindowSmoke:
             def list_vscode_captions(self):
                 return ["file - a - Visual Studio Code"]
 
+            def list_vscode_entries(self):
+                return [{"c": "file - a - Visual Studio Code", "p": 1}]
+
         window = MainWindow(
             ConfigManager(tmp_path / "workspaces.json"),
             Launcher(),
@@ -1011,8 +1026,9 @@ class TestMainWindowSmoke:
             window_scanner=SteadyScanner(),
         )
         starting_order = [w.path for w in window.workspaces]
-        # Second scan with the same result → no flips, no re-sort
-        window._on_background_scan_done(["file - a - Visual Studio Code"])
+        # Another tick with the same result → no flips, no re-sort.
+        with patch.object(window, "isVisible", return_value=True):
+            window._trigger_background_scan()
         assert [w.path for w in window.workspaces] == starting_order
 
     def test_auto_refresh_callback_skips_when_scanner_returns_none(
@@ -1027,15 +1043,26 @@ class TestMainWindowSmoke:
             def list_vscode_captions(self):
                 return []
 
+            def list_vscode_entries(self):
+                return []
+
         window = MainWindow(
             ConfigManager(tmp_path / "workspaces.json"),
             Launcher(),
             VSCodeRecentsReader(db_path=db_path),
             window_scanner=InitialScanner(),
         )
-        # Flip the state so we can prove None doesn't clobber it
+        # Flip the state; a scanner returning None (transient IPC error)
+        # must not clobber it.
         window.workspaces[0].is_running = True
-        window._on_background_scan_done(None)
+
+        class NoneScanner:
+            def list_vscode_entries(self):
+                return None
+
+        window.window_scanner = NoneScanner()
+        with patch.object(window, "isVisible", return_value=True):
+            window._trigger_background_scan()
         assert window.workspaces[0].is_running is True
 
     def test_trigger_background_scan_skips_when_hidden(

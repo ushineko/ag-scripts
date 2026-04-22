@@ -30,11 +30,15 @@ from urllib.parse import unquote, urlparse
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon
 
+from platform_support import (
+    launcher_config_dir,
+    process_start_time,
+    vscode_state_db_path,
+)
 from window_scanner import (
     ACTION_ACTIVATE,
     ACTION_CLOSE,
     WindowScanner,
-    get_process_start_time,
     running_labels,
 )
 from PyQt6.QtWidgets import (
@@ -57,9 +61,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "1.8.1"
+__version__ = "2.0"
 
-CONFIG_DIR = Path.home() / ".config" / "vscode-launcher"
+CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
 CONFIG_VERSION = 2
 
@@ -82,9 +86,7 @@ def _dlog(msg: str) -> None:
     if _DEBUG:
         print(f"[vscl] {msg}", flush=True)
 
-VSCODE_DB_PATH = (
-    Path.home() / ".config" / "Code" / "User" / "globalStorage" / "state.vscdb"
-)
+VSCODE_DB_PATH = vscode_state_db_path()  # None on unknown platforms
 VSCODE_RECENTS_KEY = "history.recentlyOpenedPathsList"
 
 
@@ -101,9 +103,9 @@ class Workspace:
     is_workspace_file: bool = False
     is_running: bool = False
     # Unix timestamp (seconds since epoch) when the VSCode window backing this
-    # workspace was launched. Populated from /proc/<pid>/stat when the scan
-    # reports this workspace as running. None for non-running rows or when
-    # pid lookup fails (older KWin, race, permission).
+    # workspace was launched. Populated from `platform_support.process_start_time`
+    # when the scan reports this workspace as running. None for non-running rows
+    # or when pid lookup fails.
     launched_at: float | None = None
 
 
@@ -164,11 +166,11 @@ class VSCodeRecentsReader:
     (uri=True, mode=ro) to avoid locking issues.
     """
 
-    def __init__(self, db_path: Path = VSCODE_DB_PATH) -> None:
+    def __init__(self, db_path: Path | None = VSCODE_DB_PATH) -> None:
         self.db_path = db_path
 
     def read_recents(self) -> list[Workspace]:
-        if not self.db_path.exists():
+        if self.db_path is None or not self.db_path.exists():
             return []
         try:
             uri = f"file:{self.db_path}?mode=ro"
@@ -665,19 +667,16 @@ class MainWindow(QMainWindow):
         self.launcher = launcher
         self.recents_reader = recents_reader
         self.window_scanner = window_scanner
-        # Scanner is a QObject that emits scan_finished when its QProcess
-        # state machine completes. No threads, no GC invariants. (Test fakes
-        # sometimes implement only the sync API, so guard the connect.)
-        if self.window_scanner is not None and hasattr(
-            self.window_scanner, "scan_finished"
-        ):
-            self.window_scanner.scan_finished.connect(self._on_background_scan_done)
+        # v2.0 scanner is IPC-backed and sync (~3 ms). We just call
+        # list_vscode_entries() directly every poll — no QProcess state
+        # machine, no background thread, no signal wiring.
         self._auto_refresh_timer: QTimer | None = None
         # Per-path launch timestamps we record ourselves when the launcher
         # spawns `code --new-window`. Preferred source for the Launched
-        # column since KWin reports the main-VSCode PID for every window
-        # (Electron single-process-owns-all-windows) — /proc on that PID
-        # would show the same "VSCode started" time for every row.
+        # column — IPC gives us the real renderer PID, but /proc's starttime
+        # on that PID can lag slightly behind the actual window open
+        # (renderer is forked after the `code --new-window` IPC roundtrip).
+        # Our own timestamp is closest to "moment the user clicked Start".
         self._launched_at_by_path: dict[str, float] = {}
 
         raw = self.config_manager.load()
@@ -708,32 +707,22 @@ class MainWindow(QMainWindow):
         _dlog(f"auto-refresh timer started at {AUTO_REFRESH_INTERVAL_MS} ms")
 
     def _trigger_background_scan(self) -> None:
-        """Kick off an async scan unless the window is hidden. The scanner
-        self-manages its in-flight state, so reentrance guards aren't needed
-        here — a second call while a scan is in progress is a silent no-op."""
+        """Poll the IPC scanner synchronously (3 ms round-trip — no need
+        for threads or async machinery). If any row's running state
+        changed, re-read VSCode recents and rebuild the list so the
+        running group re-sorts with fresh MRU. Otherwise refresh only the
+        Launched column so its relative times tick forward."""
         if self.window_scanner is None:
             return
         if not self.isVisible():
             _dlog("tick: skipping, window not visible")
             return
-        _dlog("tick: starting async scan")
-        self.window_scanner.start_async_scan()
 
-    def _on_background_scan_done(self, result: Any) -> None:
-        """If any row's running state changed, re-read VSCode recents (to
-        pick up fresh MRU — a just-launched workspace bumps to position 0
-        in state.vscdb) and rebuild the list so it moves to the top of the
-        running group.
-
-        When no flips are detected, we still refresh the Launched column in
-        place so its relative times ('5m ago' → '6m ago') stay current.
-        """
+        result = self.window_scanner.list_vscode_entries()
         if result is None:
-            _dlog("scan result: None (scanner unavailable)")
+            _dlog("tick: scan returned None (transient IPC failure)")
             return
-        # Accept either the v1.8 entries shape (list of dicts) or the legacy
-        # captions shape (list of strings) — test fakes sometimes still use
-        # the latter.
+
         entries = _normalize_scan_result(result)
         captions = [e["c"] for e in entries]
         running = running_labels(captions, (w.label for w in self.workspaces))
@@ -746,41 +735,22 @@ class MainWindow(QMainWindow):
             self.workspaces = visible
             self._reload_list()
         else:
-            # Refresh launched_at for running rows (process starts don't
-            # shift, but this catches races where pid was temporarily None)
-            # and update only the Launched column in place.
-            self._refresh_launched_at(entries)
+            # No-flip ticks: just refresh the Launched column so relative
+            # times ('5m ago' → '6m ago') tick forward. launched_at is
+            # already correct from the last flip (process start times don't
+            # change while the process is alive).
             self.list_widget.refresh_launched_cells(
                 {w.path: w for w in self.workspaces}
             )
         _dlog(
-            f"scan result: {len(entries)} entry(ies), "
-            f"running={sorted(running)}, {flips} flip(s)"
+            f"tick: {len(entries)} entry(ies), running={sorted(running)}, "
+            f"{flips} flip(s)"
             + (
                 " (recents re-read + resorted)"
                 if flips > 0
                 else " (launched column refreshed)"
             )
         )
-
-    def _refresh_launched_at(self, entries: list[dict]) -> None:
-        """Re-derive each running workspace's launched_at from the latest
-        scan entries (in case pid was None on a prior scan but became
-        available later). Non-running workspaces get launched_at = None."""
-        pid_by_label: dict[str, int | None] = {}
-        for entry in entries:
-            parts = entry["c"].split(" - ")
-            for ws in self.workspaces:
-                if ws.label not in pid_by_label and ws.label in parts:
-                    pid_by_label[ws.label] = entry.get("p")
-                    break
-        for ws in self.workspaces:
-            if ws.is_running:
-                pid = pid_by_label.get(ws.label)
-                if isinstance(pid, int) and ws.launched_at is None:
-                    ws.launched_at = get_process_start_time(pid)
-            else:
-                ws.launched_at = None
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -852,6 +822,21 @@ class MainWindow(QMainWindow):
             visible.append(ws)
         return visible
 
+    @staticmethod
+    def _pid_by_label(
+        workspaces: list[Workspace], entries: list[dict]
+    ) -> dict[str, int | None]:
+        """For each workspace label, find the pid of the first scan entry
+        whose caption contains that label as a ` - `-split token."""
+        result: dict[str, int | None] = {}
+        for entry in entries:
+            parts = entry["c"].split(" - ")
+            for ws in workspaces:
+                if ws.label not in result and ws.label in parts:
+                    result[ws.label] = entry.get("p")
+                    break
+        return result
+
     def _apply_running_and_sort(
         self, workspaces: list[Workspace], entries: list[dict]
     ) -> None:
@@ -863,22 +848,14 @@ class MainWindow(QMainWindow):
 
         `launched_at` precedence:
           1. An in-memory timestamp we recorded when the launcher itself
-             spawned `code --new-window` (exact, per-window)
-          2. /proc fallback on the window's PID (KWin reports the main
-             VSCode PID for every window, so this is "VSCode-started-at"
-             — a lower bound that's still informative when the window was
-             opened before the launcher itself started)
+             spawned `code --new-window` (exact, recorded at click time)
+          2. `/proc`-derived start time for the window's renderer PID
+             (accurate per window since the IPC scanner now surfaces real
+             per-window renderer PIDs, not just the main Electron PID)
           3. None (em-dash in the UI) if neither is available
         """
         captions = [e["c"] for e in entries]
-        pid_by_label: dict[str, int | None] = {}
-        for entry in entries:
-            for ws in workspaces:
-                if ws.label not in pid_by_label and ws.label in entry["c"].split(
-                    " - "
-                ):
-                    pid_by_label[ws.label] = entry.get("p")
-                    break
+        pid_by_label = self._pid_by_label(workspaces, entries)
         running = running_labels(captions, (w.label for w in workspaces))
         for ws in workspaces:
             ws.is_running = ws.label in running
@@ -889,7 +866,7 @@ class MainWindow(QMainWindow):
                 else:
                     pid = pid_by_label.get(ws.label)
                     ws.launched_at = (
-                        get_process_start_time(pid)
+                        process_start_time(pid)
                         if isinstance(pid, int)
                         else None
                     )
@@ -934,10 +911,12 @@ class MainWindow(QMainWindow):
             self.list_widget.setVisible(True)
         else:
             self.list_widget.setVisible(False)
-            if not self.recents_reader.db_path.exists():
+            db = self.recents_reader.db_path
+            if db is None or not db.exists():
+                where = str(db) if db is not None else "(path unknown for this platform)"
                 self.empty_label.setText(
                     "VSCode state database not found at\n"
-                    f"{self.recents_reader.db_path}\n\n"
+                    f"{where}\n\n"
                     "Install VSCode and open a workspace to populate this list."
                 )
             elif self.hidden_paths:

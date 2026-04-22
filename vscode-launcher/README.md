@@ -201,6 +201,14 @@ Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc
 
 ## Changelog
 
+### v2.0
+
+- **Major refactor**: the running-state scanner now speaks VSCode's internal IPC protocol directly instead of going through KWin scripting + journalctl. ~170× faster (3 ms vs 500 ms per scan) and atomic — the entire v1.6/v1.7/v1.8.1 machinery (QProcess state machine, per-scan nonces, journalctl flush-race workaround) is no longer necessary and has been removed.
+- New: per-window `launched_at` is now **accurate for every running window**, not just launcher-spawned ones. IPC reports the actual Electron renderer PID per window (KWin could only report the single main-process PID shared by all windows).
+- Research writeup in [research/README.md](research/README.md). Protocol module is [vscode_ipc.py](vscode_ipc.py) (general-purpose, reusable outside this launcher).
+- Stop / Activate row buttons still use KWin scripting (unchanged) — porting those to IPC is a separate investigation.
+- Install script no longer checks for `journalctl` (reads don't use it). `qdbus6` is still needed for the action buttons.
+
 ### v1.8.1
 
 - Fix: detecting that VSCode has exited (or been killed) no longer requires a manual Refresh. Each auto-refresh scan now embeds a unique nonce in the KWin log marker; the parser rejects any line from a previous scan that happens to still be inside journalctl's `--since "3 seconds ago"` window when the current scan's line hasn't flushed yet.

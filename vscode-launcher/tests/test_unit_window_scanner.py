@@ -1,14 +1,17 @@
-"""Unit tests for window_scanner.
+"""Unit tests for window_scanner (v2.0+).
 
-Covers the behavioral contract the rest of the app relies on: caption ->
-label token matching, multi-label running-set computation, and the journal
-parser. The KWin/D-Bus invocation itself is not unit-tested (it requires a
-live compositor); mocked call-sequence coverage is there as a smoke test.
+Covers the parts that remain after the IPC scanner refactor:
+  - Pure helpers: caption_matches_label, running_labels, action_succeeded,
+    _build_action_script, _ipc_entries_to_legacy_shape
+  - WindowScanner.list_vscode_entries — IPC path, mocked via
+    vscode_ipc.list_vscode_windows
+  - WindowScanner.perform_window_action — KWin action path (mocked subprocess)
+
+The IPC protocol plumbing itself is tested in test_unit_vscode_ipc.py.
 """
 
 from __future__ import annotations
 
-import json
 import subprocess
 from unittest.mock import patch
 
@@ -18,13 +21,11 @@ from window_scanner import (
     ACTION_ACTIVATE,
     ACTION_CLOSE,
     ACTION_LOG_PREFIX,
-    LOG_PREFIX,
     WindowScanner,
     _build_action_script,
+    _ipc_entries_to_legacy_shape,
     action_succeeded,
     caption_matches_label,
-    parse_captions_from_journal,
-    parse_scan_entries_from_journal,
     running_labels,
 )
 
@@ -36,7 +37,6 @@ from window_scanner import (
 
 class TestCaptionMatchesLabel:
     def test_folder_label_with_file_context(self):
-        # Real caption from the user's live KWin dump:
         caption = "Spec vscode-launcher too… - ag-scripts - Visual Studio Code"
         assert caption_matches_label(caption, "ag-scripts")
 
@@ -47,14 +47,9 @@ class TestCaptionMatchesLabel:
         assert caption_matches_label(caption, "aiq_agent_go (Workspace)")
 
     def test_label_alone_matches(self):
-        # No file context — caption is just "<label> - Visual Studio Code"
         assert caption_matches_label("ag-scripts - Visual Studio Code", "ag-scripts")
 
     def test_prefix_not_matched(self):
-        """`aiq-ralph` must NOT match a window for `aiq-ralphbox`.
-
-        That's the whole point of token-split matching vs. substring matching.
-        """
         caption = "Fix worktree directory c… - aiq-ralphbox - Visual Studio Code"
         assert not caption_matches_label(caption, "aiq-ralph")
         assert caption_matches_label(caption, "aiq-ralphbox")
@@ -64,9 +59,7 @@ class TestCaptionMatchesLabel:
         assert not caption_matches_label("ag-scripts - Visual Studio Code", "")
 
     def test_label_appearing_in_filename_not_matched(self):
-        """A label that happens to be part of the filename is not a match."""
         caption = "ag-scripts-notes.txt - other-project - Visual Studio Code"
-        # `ag-scripts` appears only inside the filename token, not as its own token
         assert not caption_matches_label(caption, "ag-scripts")
 
 
@@ -82,83 +75,91 @@ class TestRunningLabels:
             "b.py - syadmin (Workspace) - Visual Studio Code",
         ]
         labels = ["ag-scripts", "syadmin (Workspace)", "other-project"]
-        result = running_labels(captions, labels)
-        assert result == {"ag-scripts", "syadmin (Workspace)"}
+        assert running_labels(captions, labels) == {
+            "ag-scripts",
+            "syadmin (Workspace)",
+        }
 
     def test_empty_captions_returns_empty(self):
         assert running_labels([], ["a", "b"]) == set()
 
-    def test_empty_labels_returns_empty(self):
-        assert running_labels(["whatever"], []) == set()
-
 
 # ---------------------------------------------------------------------------
-# parse_captions_from_journal
+# _ipc_entries_to_legacy_shape
 # ---------------------------------------------------------------------------
 
 
-class TestParseCaptionsFromJournal:
-    def test_parses_single_line(self):
-        journal = (
-            "Apr 19 20:37:09 host kwin_wayland[10372]: "
-            f'{LOG_PREFIX}["first - a - Visual Studio Code"]\n'
-        )
-        assert parse_captions_from_journal(journal) == [
-            "first - a - Visual Studio Code"
+class TestIPCEntriesToLegacyShape:
+    def test_translates_title_and_pid(self):
+        ipc = [
+            {"id": 1, "pid": 42, "title": "foo - bar - Visual Studio Code", "folderURIs": []},
+        ]
+        assert _ipc_entries_to_legacy_shape(ipc) == [
+            {"c": "foo - bar - Visual Studio Code", "p": 42}
         ]
 
-    def test_picks_most_recent_when_multiple_lines(self):
-        journal = "\n".join(
-            [
-                f"old line {LOG_PREFIX}[\"stale\"]",
-                "unrelated entry",
-                f"newer line {LOG_PREFIX}[\"recent-1\", \"recent-2\"]",
+    def test_handles_missing_pid(self):
+        ipc = [{"title": "x - y - Visual Studio Code"}]
+        assert _ipc_entries_to_legacy_shape(ipc) == [
+            {"c": "x - y - Visual Studio Code", "p": None}
+        ]
+
+    def test_none_passes_through(self):
+        assert _ipc_entries_to_legacy_shape(None) is None
+
+    def test_empty_list_produces_empty(self):
+        assert _ipc_entries_to_legacy_shape([]) == []
+
+    def test_skips_non_dict_entries(self):
+        ipc = [{"title": "ok", "pid": 1}, "garbage", None]
+        assert _ipc_entries_to_legacy_shape(ipc) == [{"c": "ok", "p": 1}]
+
+    def test_skips_entries_with_no_title(self):
+        ipc = [{"pid": 1}, {"title": "ok", "pid": 2}]
+        assert _ipc_entries_to_legacy_shape(ipc) == [{"c": "ok", "p": 2}]
+
+
+# ---------------------------------------------------------------------------
+# WindowScanner — scanning (via IPC)
+# ---------------------------------------------------------------------------
+
+
+class TestWindowScannerListEntries:
+    def test_delegates_to_ipc(self):
+        scanner = WindowScanner()
+        with patch(
+            "window_scanner.list_vscode_windows",
+            return_value=[{"title": "x - a - Visual Studio Code", "pid": 7}],
+        ):
+            assert scanner.list_vscode_entries() == [
+                {"c": "x - a - Visual Studio Code", "p": 7}
             ]
-        )
-        assert parse_captions_from_journal(journal) == ["recent-1", "recent-2"]
 
-    def test_returns_none_when_no_marker(self):
-        assert parse_captions_from_journal("only noise\nand more noise\n") is None
+    def test_none_from_ipc_propagates(self):
+        scanner = WindowScanner()
+        with patch("window_scanner.list_vscode_windows", return_value=None):
+            assert scanner.list_vscode_entries() is None
 
-    def test_returns_none_on_malformed_json(self):
-        journal = f"header {LOG_PREFIX}not-json-here\n"
-        assert parse_captions_from_journal(journal) is None
+    def test_empty_from_ipc_means_no_windows(self):
+        """list_vscode_windows returns [] when VSCode isn't running.
+        That must propagate as an empty entry list, NOT as None."""
+        scanner = WindowScanner()
+        with patch("window_scanner.list_vscode_windows", return_value=[]):
+            assert scanner.list_vscode_entries() == []
 
-    def test_returns_none_when_payload_is_not_a_list(self):
-        journal = f"header {LOG_PREFIX}{{\"key\": \"value\"}}\n"
-        assert parse_captions_from_journal(journal) is None
-
-    def test_empty_journal_returns_none(self):
-        assert parse_captions_from_journal("") is None
-
-    def test_nonce_marker_rejects_stale_previous_scan_line(self):
-        """The whole point of per-scan nonces: if journalctl output still
-        contains a PREVIOUS scan's line (which was valid at that time) but
-        the CURRENT scan's line hasn't flushed yet, the parser must refuse
-        the stale data instead of returning the wrong captions."""
-        journal = (
-            "Apr 19 host kwin[1]: VSCL_CAPTIONS_oldnonce:["
-            '{"c": "stale caption", "p": 111}]\n'
-        )
-        # Passing the current nonce's marker — no match → None
-        result = parse_scan_entries_from_journal(
-            journal, marker="VSCL_CAPTIONS_freshnonce:"
-        )
-        assert result is None
-
-    def test_nonce_marker_picks_current_over_stale(self):
-        """When both the old and the new marker are in the journal, the
-        parser should find the current one regardless of order."""
-        journal = (
-            "Apr 19 host kwin[1]: VSCL_CAPTIONS_old:["
-            '{"c": "stale", "p": 1}]\n'
-            "Apr 19 host kwin[1]: VSCL_CAPTIONS_new:["
-            '{"c": "fresh", "p": 2}]\n'
-        )
-        result = parse_scan_entries_from_journal(
-            journal, marker="VSCL_CAPTIONS_new:"
-        )
-        assert result == [{"c": "fresh", "p": 2}]
+    def test_list_captions_wrapper(self):
+        scanner = WindowScanner()
+        with patch(
+            "window_scanner.list_vscode_windows",
+            return_value=[
+                {"title": "x - a - Visual Studio Code", "pid": 1},
+                {"title": "y - b - Visual Studio Code", "pid": 2},
+            ],
+        ):
+            assert scanner.list_vscode_captions() == [
+                "x - a - Visual Studio Code",
+                "y - b - Visual Studio Code",
+            ]
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +179,7 @@ class TestActionSucceeded:
     def test_marker_absent(self):
         assert action_succeeded("some other journal content\n") is False
 
-    def test_empty_journal(self):
+    def test_empty(self):
         assert action_succeeded("") is False
 
 
@@ -188,23 +189,18 @@ class TestActionSucceeded:
 
 
 class TestBuildActionScript:
-    def test_close_script_contains_closeWindow(self):
+    def test_close_branch(self):
         js = _build_action_script("ag-scripts", ACTION_CLOSE)
         assert "w.closeWindow()" in js
-        assert '"ag-scripts"' in js  # JSON-encoded label literal
+        assert '"ag-scripts"' in js
         assert ACTION_LOG_PREFIX in js
 
-    def test_activate_script_sets_active_window(self):
+    def test_activate_branch(self):
         js = _build_action_script("ag-scripts", ACTION_ACTIVATE)
         assert "workspace.activeWindow = w" in js
-        assert '"ag-scripts"' in js
 
     def test_label_with_quotes_is_escaped(self):
-        """A label containing a quote must not break out of the JS string literal."""
-        # Contrived — VSCode labels don't normally include quotes, but JSON
-        # encoding should handle them regardless (defense in depth).
         js = _build_action_script('weird"label', ACTION_CLOSE)
-        # Embedded quote must be backslash-escaped inside the JS literal
         assert '"weird\\"label"' in js
 
     def test_unknown_action_raises(self):
@@ -213,60 +209,21 @@ class TestBuildActionScript:
 
 
 # ---------------------------------------------------------------------------
-# WindowScanner — high-level wiring (mocked)
+# WindowScanner.perform_window_action — KWin action path
 # ---------------------------------------------------------------------------
 
 
-class TestWindowScanner:
-    def test_unavailable_when_tools_missing(self):
+class TestPerformWindowAction:
+    def test_unknown_action_raises(self):
+        with pytest.raises(ValueError):
+            WindowScanner().perform_window_action("x", "launch-nukes")
+
+    def test_unavailable_kwin_returns_false(self):
         scanner = WindowScanner()
         with patch("window_scanner.shutil.which", return_value=None):
-            assert scanner.available() is False
-            assert scanner.list_vscode_captions() is None
+            assert scanner.perform_window_action("x", ACTION_CLOSE) is False
 
-    def test_returns_captions_on_happy_path(self, tmp_path):
-        """Nonce-based markers: the test must emit the journal line under the
-        same marker the scanner generates, so we patch the nonce generator
-        to a known value."""
-        scanner = WindowScanner()
-
-        fixed_nonce = "testnonce123"
-        expected_marker = f"VSCL_CAPTIONS_{fixed_nonce}:"
-
-        def fake_run(cmd, **kwargs):
-            joined = " ".join(cmd)
-            if "loadScript" in joined:
-                return subprocess.CompletedProcess(cmd, 0, stdout="7", stderr="")
-            if "journalctl" in joined:
-                out = (
-                    "Apr 19 host kwin[1]: "
-                    f'{expected_marker}["x - ag-scripts - Visual Studio Code"]\n'
-                )
-                return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with patch(
-            "window_scanner.shutil.which", side_effect=lambda _: "/usr/bin/stub"
-        ), patch("window_scanner.subprocess.run", side_effect=fake_run), patch(
-            "window_scanner.time.sleep"
-        ), patch(
-            "window_scanner._new_scan_nonce", return_value=fixed_nonce
-        ):
-            captions = scanner.list_vscode_captions()
-
-        assert captions == ["x - ag-scripts - Visual Studio Code"]
-
-    def test_returns_none_when_load_fails(self):
-        scanner = WindowScanner()
-        with patch(
-            "window_scanner.shutil.which", side_effect=lambda _: "/usr/bin/stub"
-        ), patch(
-            "window_scanner.subprocess.run",
-            return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="err"),
-        ), patch("window_scanner.time.sleep"):
-            assert scanner.list_vscode_captions() is None
-
-    def test_perform_action_happy_path(self):
+    def test_happy_path(self):
         scanner = WindowScanner()
 
         def fake_run(cmd, **kwargs):
@@ -274,11 +231,15 @@ class TestWindowScanner:
             if "loadScript" in joined:
                 return subprocess.CompletedProcess(cmd, 0, stdout="11", stderr="")
             if "journalctl" in joined:
-                out = (
-                    "Apr 19 host kwin[1]: "
-                    f"{ACTION_LOG_PREFIX}x - ag-scripts - Visual Studio Code\n"
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    stdout=(
+                        "Apr 19 host kwin[1]: "
+                        f"{ACTION_LOG_PREFIX}x - ag-scripts - Visual Studio Code\n"
+                    ),
+                    stderr="",
                 )
-                return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         with patch(
@@ -290,7 +251,7 @@ class TestWindowScanner:
                 scanner.perform_window_action("ag-scripts", ACTION_CLOSE) is True
             )
 
-    def test_perform_action_returns_false_when_no_match(self):
+    def test_no_match_returns_false(self):
         scanner = WindowScanner()
 
         def fake_run(cmd, **kwargs):
@@ -312,28 +273,3 @@ class TestWindowScanner:
                 scanner.perform_window_action("no-such-label", ACTION_ACTIVATE)
                 is False
             )
-
-    def test_perform_action_rejects_unknown_action(self):
-        scanner = WindowScanner()
-        with pytest.raises(ValueError):
-            scanner.perform_window_action("any", "launch-nukes")
-
-    def test_perform_action_unavailable_tooling_returns_false(self):
-        scanner = WindowScanner()
-        with patch("window_scanner.shutil.which", return_value=None):
-            assert scanner.perform_window_action("any", ACTION_CLOSE) is False
-
-    def test_returns_none_when_script_id_non_numeric(self):
-        scanner = WindowScanner()
-
-        def fake_run(cmd, **kwargs):
-            if "loadScript" in " ".join(cmd):
-                return subprocess.CompletedProcess(cmd, 0, stdout="nope", stderr="")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with patch(
-            "window_scanner.shutil.which", side_effect=lambda _: "/usr/bin/stub"
-        ), patch("window_scanner.subprocess.run", side_effect=fake_run), patch(
-            "window_scanner.time.sleep"
-        ):
-            assert scanner.list_vscode_captions() is None

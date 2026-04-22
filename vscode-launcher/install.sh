@@ -33,6 +33,13 @@ if ! command -v tmux &>/dev/null; then
     echo "Warning: tmux not found on PATH. The launcher will run but session switching will be disabled."
 fi
 
+# v2.0 scanning uses VSCode's internal IPC — no qdbus/journalctl needed
+# for READS. qdbus6 + journalctl are still needed for the Stop / Activate
+# per-row actions, which still use KWin scripting.
+if ! command -v qdbus6 &>/dev/null; then
+    echo "Warning: qdbus6 not found on PATH. Stop / Activate row buttons will be no-ops."
+fi
+
 if ! command -v code &>/dev/null; then
     echo "Warning: 'code' (VSCode CLI) not found on PATH. The launcher will run but cannot open workspaces."
 fi
