@@ -237,7 +237,7 @@ Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc
 - UI: replaced the single-column list with a 5-column grid — **Checkbox · Workspace · Status · Tmux · Actions**. Values line up cleanly across rows.
 - **Status** is now its own column (green `● running` or blank), replacing the inline badge next to the label.
 - Checkbox is disabled on running rows — you can't accidentally bulk-re-launch something that's already open. The old "Already running?" 3-button dialog is gone as a result.
-- Right-click Launch still works as an escape hatch if you intentionally want to duplicate a running window.
+- Right-click Launch still works as a manual override if you intentionally want to duplicate a running window.
 - `Launch All` silently skips running workspaces.
 
 ### v1.4

@@ -21,7 +21,7 @@ The buttons make routine operations one-click instead of requiring the user to A
 ## Non-Goals
 
 - Bulk stop / bulk activate (skip until demand)
-- Forcing closes past VSCode's own "unsaved changes?" dialog — we trigger the normal close, which respects unsaved state
+- Forcing closes past VSCode's own "unsaved changes?" dialog. The normal close flow is triggered, which respects unsaved state.
 - Listening for KWin window-closed events to auto-refresh the row — skipped to keep the implementation simple and avoid lying to the user about state that's still being confirmed (save prompts, etc.)
 
 ## Requirements
@@ -89,12 +89,12 @@ The buttons make routine operations one-click instead of requiring the user to A
 
 ## Implementation Notes
 
-- The action script is generated fresh per call and uploaded with a unique temp-file name, but loaded into KWin under a fixed `vscode-launcher-action` script id so we can unload it deterministically in `finally`
-- `closeWindow()` is asynchronous; the `VSCL_ACTION_OK:` log line is emitted synchronously before `closeWindow()` returns (i.e., before the unsaved-changes dialog, if any). So `True` means "we asked VSCode to close the window", not "the window is now gone"
+- The action script is generated fresh per call and uploaded with a unique temp-file name, but loaded into KWin under a fixed `vscode-launcher-action` script id so the `finally` block can unload it deterministically
+- `closeWindow()` is asynchronous; the `VSCL_ACTION_OK:` log line is emitted synchronously before `closeWindow()` returns (i.e., before the unsaved-changes dialog, if any). So `True` means "the close request was accepted", not "the window is now gone"
 - `workspace.activeWindow = w` is a property assignment in the KWin JS API; it handles both stacking-order raise and keyboard-focus transfer
-- Labels are passed through `json.dumps` for safe JS string-literal insertion — a property-based test-like case in the unit suite proves embedded quotes don't escape
+- Labels are passed through `json.dumps` for safe JS string-literal insertion. A property-based test-like case in the unit suite proves embedded quotes don't escape.
 
 ## Open Questions (deferred)
 
-- **Auto-refresh after Stop**: deferred until we have a signal that distinguishes "window actually closed" from "close dialog is pending". Could use a KWin `windowRemoved` signal via a persistent registered script; out of scope for now.
-- **Stop confirmation in our UI**: deferred — VSCode's own save-changes dialog is the authoritative confirmation, and adding a second dialog on top would be redundant. If users accidentally hit Stop and regret it, they can just not confirm VSCode's dialog.
+- **Auto-refresh after Stop**: deferred until a signal exists that distinguishes "window actually closed" from "close dialog is pending". Could use a KWin `windowRemoved` signal via a persistent registered script; out of scope for now.
+- **Stop confirmation in launcher UI**: deferred. VSCode's own save-changes dialog is the authoritative confirmation, and a second dialog on top would be redundant. If users accidentally hit Stop and regret it, they can cancel VSCode's dialog.

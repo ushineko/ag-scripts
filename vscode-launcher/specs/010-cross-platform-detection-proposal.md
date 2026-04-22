@@ -26,39 +26,39 @@ including PID and window title. Example line on Linux:
     0  346198835977  2492977  window [2] (Spec vscode-launcher too… - ag-scripts - Visual Studio Code)
 ```
 
-For each running VSCode window we get:
+For each running VSCode window the CLI provides:
 
-- Renderer process PID (a *real* per-window PID — not the main-VSCode PID
-  that KWin hands us). Accurate `launched_at` via `/proc/<pid>/stat` becomes
+- Renderer process PID (a *real* per-window PID, not the main-VSCode PID
+  that KWin reports). Accurate `launched_at` via `/proc/<pid>/stat` becomes
   possible for ALL running windows, including ones VSCode had open before
   the launcher started.
 - Full caption string in the same `<file> - <label> - Visual Studio Code`
-  format we already parse.
+  format the launcher already parses.
 
-This is the **richest, most portable** signal we can get without speaking
+This is the **richest, most portable** signal obtainable without speaking
 VSCode's internal protocol.
 
 **Cost**: ~2.4 s wall-clock per invocation on the author's i9-14900K. The
 Electron CLI has to spin up, open the IPC socket, round-trip, and print.
-Far too slow for a 5-second polling loop (we'd spend ~50 % of time in
+Far too slow for a 5-second polling loop (~50 % of time would be spent in
 `code --status`). Acceptable for startup / manual Refresh only.
 
 ### VSCode IPC socket (`/run/user/<uid>/vscode-<session>-main.sock`)
 
 Probed directly. Does **not** accept plain HTTP or bare JSON. Uses VSCode's
-internal `vs/base/parts/ipc/node/ipc.net` framing — length-prefixed binary
+internal `vs/base/parts/ipc/node/ipc.net` framing: length-prefixed binary
 with handshake opcodes, message IDs, and VSCode's custom buffer format.
-Connecting from Python times out because we don't send the expected
-handshake.
+Connecting from Python times out without the expected handshake.
 
 Writing a Python client for this protocol is feasible (VSCode is MIT-
-licensed; we could mirror the wire format) but estimated at **a few hundred
-lines of protocol code** that must track VSCode's internal version updates.
+licensed, so the wire format can be mirrored) but estimated at **a few
+hundred lines of protocol code** that must track VSCode's internal version
+updates.
 
 ### VSCode extension
 
 A small extension could publish open-workspace state to a known file or
-socket, giving us instant, stable per-window data. But: every user would
+socket, providing instant, stable per-window data. But: every user would
 have to install the extension, and the installation/update flow is a
 separate concern from the launcher itself. Deferred as out of scope.
 
@@ -67,7 +67,7 @@ separate concern from the launcher itself. Deferred as out of scope.
 A new `WorkspaceInspector` abstraction with pluggable backends. The table
 widget / MainWindow stays backend-agnostic.
 
-```
+```text
 WorkspaceInspector (abstract)
    │  list_entries() -> list[WindowEntry] | None
    │  start_async_scan() -> scan_finished(list[WindowEntry] | None)
@@ -109,22 +109,22 @@ Recommend (A) for the first port, (B) as a setting later.
 
 ### Per-window launch time everywhere
 
-`code --status` gives us renderer PIDs. `/proc/<pid>/stat` works the same
-on any Linux. On macOS/Windows we'd swap the per-process start-time helper
-for `os.stat` or platform-specific calls. The Launched column becomes
-correct per-window on every platform — an upgrade over the current
+`code --status` surfaces renderer PIDs. `/proc/<pid>/stat` works the same
+on any Linux. On macOS/Windows the per-process start-time helper would
+swap in `os.stat` or platform-specific calls. The Launched column becomes
+correct per-window on every platform, an upgrade over the current
 "main-VSCode-started-at" lower bound.
 
 ## Open questions
 
-- **Action flow** (Activate / Stop / Start) also uses KWin scripting. For
-  cross-platform, we'd need equivalents:
+- **Action flow** (Activate / Stop / Start) also uses KWin scripting.
+  Cross-platform equivalents needed:
   - **Start** is already portable (`Popen(["code", "--new-window", path])`).
-  - **Stop** — `code --command workbench.action.closeWindow` with an
+  - **Stop**: `code --command workbench.action.closeWindow` with an
     active-window selector? Needs investigation. Or `kill <renderer_pid>`
     (hard), `killall code --signal SIGINT` (nuclear).
-  - **Activate** — `code --reuse-window <path>` focuses an existing window.
-    That might be the cross-platform equivalent of "activate". Needs
+  - **Activate**: `code --reuse-window <path>` focuses an existing window.
+    Plausibly the cross-platform equivalent of "activate". Needs
     confirmation.
 
 - **State DB path** on non-Linux:

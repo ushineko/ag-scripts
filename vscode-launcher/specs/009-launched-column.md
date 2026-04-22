@@ -13,11 +13,11 @@ The launched time is populated from two sources with precedence:
 
 ## Problem
 
-Empty answer: "when did I open this workspace?" — previously there was no signal in the UI. The user had to remember.
+Empty answer: "when was this workspace opened?" Previously there was no signal in the UI. The user had to remember.
 
 Naive answer: "just look at `w.pid` in KWin and read /proc" — doesn't work. KWin reports the **main VSCode process PID** for every window (Electron's single-process-owns-all-windows model). All six open windows would show "9h ago" if that's when VSCode itself started.
 
-Real answer: track launches we perform, fall back to VSCode-main-started for external opens.
+Real answer: track launches the launcher itself performs, fall back to VSCode-main-started for external opens.
 
 ## Goals
 
@@ -98,7 +98,7 @@ Real answer: track launches we perform, fall back to VSCode-main-started for ext
 
 ### Data flow
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │ User clicks Start on workspace X                                │
 │   │                                                             │

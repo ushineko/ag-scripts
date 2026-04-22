@@ -46,9 +46,9 @@ The running state, previously an inline `● running` badge next to the label, b
 
 ### Behavior changes
 
-- **Bulk launch (`Launch Selected` / `Launch All`)** silently skips any target whose `is_running` flag is true. This is the layer-two defense — the disabled checkbox on running rows is the primary UX signal.
+- **Bulk launch (`Launch Selected` / `Launch All`)** silently skips any target whose `is_running` flag is true. This is the layer-two defense. The disabled checkbox on running rows is the primary UX signal.
 - **Per-row `Start`** only renders on non-running rows; pressing it always launches (`allow_running=True`) because the UI contract would be broken if it silently did nothing.
-- **Context-menu `Launch`** forces `allow_running=True` — the power-user escape hatch for deliberately duplicating a window.
+- **Context-menu `Launch`** forces `allow_running=True`. This is the power-user manual override for deliberately duplicating a window.
 - **Removed**: `_launch_paths`'s 3-button "Already running" dialog. The launch flow is now straight-line: validate `code` is installed, filter or not based on `allow_running`, spawn, schedule `vscode-gather`.
 
 ### Signals
@@ -60,7 +60,7 @@ The running state, previously an inline `● running` badge next to the label, b
 - `path_at_row(row: int) -> str | None` replaces `item(i).data(UserRole)`
 - `checked_workspace_paths()` — same interface as before, now scanning column 0 cell widgets
 - `all_workspace_paths()` — same interface
-- `clear_workspaces()` replaces `clear()` — also wipes the path-by-row map so we don't leak stale references
+- `clear_workspaces()` replaces `clear()`. Also wipes the path-by-row map so stale references don't leak.
 
 ## Acceptance Criteria
 
@@ -105,7 +105,7 @@ The running state, previously an inline `● running` badge next to the label, b
 
 ## Alternatives Considered
 
-- **Column headers** — evaluated; rejected. Headers add vertical space and visual weight for a personal-use list whose columns are obvious ("that's the checkbox column, that's the tmux column"). If this grows into a bigger table, we can add them.
+- **Column headers** — evaluated; rejected. Headers add vertical space and visual weight for a personal-use list whose columns are obvious ("that's the checkbox column, that's the tmux column"). Worth revisiting if this grows into a bigger table.
 - **Replace `QTableWidget` with `QTreeView` + custom `QAbstractTableModel`** — cleaner MVC, but ~3× the code for a read-mostly view with thirteen rows. Deferred.
 - **Keep the 3-button launch dialog as a power-user feature** — rejected. The dialog duplicated the affordance the context-menu `Launch` already provides; removing it is net simpler.
 - **Disable the entire row (including Activate / Stop) when running instead of just the checkbox** — rejected. Activate and Stop are the primary actions for running rows; disabling them would defeat the purpose of showing the controls.

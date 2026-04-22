@@ -4,7 +4,7 @@
 
 ## v1.7 amendment — re-sort on state change
 
-v1.6 originally updated only the Checkbox / Status / Actions cells of flipped rows (in place, no re-sort) to preserve scroll and selection. Feedback: the list no longer reflected the running-first invariant after a poll detected a change. v1.7 now re-sorts the workspace list running-first (stable — MRU preserved within each group) and rebuilds the table whenever at least one row flipped. When no flips happen (the common case for successive polls with no state change), nothing reshuffles — no disruption. This means `update_row_running_state` in-place cell rebuild is no longer reachable and has been removed.
+v1.6 originally updated only the Checkbox / Status / Actions cells of flipped rows (in place, no re-sort) to preserve scroll and selection. Feedback: the list no longer reflected the running-first invariant after a poll detected a change. v1.7 now re-sorts the workspace list running-first (stable sort, so MRU is preserved within each group) and rebuilds the table whenever at least one row flipped. When no flips happen (the common case for successive polls with no state change), nothing reshuffles. `update_row_running_state` in-place cell rebuild is no longer reachable and has been removed.
 
 ## Description
 
@@ -15,15 +15,15 @@ This eliminates the main cause of "stale UI": the user opens or closes a VSCode 
 ## Goals
 
 - Running / not-running column reflects reality within 5 s of any change
-- No UI freeze during the KWin scan (the scan takes 300–500 ms — would be visible if run on the GUI thread)
+- No UI freeze during the KWin scan. The scan takes 300–500 ms; running it on the GUI thread would produce a visible stall.
 - No scroll or selection loss from auto-refresh
 - No overhead while the launcher window is minimized
 
 ## Non-Goals
 
-- Auto re-reading VSCode recents (new workspaces appearing in recents still require manual Refresh) — recent-list changes are rare and would force a sort + rebuild, which is disruptive mid-session
-- Auto re-sort (running rows don't leap to the top mid-poll) — row position is load-bearing for muscle memory
-- Event-driven scans (KWin window-added / window-removed signals) — would require a persistent KWin script with a D-Bus callback; out of scope
+- Auto re-reading VSCode recents. New workspaces appearing in recents still require manual Refresh. Recent-list changes are rare and would force a sort + rebuild, which is disruptive mid-session.
+- Auto re-sort. Running rows don't leap to the top mid-poll; row position is critical for muscle memory.
+- Event-driven scans (KWin window-added / window-removed signals). Would require a persistent KWin script with a D-Bus callback; out of scope.
 
 ## Requirements
 
@@ -34,13 +34,13 @@ This eliminates the main cause of "stale UI": the user opens or closes a VSCode 
 - Each tick calls `_trigger_background_scan()`, which:
   - Skips when `window_scanner is None`
   - Skips when `self.isVisible()` is False (window minimized / hidden → no CPU waste)
-  - Skips when a previous scan's `QThread` is still running (reentrance guard — the KWin script is registered under a single shared name, so concurrent scans would race)
+  - Skips when a previous scan's `QThread` is still running (reentrance guard: the KWin script is registered under a single shared name, so concurrent scans would race)
   - Otherwise spawns a short-lived `QThread` + `_ScanWorker` that invokes `WindowScanner.list_vscode_captions()` off the UI thread
 
 ### Worker
 
 - `_ScanWorker(QObject)` with a single `finished = pyqtSignal(object)` carrying `list[str] | None`
-- `run()` wraps the scanner call in `try/except Exception` and emits `None` on failure — a background refresh that raises would kill the thread and leak the worker
+- `run()` wraps the scanner call in `try/except Exception` and emits `None` on failure. A background refresh that raises would kill the thread and leak the worker.
 - Worker is `moveToThread(thread)`; thread starts `worker.run`; on `finished` both the worker and thread self-delete via `deleteLater`
 
 ### In-place update
@@ -52,7 +52,7 @@ This eliminates the main cause of "stale UI": the user opens or closes a VSCode 
   - Status cell (to show / hide the `● running` label)
   - Actions cell (to swap `[Start]` ↔ `[Activate][Stop]`)
 - Workspace cell (label + path) and Tmux cell are untouched
-- `self.workspaces` order is never reshuffled — running-first sort is a *starting* arrangement, not a live invariant
+- `self.workspaces` order is never reshuffled. Running-first sort is a *starting* arrangement, not a live invariant.
 
 ### Cleanup
 
@@ -64,7 +64,7 @@ This eliminates the main cause of "stale UI": the user opens or closes a VSCode 
 - [x] `_ScanWorker.run` calls `WindowScanner.list_vscode_captions()` and emits the result as a `finished(object)` signal
 - [x] `_ScanWorker.run` catches `Exception` and emits `None` so worker-thread failures can't crash the UI
 - [x] `_trigger_background_scan` skips when `window_scanner is None`, when `isVisible()` is False, and when the previous scan thread is still running
-- [x] `_on_background_scan_done(None)` is a no-op — doesn't clobber existing state
+- [x] `_on_background_scan_done(None)` is a no-op. Existing state is not clobbered.
 - [x] `_on_background_scan_done(captions)` updates each row's `is_running` in place; row order is preserved
 - [x] `WorkspaceTableWidget.update_row_running_state(row, ws)` rebuilds only the Checkbox / Status / Actions cells
 - [x] Checkbox in a row that transitioned to running becomes disabled (belt-and-suspenders: the spec 006 bulk-launch guard also filters running)
@@ -92,7 +92,7 @@ This eliminates the main cause of "stale UI": the user opens or closes a VSCode 
 
 ## Implementation Notes
 
-- Why QThread and not `concurrent.futures`: Qt signals emitted from a background thread are auto-marshaled to the receiver's thread (so `_on_background_scan_done` runs on the UI thread). With `concurrent.futures`, we'd need to manually bounce the result back through a `pyqtSignal` — same complexity, more moving parts.
+- Why QThread and not `concurrent.futures`: Qt signals emitted from a background thread are auto-marshaled to the receiver's thread (so `_on_background_scan_done` runs on the UI thread). With `concurrent.futures`, the result would need manual bouncing back through a `pyqtSignal`. Same complexity, more moving parts.
 - Why deleteLater both the worker and the thread: standard Qt pattern. The worker is a `QObject` moved to another thread, so `deleteLater` ensures it's destroyed on the correct thread after the signal fires. The thread itself is deleted on `finished`.
 - Why the visibility gate: `isVisible()` returns False for minimized or not-yet-shown windows. That's the cheapest "is the user actively looking at this?" signal Qt provides. More nuanced options (active-window tracking, idle detection) aren't worth the complexity.
 - Why 5 seconds: empirical tradeoff. A 500 ms scan at a 5 s interval is ~10% scan duty cycle, which is barely noticeable on a modern system. Shorter intervals (2 s) feel slightly snappier but triple the overhead; longer intervals (10 s) feel sluggish when the user has just closed a VSCode window and the launcher still says it's running.
@@ -100,6 +100,6 @@ This eliminates the main cause of "stale UI": the user opens or closes a VSCode 
 ## Alternatives Considered
 
 - **Auto-refresh the whole list (recents + scan + sort + rebuild)** — rejected. Full rebuild every 5 s would destroy scroll position and selection. The user's feedback about the "selection indicator" in v1.3 showed they're attentive to these visual defects.
-- **Event-driven via persistent KWin script** — rejected for v1.6. KWin 6 supports `workspace.windowAdded` / `windowRemoved` signals, but we'd need a long-lived script that calls back into our process over D-Bus. Substantial machinery. Revisit if 5 s polling ever feels insufficient.
+- **Event-driven via persistent KWin script** — rejected for v1.6. KWin 6 supports `workspace.windowAdded` / `windowRemoved` signals, but a long-lived script with a D-Bus callback into the launcher process would be substantial machinery. Revisit if 5 s polling ever feels insufficient.
 - **Polling on the UI thread** — rejected. 300-500 ms freeze every 5 s is jank.
-- **Running a cheaper detection (e.g., `pgrep code`)** — doesn't distinguish which workspaces are open. Useless for our signal.
+- **Running a cheaper detection (e.g., `pgrep code`)** — doesn't distinguish which workspaces are open. Useless as a signal here.

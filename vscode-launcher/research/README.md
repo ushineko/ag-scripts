@@ -169,13 +169,13 @@ This is an **internal** VSCode API, not a documented public one. Things
 that could change between VSCode versions:
 
 - **`DataType` enum values**: these are a wire format, and the enum is
-  declared `const enum` in TypeScript — inlined at compile time. Changing
+  declared `const enum` in TypeScript which is inlined. Changing
   the numbering would break all existing clients, so stability is implicit.
   Unchanged since the IPC refactor years ago.
 - **Channel names** (`diagnostics`, `launch`, etc.): named strings, could
-  theoretically be renamed, but these are load-bearing for `code --status`
-  itself.
-- **`getMainDiagnostics()` return shape**: could gain fields (additive,
+  theoretically be renamed, but these are needed for `code --status`
+  itself. Unlikely to drift.
+- **`getMainDiagnostics()` return format**: could gain fields (additive,
   safe) or have fields renamed (breaking). Our parser ignores extras.
 - **`folderURIs` structure**: currently `{scheme, authority, path, query, fragment}`
   — standard VSCode `URI` shape, also stable for years.
@@ -190,7 +190,7 @@ The POC's reader skips the server's `Initialize` message (type 200) before
 accepting a response. If VSCode ever interleaves other protocol messages
 (ack, keepalive) between the handshake and our reply, the POC's dumb
 reader-loop handles them by just skipping non-Regular frames. A production
-client should also send keepalive acks for long-lived connections — we
+client should also send keepalive acks for long-lived connections. We
 don't need that for one-shot scans.
 
 ### Socket discovery
@@ -198,8 +198,8 @@ don't need that for one-shot scans.
 Current logic: `glob XDG_RUNTIME_DIR for vscode-*-main.sock, pick most-recent`.
 This is correct on Linux. On macOS the sockets live at
 `$TMPDIR/vscode-ipc-*.sock`. On Windows they're **named pipes**:
-`\\.\pipe\vscode-ipc-*-sock`. Non-trivial to speak named-pipe protocol
-from Python (needs `pywin32`), but conceptually the same framing.
+`\\.\pipe\vscode-ipc-*-sock`. Requires additional plumbing to speak named-pipe
+protocol from Python (needs `pywin32`), but conceptually the same framing.
 
 ### Not a replacement for actions
 
@@ -217,7 +217,7 @@ This POC only reads state. Activate / Stop are separate problems:
 ### If we do a cross-platform rewrite
 
 Use this approach. It's strictly better on every axis than both the
-current KWin-based implementation AND the `code --status` fallback I
+current KWin-based implementation AND the `code --status` fallback
 originally proposed in [spec 010](../specs/010-cross-platform-detection-proposal.md).
 
 Proposed architecture, replacing what was in spec 010:
@@ -266,6 +266,4 @@ If we decide to proceed, my recommended ordering:
    var for a few days.
 5. If the IPC backend is reliable, flip the default and deprecate KWin.
 
-Happy to do any subset of the above next session. The hard work — reverse
-engineering the protocol to the point where a Python client round-trips
-cleanly in 3 ms — is done.
+Any subset of the above next session is possible. The core protocol work is done.

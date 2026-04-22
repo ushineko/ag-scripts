@@ -65,7 +65,7 @@ in principle, atomic response with no race possible).
 
 - `WindowScanner.list_vscode_entries()` delegates to
   `vscode_ipc.list_vscode_windows()` and translates the response to the
-  existing `{c: caption, p: pid}` shape that MainWindow already consumes.
+  existing `{c: caption, p: pid}` format that MainWindow already consumes.
   Caller code in MainWindow is unchanged.
 - `WindowScanner.list_vscode_captions()` stays as a wrapper.
 - `WindowScanner.perform_window_action(label, action)` remains on KWin
@@ -85,7 +85,7 @@ in principle, atomic response with no race possible).
 - `_trigger_background_scan` is now ~15 lines: visibility check, one
   sync call to `list_vscode_entries()`, flip detection, re-sort on flip
   or launched-column refresh on no-flip.
-- `_on_background_scan_done` is gone — its logic moved inline into
+- `_on_background_scan_done` is gone. Its logic moved inline into
   `_trigger_background_scan` since there's no longer an async boundary.
 - No more `_scan_thread` / `_scan_worker` attributes. No more
   `_on_scan_thread_done` cleanup.
@@ -94,7 +94,7 @@ in principle, atomic response with no race possible).
 ### Install script
 
 - Still installs the desktop entry, symlinks, zsh hook, etc.
-- No longer checks for `journalctl` — scanning doesn't use it.
+- No longer checks for `journalctl`. Scanning doesn't use it.
 - Still checks for `qdbus6` but downgrades the missing-qdbus6 message to
   "Stop / Activate will be no-ops" (reading works without it now).
 
@@ -109,14 +109,14 @@ in principle, atomic response with no race possible).
 - [x] Never raises from public entry points
 - [x] Scan path no longer invokes `qdbus6` or `journalctl`
 - [x] Per-window `launched_at` is now accurate for every running window
-  (verified live — distinct `/proc/<renderer_pid>/stat` values for
+  (verified live: distinct `/proc/<renderer_pid>/stat` values for
   different windows)
 - [x] `WindowScanner.list_vscode_entries()` translates IPC response to the
-  existing `{c, p}` shape; MainWindow is unchanged
+  existing `{c, p}` format; MainWindow is unchanged
 - [x] `WindowScanner.perform_window_action()` still works via KWin
   scripting
-- [x] `MainWindow._trigger_background_scan` calls sync, inline —
-  no QThread, no QProcess, no scan_finished signal
+- [x] `MainWindow._trigger_background_scan` calls sync, inline.
+  No QThread, no QProcess, no scan_finished signal.
 - [x] Tests pass: 130 total (32 new for vscode_ipc, ~100 existing,
   ~4 migrated from the v1.x async-signal pattern)
 - [x] Live end-to-end works on author's KDE Plasma 6 setup
@@ -162,14 +162,15 @@ in principle, atomic response with no race possible).
   because VSCode's `serialize()` doesn't have a dedicated boolean branch
   (the real VSCode path falls through to `JSON.stringify`). Roundtrip works
   either way but matching the server's behavior keeps things predictable.
-- Socket discovery uses `os.stat(...).st_mtime` for ordering — if VSCode
-  has been restarted without cleanup, we pick the live socket.
+- Socket discovery uses `os.stat(...).st_mtime` for ordering. When VSCode
+  has been restarted without cleanup, the most-recent socket is the live
+  one.
 
 ### Why not switch Close / Activate too
 
 `launch.start({args: ["--reuse-window", path]})` via IPC is plausibly the
-Activate replacement; but Close has no obvious counterpart in the public
-channel surface that we've explored. Dropping KWin for actions is a future
+Activate replacement. Close has no obvious counterpart in the public
+channel surface so far explored. Dropping KWin for actions is a future
 step that requires investigating the `window` channel and related RPCs.
 Out of scope for v2.0, which aims to fix the scanner reliability (nonce
 workaround) and latency issues while keeping the known-good action path.
@@ -203,8 +204,8 @@ A companion pass after the main refactor landed:
   It's KDE-specific and already feature-gates on `qdbus6` availability
   internally. A cross-platform port would replace it wholesale with
   something else (IPC `launch.start` for activate; `kill` or a `window`
-  RPC for close) — abstracting it prematurely would just add an indirection
-  that doesn't help.
+  RPC for close). Abstracting prematurely would add an indirection with
+  no benefit.
 
 ## Memory
 
@@ -217,8 +218,6 @@ Two memories already saved during v1.6–v1.8 debugging remain relevant:
 
 A new lesson worth capturing from this refactor: **"check for a native
 protocol before building an OS-level scraping solution"**. The v1.x
-implementation was a well-engineered scraper, but the right answer the
-whole time was "talk to the service directly." Research took one session;
-the rewrite was ~300 lines. It'd have saved weeks of workarounds had we
-done it first. But — worth noting — the KWin path taught us a lot about
-PyQt lifecycle pitfalls that will pay dividends in future work.
+implementation was a well-engineered scraper, but the direct approach
+(talk to the service, not the compositor it renders into) was available
+the whole time. Research took one session; the rewrite was ~300 lines.

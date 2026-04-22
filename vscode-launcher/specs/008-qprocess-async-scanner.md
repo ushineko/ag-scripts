@@ -6,7 +6,7 @@
 
 Replaces the `QThread` + `_ScanWorker` auto-refresh machinery from spec 007 with a `QProcess` state-machine inside `WindowScanner`. No threads are spawned; each subprocess invocation is driven by Qt's event loop.
 
-This removes the two PyQt GC invariants that bit us in v1.6 (silent no-run when the worker was prematurely collected; `wrapped C/C++ object deleted` crash on the next tick). Threading was the wrong abstraction from the start — we were only using threads to hide `subprocess.run`'s blocking nature, and `QProcess` is inherently async via Qt's event loop.
+This removes the two PyQt GC invariants that bit the v1.6 implementation (silent no-run when the worker was prematurely collected; `wrapped C/C++ object deleted` crash on the next tick). Threading was the wrong abstraction from the start. The threads only existed to hide `subprocess.run`'s blocking nature, and `QProcess` is inherently async via Qt's event loop.
 
 ## Goals
 
@@ -36,7 +36,7 @@ This removes the two PyQt GC invariants that bit us in v1.6 (silent no-run when 
 - `errorOccurred` on any `QProcess` also terminates the chain cleanly
 - In-flight guard: a second `start_async_scan()` call while a scan is running is a silent no-op — callers don't need their own reentrance lock
 - Cleanup in `_finish_async`:
-  - Fires a fire-and-forget `qdbus6 … unloadScript` (we don't wait for its result — we already have the captions)
+  - Fires a fire-and-forget `qdbus6 … unloadScript`. No wait for the result since the captions are already in hand.
   - `os.unlink()`s the temp script file
   - Calls `deleteLater()` on all tracked `QProcess` instances and the delay timer
   - Resets state fields to `None` and flips `_scan_in_progress` back to `False`
@@ -80,7 +80,7 @@ This removes the two PyQt GC invariants that bit us in v1.6 (silent no-run when 
 
 ### State machine (async path)
 
-```
+```text
 start_async_scan
    ├─ available? ─no→ emit None
    ├─ already in-flight? ─yes→ no-op
@@ -118,9 +118,9 @@ The sync version remains useful for the initial populate on startup and for unit
 
 ## Implementation Notes
 
-- Each step creates a new `QProcess(self)` rather than reusing one. Parent-child ownership keeps Qt state alive; `deleteLater` in `_finish_async` cleans them up after emission so we don't leak a QProcess per 5-second cycle.
-- `QProcess.errorOccurred` is connected alongside `finished` so we catch "failed to start" type errors (e.g., `qdbus6` suddenly disappears) — not just non-zero exit codes.
-- The `hasattr(scanner, "scan_finished")` duck-typing check in MainWindow lets fakes use plain objects with a `list_vscode_captions()` method; if we subclassed every test fake from QObject we'd be mocking a shape that's deeper than the tests need.
+- Each step creates a new `QProcess(self)` rather than reusing one. Parent-child ownership keeps Qt state alive; `deleteLater` in `_finish_async` cleans them up after emission so a QProcess isn't leaked per 5-second cycle.
+- `QProcess.errorOccurred` is connected alongside `finished` to catch "failed to start" type errors (e.g., `qdbus6` suddenly disappears), not just non-zero exit codes.
+- The `hasattr(scanner, "scan_finished")` duck-typing check in MainWindow lets fakes use plain objects with a `list_vscode_captions()` method. Subclassing every test fake from QObject would mock a surface deeper than the tests need.
 - `_finish_async` is idempotent on the cleanup side — even if some fields are `None`, the per-field guards don't raise.
 
 ## Memories Saved (for future projects)
