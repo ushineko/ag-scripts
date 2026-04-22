@@ -201,6 +201,10 @@ Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc
 
 ## Changelog
 
+### v1.8.1
+
+- Fix: detecting that VSCode has exited (or been killed) no longer requires a manual Refresh. Each auto-refresh scan now embeds a unique nonce in the KWin log marker; the parser rejects any line from a previous scan that happens to still be inside journalctl's `--since "3 seconds ago"` window when the current scan's line hasn't flushed yet.
+
 ### v1.8
 
 - New: **Launched** column between Status and Tmux showing how long ago each running workspace was opened (`5m ago`, `2h ago`, `3d ago`). Non-running rows show an em-dash.

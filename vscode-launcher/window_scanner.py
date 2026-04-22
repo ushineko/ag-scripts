@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from typing import Iterable
 
 from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
@@ -25,11 +26,42 @@ from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
 SCRIPT_NAME = "vscode-launcher-scanner"
 ACTION_SCRIPT_NAME = "vscode-launcher-action"
 LOG_PREFIX = "VSCL_CAPTIONS:"
+# Per-scan markers look like "VSCL_CAPTIONS_<nonce>:". A unique nonce per scan
+# prevents the journal-race bug where a previous scan's log line is still in
+# `journalctl --since "3 seconds ago"` output but the current scan's line
+# hasn't flushed yet — without a nonce we'd accept the stale line.
+SCAN_MARKER_PREFIX = "VSCL_CAPTIONS_"
 ACTION_LOG_PREFIX = "VSCL_ACTION_OK:"
+
+
+def _new_scan_nonce() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def build_enumerate_script(nonce: str) -> str:
+    """Build the KWin JS enumeration script with `nonce` baked into the log
+    marker so stale journal lines can be unambiguously rejected."""
+    marker = SCAN_MARKER_PREFIX + nonce + ":"
+    return (
+        "(function() {"
+        "  var windows = workspace.windowList();"
+        "  var entries = [];"
+        "  for (var i = 0; i < windows.length; i++) {"
+        "    var w = windows[i];"
+        '    if (w.resourceClass !== "code") continue;'
+        "    if (w.skipTaskbar || w.specialWindow) continue;"
+        "    entries.push({c: w.caption, p: w.pid});"
+        "  }"
+        '  console.log("%s" + JSON.stringify(entries));'
+        "})();"
+    ) % marker
 
 ACTION_CLOSE = "close"
 ACTION_ACTIVATE = "activate"
 
+# Kept for test compatibility — legacy tests inject journal text using the
+# bare `VSCL_CAPTIONS:` prefix (pre-nonce). Production scans always use
+# `build_enumerate_script(nonce)` and the nonce-aware parser.
 KWIN_ENUMERATE_SCRIPT = """
 (function() {
     var windows = workspace.windowList();
@@ -38,9 +70,6 @@ KWIN_ENUMERATE_SCRIPT = """
         var w = windows[i];
         if (w.resourceClass !== "code") continue;
         if (w.skipTaskbar || w.specialWindow) continue;
-        // Emit caption + pid so Python can look up window launch time via
-        // /proc/<pid>/stat. `w.pid` may be undefined on some KWin versions;
-        // JSON.stringify serializes undefined as null.
         entries.push({c: w.caption, p: w.pid});
     }
     console.log("%s" + JSON.stringify(entries));
@@ -141,6 +170,7 @@ class WindowScanner(QObject):
         self._scan_in_progress = False
         self._script_path: str | None = None
         self._script_id: int | None = None
+        self._scan_nonce: str | None = None
         self._load_proc: QProcess | None = None
         self._run_proc: QProcess | None = None
         self._log_proc: QProcess | None = None
@@ -166,7 +196,10 @@ class WindowScanner(QObject):
             return
 
         self._scan_in_progress = True
-        self._script_path = self._write_script(KWIN_ENUMERATE_SCRIPT)
+        self._scan_nonce = _new_scan_nonce()
+        self._script_path = self._write_script(
+            build_enumerate_script(self._scan_nonce)
+        )
         if self._script_path is None:
             self._finish_async(None)
             return
@@ -238,13 +271,14 @@ class WindowScanner(QObject):
         )
 
     def _on_log_finished(self, *_args: object) -> None:
-        if self._log_proc is None:
+        if self._log_proc is None or self._scan_nonce is None:
             self._finish_async(None)
             return
         log_text = bytes(self._log_proc.readAllStandardOutput()).decode(
             errors="replace"
         )
-        self._finish_async(parse_scan_entries_from_journal(log_text))
+        marker = SCAN_MARKER_PREFIX + self._scan_nonce + ":"
+        self._finish_async(parse_scan_entries_from_journal(log_text, marker))
 
     def _on_async_error(self, *_args: object) -> None:
         self._finish_async(None)
@@ -282,6 +316,7 @@ class WindowScanner(QObject):
 
         self._script_path = None
         self._script_id = None
+        self._scan_nonce = None
         self._load_proc = None
         self._run_proc = None
         self._log_proc = None
@@ -416,11 +451,12 @@ class WindowScanner(QObject):
             return None
 
         script_path: str | None = None
+        nonce = _new_scan_nonce()
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".js", prefix=f"{SCRIPT_NAME}-", delete=False
             ) as f:
-                f.write(KWIN_ENUMERATE_SCRIPT)
+                f.write(build_enumerate_script(nonce))
                 script_path = f.name
 
             load = subprocess.run(
@@ -478,7 +514,8 @@ class WindowScanner(QObject):
                 check=False,
             )
 
-            return parse_scan_entries_from_journal(log.stdout)
+            marker = SCAN_MARKER_PREFIX + nonce + ":"
+            return parse_scan_entries_from_journal(log.stdout, marker)
         except (subprocess.TimeoutExpired, OSError):
             return None
         finally:
@@ -525,22 +562,25 @@ def action_succeeded(journal_text: str) -> bool:
 
 def parse_scan_entries_from_journal(
     journal_text: str,
+    marker: str = LOG_PREFIX,
 ) -> list[dict] | None:
-    """Pull the most recent `VSCL_CAPTIONS:[...]` payload from journalctl output.
+    """Pull the most recent `<marker>[...]` payload from journalctl output.
 
-    The payload is a list of `{"c": caption, "p": pid}` dicts (v1.8+). For
-    backward compatibility with older KWin scripts that emitted a list of
-    strings, we also accept that shape and wrap each string in
-    `{"c": ..., "p": None}`. Returns None if no line matches or the JSON
-    payload is malformed.
+    `marker` defaults to the legacy bare `VSCL_CAPTIONS:` prefix (accepted by
+    legacy tests and the backward-compat code path). Production scans pass
+    a per-scan `VSCL_CAPTIONS_<nonce>:` marker so stale journal lines from
+    previous scans can't spoof the result when KWin's log flush is delayed.
+
+    Returns the parsed entries list, or None if no matching line is found
+    or the JSON payload is malformed.
     """
     if not journal_text:
         return None
     for line in reversed(journal_text.splitlines()):
-        idx = line.find(LOG_PREFIX)
+        idx = line.find(marker)
         if idx < 0:
             continue
-        payload = line[idx + len(LOG_PREFIX):].strip()
+        payload = line[idx + len(marker):].strip()
         try:
             parsed = json.loads(payload)
         except json.JSONDecodeError:

@@ -57,7 +57,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "1.8"
+__version__ = "1.8.1"
 
 CONFIG_DIR = Path.home() / ".config" / "vscode-launcher"
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"

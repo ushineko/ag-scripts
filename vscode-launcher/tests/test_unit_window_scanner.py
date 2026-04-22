@@ -24,6 +24,7 @@ from window_scanner import (
     action_succeeded,
     caption_matches_label,
     parse_captions_from_journal,
+    parse_scan_entries_from_journal,
     running_labels,
 )
 
@@ -130,6 +131,35 @@ class TestParseCaptionsFromJournal:
     def test_empty_journal_returns_none(self):
         assert parse_captions_from_journal("") is None
 
+    def test_nonce_marker_rejects_stale_previous_scan_line(self):
+        """The whole point of per-scan nonces: if journalctl output still
+        contains a PREVIOUS scan's line (which was valid at that time) but
+        the CURRENT scan's line hasn't flushed yet, the parser must refuse
+        the stale data instead of returning the wrong captions."""
+        journal = (
+            "Apr 19 host kwin[1]: VSCL_CAPTIONS_oldnonce:["
+            '{"c": "stale caption", "p": 111}]\n'
+        )
+        # Passing the current nonce's marker — no match → None
+        result = parse_scan_entries_from_journal(
+            journal, marker="VSCL_CAPTIONS_freshnonce:"
+        )
+        assert result is None
+
+    def test_nonce_marker_picks_current_over_stale(self):
+        """When both the old and the new marker are in the journal, the
+        parser should find the current one regardless of order."""
+        journal = (
+            "Apr 19 host kwin[1]: VSCL_CAPTIONS_old:["
+            '{"c": "stale", "p": 1}]\n'
+            "Apr 19 host kwin[1]: VSCL_CAPTIONS_new:["
+            '{"c": "fresh", "p": 2}]\n'
+        )
+        result = parse_scan_entries_from_journal(
+            journal, marker="VSCL_CAPTIONS_new:"
+        )
+        assert result == [{"c": "fresh", "p": 2}]
+
 
 # ---------------------------------------------------------------------------
 # action_succeeded
@@ -195,7 +225,13 @@ class TestWindowScanner:
             assert scanner.list_vscode_captions() is None
 
     def test_returns_captions_on_happy_path(self, tmp_path):
+        """Nonce-based markers: the test must emit the journal line under the
+        same marker the scanner generates, so we patch the nonce generator
+        to a known value."""
         scanner = WindowScanner()
+
+        fixed_nonce = "testnonce123"
+        expected_marker = f"VSCL_CAPTIONS_{fixed_nonce}:"
 
         def fake_run(cmd, **kwargs):
             joined = " ".join(cmd)
@@ -204,16 +240,17 @@ class TestWindowScanner:
             if "journalctl" in joined:
                 out = (
                     "Apr 19 host kwin[1]: "
-                    f'{LOG_PREFIX}["x - ag-scripts - Visual Studio Code"]\n'
+                    f'{expected_marker}["x - ag-scripts - Visual Studio Code"]\n'
                 )
                 return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
-            # run / unload / anything else
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         with patch(
             "window_scanner.shutil.which", side_effect=lambda _: "/usr/bin/stub"
         ), patch("window_scanner.subprocess.run", side_effect=fake_run), patch(
             "window_scanner.time.sleep"
+        ), patch(
+            "window_scanner._new_scan_nonce", return_value=fixed_nonce
         ):
             captions = scanner.list_vscode_captions()
 
