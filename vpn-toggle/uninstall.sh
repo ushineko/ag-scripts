@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Uninstallation script for VPN Toggle v3.2
+# Uninstallation script for VPN Toggle v4.3
 #
 
 INSTALL_DIR="$HOME/.local/bin"
@@ -8,8 +8,22 @@ DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 CONFIG_DIR="$HOME/.config/vpn-toggle"
 AUTOSTART_FILE="$HOME/.config/autostart/vpn-toggle-v2.desktop"
+SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+SYSTEMD_UNIT="$SYSTEMD_USER_DIR/vpn-toggle.service"
 
-echo "Uninstalling VPN Toggle v3.2..."
+echo "Uninstalling VPN Toggle v4.3..."
+
+# Stop and disable the systemd user unit
+if [ -f "$SYSTEMD_UNIT" ]; then
+    echo "Stopping and disabling systemd user unit..."
+    if command -v systemctl &> /dev/null; then
+        systemctl --user disable --now vpn-toggle.service 2>/dev/null || true
+    fi
+    rm -f "$SYSTEMD_UNIT"
+    if command -v systemctl &> /dev/null; then
+        systemctl --user daemon-reload 2>/dev/null || true
+    fi
+fi
 
 # Remove symlink
 if [ -L "$INSTALL_DIR/vpn-toggle-v2" ]; then
@@ -28,7 +42,7 @@ if [ -f "$DESKTOP_DIR/vpn-toggle-v2.desktop" ]; then
     fi
 fi
 
-# Remove autostart file
+# Remove autostart file (legacy — pre-v4.3 used XDG autostart instead of systemd)
 if [ -f "$AUTOSTART_FILE" ]; then
     echo "Removing autostart entry..."
     rm "$AUTOSTART_FILE"

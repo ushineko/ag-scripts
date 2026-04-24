@@ -41,7 +41,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [ufw-config](ufw-config/) | UFW/iptables configuration documentation and backups for a gateway/router setup with Pi-hole and VPN forwarding. |
 | [vscode-gather](vscode-gather/) | Gathers all VS Code windows onto a single monitor and maximizes them. Uses KWin scripting via D-Bus on KDE Plasma 6 / Wayland. |
 | [vscode-launcher](vscode-launcher/) | PyQt6 GUI to bulk-launch VSCode workspaces. Reads the list live from VSCode's own Recent history, auto-maximizes windows on the primary monitor via `vscode-gather`, and attaches each workspace's integrated terminal to its configured tmux session via a zsh hook. |
-| [vpn-toggle](vpn-toggle/) | VPN manager with integrated monitoring, health checking, auto-reconnect, and persistent PyQt6 GUI for NetworkManager connections. |
+| [vpn-toggle](vpn-toggle/) | VPN manager with event-driven health monitoring, auto-reconnect, metrics dashboard, and persistent PyQt6 GUI for NetworkManager + OpenVPN3. Ships a systemd user unit with auto-restart on crash. |
 | [whoapipe](whoapipe/) | GUI launcher manager for waypipe SSH remote Wayland applications. Profile management, remote app browser with icon grid, failure detection with diagnostic hints, and dark theme support. |
 | [windows-setup-scripts](windows-setup-scripts/) | PowerShell scripts to automate Windows dev environment setup. Installs MSYS2, Neovim, Claude Code, Oh My Posh, Miniforge, and more with idempotent installation. |
 

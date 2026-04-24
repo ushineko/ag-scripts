@@ -17,7 +17,7 @@ from PyQt6.QtGui import QTextCursor, QIcon
 
 from .config import ConfigManager
 from .vpn_manager import VPNManager
-from .monitor import MonitorThread
+from .monitor import MonitorController
 from .metrics import MetricsCollector, DataPoint, AssertDetail
 from .graph import MetricsGraphWidget
 from .widgets import VPNWidget
@@ -220,7 +220,7 @@ class VPNToggleMainWindow(QMainWindow):
 
     def setup_monitor(self):
         """Setup the monitor thread"""
-        self.monitor_thread = MonitorThread(self.config_manager, self.vpn_manager)
+        self.monitor_thread = MonitorController(self.config_manager, self.vpn_manager, parent=self)
 
         self.monitor_thread.log_message.connect(self.append_log)
         self.monitor_thread.assert_result.connect(self.on_assert_result)

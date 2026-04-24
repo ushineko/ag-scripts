@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VPN Toggle v3.2 - Integrated VPN Manager and Monitor
+VPN Toggle v4.3 - Multi-Backend VPN Manager, Monitor & Metrics Dashboard
 
 Main entry point for the application.
 """
@@ -135,7 +135,7 @@ def main():
         if not args.minimized:
             window.show()
 
-        logger.info("VPN Toggle v3.2 started")
+        logger.info(f"VPN Toggle v{__version__} started")
         sys.exit(app.exec())
 
     except RuntimeError as e:

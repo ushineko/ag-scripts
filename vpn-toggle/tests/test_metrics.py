@@ -169,14 +169,30 @@ class TestPersistence:
         assert len(points[0].assert_details) == 2
         assert points[0].assert_details[0].type == "dns_lookup"
 
-    def test_corrupt_file_skipped(self, metrics_dir):
+    def test_corrupt_legacy_file_skipped(self, metrics_dir):
         metrics_dir.mkdir(parents=True, exist_ok=True)
         corrupt_file = metrics_dir / "bad.json"
         corrupt_file.write_text("{invalid json")
 
-        # Should load without error, just skip the corrupt file
         collector = MetricsCollector(metrics_dir=metrics_dir)
         assert collector.get_all_vpn_names() == []
+
+    def test_corrupt_lines_in_jsonl_are_skipped(self, metrics_dir):
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        good = json.dumps({
+            "timestamp": "2026-02-12T14:00:00",
+            "vpn_name": "partial-vpn",
+            "latency_ms": 100.0,
+            "success": True,
+            "bounce_triggered": False,
+            "assert_details": [],
+        })
+        (metrics_dir / "partial-vpn.jsonl").write_text(good + "\n{truncated line")
+
+        collector = MetricsCollector(metrics_dir=metrics_dir)
+        points = collector.get_data_points("partial-vpn")
+        assert len(points) == 1
+        assert points[0].latency_ms == 100.0
 
     def test_empty_dir_loads_cleanly(self, metrics_dir):
         collector = MetricsCollector(metrics_dir=metrics_dir)
@@ -187,16 +203,69 @@ class TestPersistence:
         collector.record(_make_point(vpn="vpn-a"))
         collector.record(_make_point(vpn="vpn-b"))
 
-        files = sorted(f.name for f in metrics_dir.glob("*.json"))
-        assert files == ["vpn-a.json", "vpn-b.json"]
+        files = sorted(f.name for f in metrics_dir.glob("*.jsonl"))
+        assert files == ["vpn-a.jsonl", "vpn-b.jsonl"]
 
     def test_vpn_name_with_slashes_sanitized(self, metrics_dir):
         collector = MetricsCollector(metrics_dir=metrics_dir)
         collector.record(_make_point(vpn="corp/vpn"))
 
-        files = list(metrics_dir.glob("*.json"))
+        files = list(metrics_dir.glob("*.jsonl"))
         assert len(files) == 1
-        assert "corp_vpn.json" in files[0].name
+        assert "corp_vpn.jsonl" in files[0].name
+
+    def test_legacy_json_migrated_on_load(self, metrics_dir):
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        legacy = {
+            "vpn_name": "legacy-vpn",
+            "created": "2026-04-01T00:00:00",
+            "data_points": [
+                {
+                    "timestamp": "2026-04-01T00:00:00",
+                    "vpn_name": "legacy-vpn",
+                    "latency_ms": 42.0,
+                    "success": True,
+                    "bounce_triggered": False,
+                    "assert_details": [],
+                },
+            ],
+        }
+        (metrics_dir / "legacy-vpn.json").write_text(json.dumps(legacy))
+
+        collector = MetricsCollector(metrics_dir=metrics_dir)
+        points = collector.get_data_points("legacy-vpn")
+        assert len(points) == 1
+        assert points[0].latency_ms == 42.0
+        assert (metrics_dir / "legacy-vpn.jsonl").exists()
+        assert not (metrics_dir / "legacy-vpn.json").exists()
+
+    def test_append_only_writes_one_line_per_record(self, metrics_dir):
+        collector = MetricsCollector(metrics_dir=metrics_dir)
+        for i in range(5):
+            collector.record(_make_point(vpn="append-vpn", latency=float(i)))
+
+        path = metrics_dir / "append-vpn.jsonl"
+        lines = [ln for ln in path.read_text().splitlines() if ln]
+        assert len(lines) == 5
+        for i, line in enumerate(lines):
+            parsed = json.loads(line)
+            assert parsed["latency_ms"] == float(i)
+
+    def test_compaction_rewrites_file_with_bounded_tail(self, metrics_dir, monkeypatch):
+        monkeypatch.setattr("vpn_toggle.metrics.MAX_DATA_POINTS", 10)
+        monkeypatch.setattr("vpn_toggle.metrics.COMPACT_EVERY_N", 5)
+
+        collector = MetricsCollector(metrics_dir=metrics_dir)
+        for i in range(20):
+            collector.record(_make_point(vpn="compact-vpn", latency=float(i)))
+
+        path = metrics_dir / "compact-vpn.jsonl"
+        lines = [ln for ln in path.read_text().splitlines() if ln]
+        # After the last compaction, on-disk size equals in-memory tail (<= MAX_DATA_POINTS)
+        assert len(lines) <= 10
+        # Freshest points are retained; oldest are dropped
+        newest = json.loads(lines[-1])
+        assert newest["latency_ms"] == 19.0
 
     def test_stats_survive_reload(self, metrics_dir):
         collector1 = MetricsCollector(metrics_dir=metrics_dir)
@@ -230,8 +299,8 @@ class TestClear:
 
         assert collector.get_data_points("vpn-a") == []
         assert len(collector.get_data_points("vpn-b")) == 1
-        assert not (metrics_dir / "vpn-a.json").exists()
-        assert (metrics_dir / "vpn-b.json").exists()
+        assert not (metrics_dir / "vpn-a.jsonl").exists()
+        assert (metrics_dir / "vpn-b.jsonl").exists()
 
     def test_clear_nonexistent_vpn_no_error(self, collector):
         collector.clear_vpn("does-not-exist")  # Should not raise
@@ -244,16 +313,13 @@ class TestClear:
         assert collector.get_stats("test-vpn") is None
 
 
-class TestTrimming:
+class TestBoundedHistory:
 
-    def test_trim_when_over_max(self, metrics_dir, monkeypatch):
-        # Use small limits so the test runs fast
+    def test_in_memory_history_bounded_to_max(self, metrics_dir, monkeypatch):
         monkeypatch.setattr("vpn_toggle.metrics.MAX_DATA_POINTS", 50)
-        monkeypatch.setattr("vpn_toggle.metrics.TRIM_PERCENTAGE", 0.10)
 
         collector = MetricsCollector(metrics_dir=metrics_dir)
-
-        for i in range(51):
+        for i in range(75):
             collector.record(_make_point(
                 vpn="trim-vpn",
                 latency=float(i),
@@ -261,13 +327,12 @@ class TestTrimming:
             ))
 
         points = collector.get_data_points("trim-vpn")
-        expected_size = 51 - int(50 * 0.10)  # 51 - 5 = 46
-        assert len(points) == expected_size
+        assert len(points) == 50
+        # Newest 50 retained (25..74); oldest 25 (0..24) dropped
+        assert points[0].latency_ms == 25.0
+        assert points[-1].latency_ms == 74.0
 
-        # Oldest points should have been dropped (latency 0..4 gone)
-        assert points[0].latency_ms == 5.0
-
-    def test_no_trim_under_max(self, collector):
+    def test_no_drop_under_max(self, collector):
         for i in range(100):
             collector.record(_make_point(latency=float(i)))
 

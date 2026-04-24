@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Installation script for VPN Toggle v4.0
+# Installation script for VPN Toggle v4.3
 #
 
 set -e
@@ -9,8 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
+SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
-echo "Installing VPN Toggle v4.0..."
+echo "Installing VPN Toggle v4.3..."
 
 # Check dependencies
 echo "Checking dependencies..."
@@ -72,7 +73,7 @@ mkdir -p "$DESKTOP_DIR"
 cat > "$DESKTOP_DIR/vpn-toggle-v2.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=VPN Toggle v4.0
+Name=VPN Toggle v4.3
 Comment=VPN Manager with integrated monitoring
 Exec=$INSTALL_DIR/vpn-toggle-v2
 Icon=$ICON_DIR/vpn-toggle-v2.svg
@@ -86,12 +87,34 @@ if command -v update-desktop-database &> /dev/null; then
     update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 fi
 
+# Install the systemd user unit so the monitor auto-restarts on crash and
+# starts on login. Substitutes @INSTALL_DIR@ in the template with the
+# resolved $INSTALL_DIR path.
+echo "Installing systemd user unit..."
+mkdir -p "$SYSTEMD_USER_DIR"
+sed "s|@INSTALL_DIR@|$INSTALL_DIR|g" \
+    "$SCRIPT_DIR/systemd/vpn-toggle.service.template" \
+    > "$SYSTEMD_USER_DIR/vpn-toggle.service"
+
+if command -v systemctl &> /dev/null; then
+    systemctl --user daemon-reload
+    systemctl --user enable vpn-toggle.service 2>/dev/null || true
+    echo "  Systemd unit installed and enabled."
+    echo "  Start now with: systemctl --user start vpn-toggle.service"
+else
+    echo "  systemctl not found — skipping enable. Unit file installed at:"
+    echo "  $SYSTEMD_USER_DIR/vpn-toggle.service"
+fi
+
 echo ""
 echo "Installation complete!"
 echo ""
-echo "You can now run VPN Toggle v4.0 by:"
+echo "You can now run VPN Toggle v4.3 by:"
 echo "  1. Running: vpn-toggle-v2"
 echo "  2. Searching for 'VPN Toggle' in your application launcher"
+echo "  3. Starting the systemd service: systemctl --user start vpn-toggle.service"
+echo ""
+echo "The systemd service will auto-start on login and auto-restart on crash."
 echo ""
 echo "Note: Make sure $INSTALL_DIR is in your PATH"
 echo "      You may need to log out and back in for the changes to take effect"

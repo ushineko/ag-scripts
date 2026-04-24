@@ -1,15 +1,23 @@
 """
 NetworkManager backend — manages VPN connections via nmcli.
+
+Provides both sync methods (used by GUI card buttons, tray, and tests) and
+async variants (used by the event-driven MonitorController).
 """
 import logging
 import subprocess
 from datetime import datetime
 from typing import List, Tuple, Optional
 
+from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
+
 from ..models import VPNConnection, VPNStatus
 from . import VPNBackend
 
 logger = logging.getLogger('vpn_toggle.backends.nm')
+
+NMCLI_DEFAULT_TIMEOUT_MS = 30_000
+NMCLI_CONNECT_TIMEOUT_MS = 60_000
 
 
 class NMBackend(VPNBackend):
@@ -207,3 +215,130 @@ class NMBackend(VPNBackend):
                     except (ValueError, OSError):
                         pass
         return None
+
+    # -- Async variants (used by MonitorController) --
+
+    def is_vpn_active_async(self, vpn_name: str, parent: Optional[QObject] = None) -> "_NmActiveCheckOp":
+        return _NmActiveCheckOp(vpn_name, parent=parent)
+
+    def connect_vpn_async(self, vpn_name: str, parent: Optional[QObject] = None) -> "_NmConnectOp":
+        return _NmConnectOp(vpn_name, parent=parent)
+
+    def disconnect_vpn_async(self, vpn_name: str, parent: Optional[QObject] = None) -> "_NmDisconnectOp":
+        return _NmDisconnectOp(vpn_name, parent=parent)
+
+
+# ---------------------------------------------------------------------------
+# Async operations — one QObject per in-flight nmcli invocation.
+# ---------------------------------------------------------------------------
+
+
+class _NmCmdOp(QObject):
+    """Base for a single async nmcli command. Subclasses parse stdout."""
+
+    def __init__(self, args: List[str], timeout_ms: int = NMCLI_DEFAULT_TIMEOUT_MS,
+                 parent: Optional[QObject] = None):
+        super().__init__(parent)
+        self._args = args
+        self._timeout_ms = timeout_ms
+        self._done = False
+        self._proc: Optional[QProcess] = None
+        self._timer: Optional[QTimer] = None
+
+    def start(self) -> None:
+        if self._done:
+            return
+        self._proc = QProcess(self)
+        self._proc.finished.connect(self._on_finished)
+        self._proc.errorOccurred.connect(self._on_error)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._on_timeout)
+        self._timer.start(self._timeout_ms)
+        logger.debug(f"Running command: nmcli {' '.join(self._args)}")
+        self._proc.start('nmcli', self._args)
+
+    def _on_finished(self, exit_code: int, _status) -> None:
+        if self._done:
+            return
+        self._done = True
+        if self._timer:
+            self._timer.stop()
+        stdout = bytes(self._proc.readAllStandardOutput()).decode('utf-8', errors='replace').strip()
+        stderr = bytes(self._proc.readAllStandardError()).decode('utf-8', errors='replace').strip()
+        ok = (exit_code == 0)
+        output = stdout if ok else (stderr or stdout)
+        self._emit(ok, output)
+
+    def _on_error(self, _err) -> None:
+        if self._done:
+            return
+        self._done = True
+        if self._timer:
+            self._timer.stop()
+        msg = self._proc.errorString() if self._proc else 'unknown'
+        self._emit(False, msg)
+
+    def _on_timeout(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        if self._proc and self._proc.state() != QProcess.ProcessState.NotRunning:
+            self._proc.kill()
+        self._emit(False, f"Command timed out after {self._timeout_ms // 1000}s")
+
+    def _emit(self, success: bool, output: str) -> None:
+        """Subclasses override to emit their specific finished signal."""
+        raise NotImplementedError
+
+
+class _NmActiveCheckOp(_NmCmdOp):
+    finished = pyqtSignal(bool)  # is_active
+
+    def __init__(self, vpn_name: str, parent: Optional[QObject] = None):
+        super().__init__(['connection', 'show', '--active'], parent=parent)
+        self._vpn_name = vpn_name
+
+    def _emit(self, success: bool, output: str) -> None:
+        if not success:
+            self.finished.emit(False)
+            return
+        active = any(self._vpn_name in line for line in output.split('\n'))
+        self.finished.emit(active)
+
+
+class _NmConnectOp(_NmCmdOp):
+    finished = pyqtSignal(bool, str)  # success, message
+
+    def __init__(self, vpn_name: str, parent: Optional[QObject] = None):
+        super().__init__(['connection', 'up', vpn_name],
+                         timeout_ms=NMCLI_CONNECT_TIMEOUT_MS, parent=parent)
+        self._vpn_name = vpn_name
+
+    def _emit(self, success: bool, output: str) -> None:
+        if success:
+            msg = f"Connected to {self._vpn_name}"
+            logger.info(msg)
+            self.finished.emit(True, msg)
+        else:
+            msg = f"Failed to connect to {self._vpn_name}: {output}"
+            logger.error(msg)
+            self.finished.emit(False, msg)
+
+
+class _NmDisconnectOp(_NmCmdOp):
+    finished = pyqtSignal(bool, str)  # success, message
+
+    def __init__(self, vpn_name: str, parent: Optional[QObject] = None):
+        super().__init__(['connection', 'down', vpn_name], parent=parent)
+        self._vpn_name = vpn_name
+
+    def _emit(self, success: bool, output: str) -> None:
+        if success:
+            msg = f"Disconnected from {self._vpn_name}"
+            logger.info(msg)
+            self.finished.emit(True, msg)
+        else:
+            msg = f"Failed to disconnect from {self._vpn_name}: {output}"
+            logger.error(msg)
+            self.finished.emit(False, msg)

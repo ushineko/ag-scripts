@@ -1,0 +1,21 @@
+[Unit]
+Description=VPN Toggle — NetworkManager/OpenVPN3 monitor with tray GUI
+After=graphical-session.target NetworkManager.service
+PartOf=graphical-session.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=@INSTALL_DIR@/vpn-toggle-v2 --minimized
+Restart=on-failure
+RestartSec=5s
+# Allow core dumps to finish before SIGKILL.
+TimeoutStopSec=30
+# Capture stdout/stderr in the journal alongside file-based logs.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vpn-toggle
+
+[Install]
+WantedBy=graphical-session.target

@@ -15,7 +15,7 @@ from PyQt6.QtCore import QTimer, pyqtSignal
 
 from .config import ConfigManager
 from .vpn_manager import VPNManager
-from .monitor import MonitorThread
+from .monitor import MonitorController
 from .metrics import MetricsCollector
 
 logger = logging.getLogger('vpn_toggle.widgets')
@@ -27,7 +27,7 @@ class VPNWidget(QFrame):
     move_requested = pyqtSignal(str, int)  # vpn_name, direction (-1=up, +1=down)
 
     def __init__(self, vpn_name: str, display_name: str, vpn_manager: VPNManager,
-                 config_manager: ConfigManager, monitor_thread: Optional[MonitorThread] = None,
+                 config_manager: ConfigManager, monitor_thread: Optional[MonitorController] = None,
                  metrics_collector: Optional[MetricsCollector] = None,
                  backend_type: str = "vpn"):
         super().__init__()

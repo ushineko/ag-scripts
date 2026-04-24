@@ -3,7 +3,11 @@ Utility functions and shared constants for VPN Toggle
 """
 import logging
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+LOG_MAX_BYTES = 2 * 1024 * 1024
+LOG_BACKUP_COUNT = 4
 
 
 def setup_logging(log_file: str = None, level: str = "INFO") -> logging.Logger:
@@ -29,8 +33,11 @@ def setup_logging(log_file: str = None, level: str = "INFO") -> logging.Logger:
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # File handler
-    file_handler = logging.FileHandler(log_path)
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+    )
     file_handler.setFormatter(formatter)
 
     # Console handler

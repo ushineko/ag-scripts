@@ -3,6 +3,7 @@
 A comprehensive VPN management tool with integrated monitoring and health checking for NetworkManager connections.
 
 ## Table of Contents
+- [Version 4.3 (Event-Driven Monitor & Reliability)](#version-43-event-driven-monitor--reliability)
 - [Version 3.2 (System Tray & Autostart)](#version-32-system-tray--autostart)
 - [Version 3.1 (UX Improvements)](#version-31-ux-improvements)
 - [Version 3.0 (Metrics Dashboard)](#version-30-metrics-dashboard)
@@ -13,6 +14,42 @@ A comprehensive VPN management tool with integrated monitoring and health checki
 - [Configuration](#configuration)
 - [Version 1.0 (Legacy)](#version-10-legacy)
 - [Changelog](#changelog)
+
+## Version 4.3 (Event-Driven Monitor & Reliability)
+
+VPN Toggle v4.3 replaces the QThread-based monitor with a fully event-driven architecture, fixes a recurring crash, and adds first-class systemd integration.
+
+### Crash fix and reliability
+
+After three SIGSEGV crashes in libpython3.14 in the span of a week — all originating from `json.dump` in the metrics writer being invoked through a cross-thread Qt signal — the monitor was rebuilt to remove the conditions that reproduced the bug. See [`specs/009-event-driven-monitor.md`](specs/009-event-driven-monitor.md) and the crash analysis under [`validation-reports/`](validation-reports/).
+
+### Event-driven monitor
+
+- **`MonitorThread(QThread)` is gone.** Replaced by `MonitorController(QObject)` running entirely on the main event loop.
+- All subprocess work (`nmcli`, `openvpn3`, `ping`) now goes through `QProcess`. DNS lookups use `QDnsLookup`. Geolocation HTTP uses `QNetworkAccessManager`. None of these block the event loop.
+- Each check cycle is a `VPNCheckSession` state machine: `is_vpn_active_async` → assert chain → either record metrics or trigger an async bounce.
+- Every async op carries a hard timeout (`QTimer.singleShot`) so a hung subprocess or DNS query cannot wedge a session.
+- All five existing signals (`status_changed`, `assert_result`, `log_message`, `vpn_disabled`, `check_completed`) are preserved with identical payloads, so the GUI wiring is unchanged.
+
+### Append-only metrics + log rotation
+
+- `MetricsCollector` storage moved from "rewrite the whole `{vpn}.json` blob every check" to **append-one-line-per-check** `{vpn}.jsonl`. Periodic compaction keeps the file capped at the in-memory tail (`MAX_DATA_POINTS=10000`, `COMPACT_EVERY_N=500`).
+- A crash mid-write at worst truncates the final partial line instead of corrupting the entire history.
+- Application log is now rotated via `RotatingFileHandler` (2 MB × 5 files = 10 MB total cap). Existing pre-v4.3 logs are left in place; the new rotation kicks in on the next write.
+- Legacy `{vpn}.json` files are migrated to `{vpn}.jsonl` automatically on first load.
+
+### Systemd user unit
+
+- **`install.sh` now installs and enables a systemd user unit** (`~/.config/systemd/user/vpn-toggle.service`) with `Restart=on-failure` and `RestartSec=5s`.
+- Service auto-starts on graphical-session login, auto-restarts on crash (with rate limiting: max 5 restarts in 5 minutes), and ships stdout/stderr to the journal.
+- Unit template lives at [`systemd/vpn-toggle.service.template`](systemd/vpn-toggle.service.template); the installer substitutes the install path on copy.
+- `uninstall.sh` cleanly disables and removes the unit.
+
+### What did not change
+
+User-facing GUI surface, configuration schema, signals emitted by the monitor, and on-disk file paths under `~/.config/vpn-toggle/` are all unchanged. Existing config and metrics carry forward without intervention.
+
+---
 
 ## Version 3.2 (System Tray & Autostart)
 
@@ -267,6 +304,17 @@ The original bash script is still available as `toggle_vpn.sh` for backward comp
 Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
+
+### v4.3.0
+
+- **Event-driven monitor**: replaced `MonitorThread(QThread)` with `MonitorController(QObject)` running entirely on the main event loop; eliminates the cross-thread Qt signal path implicated in three SIGSEGV crashes
+- **Async asserts**: `AsyncDNSLookupAssert` (QDnsLookup), `AsyncGeolocationAssert` (QNetworkAccessManager), `AsyncPingAssert` (QProcess) replace blocking `socket.gethostbyname` / `requests.get` / `subprocess.run` calls in the monitor path
+- **Async backends**: `nmcli` and `openvpn3` operations exposed as `QProcess`-backed `*_async` methods; bounce becomes a `BounceOperation` state machine (disconnect → wait → connect)
+- **Append-only metrics**: `MetricsCollector` now writes `{vpn}.jsonl` one line per check with periodic compaction; legacy `{vpn}.json` files migrated on first load
+- **Log rotation**: `RotatingFileHandler` caps `~/.config/vpn-toggle/vpn-toggle.log` at 10 MB (2 MB × 5 files)
+- **Systemd user unit**: `install.sh` installs `vpn-toggle.service` with `Restart=on-failure`, auto-starts on graphical-session login; `uninstall.sh` removes it cleanly
+- **Tests**: 193 total (+ 31 new across `test_metrics.py`, `test_async_asserts.py`, `test_monitor_controller.py`); old `test_monitor.py` removed (covered private QThread internals that no longer exist)
+- See [`specs/009-event-driven-monitor.md`](specs/009-event-driven-monitor.md) for the full implementation spec
 
 ### v3.2.1
 

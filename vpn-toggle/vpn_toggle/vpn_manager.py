@@ -8,6 +8,8 @@ import logging
 from datetime import datetime
 from typing import List, Tuple, Optional
 
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+
 from .models import VPNConnection, VPNStatus  # noqa: F401 (re-exported)
 from .backends import VPNBackend
 from .backends.nm import NMBackend
@@ -131,3 +133,75 @@ class VPNManager:
 
     def get_vpn_details(self, vpn_name: str) -> dict:
         return self._get_backend(vpn_name).get_vpn_details(vpn_name)
+
+    # -- Async variants (used by MonitorController) --
+
+    def is_vpn_active_async(self, vpn_name: str, parent: Optional[QObject] = None):
+        """Return an async op whose `finished(bool)` signal reports activeness."""
+        return self._get_backend(vpn_name).is_vpn_active_async(vpn_name, parent=parent)
+
+    def connect_vpn_async(self, vpn_name: str, parent: Optional[QObject] = None):
+        """Return an async op whose `finished(success, message)` signals connect result."""
+        backend, kwargs = self._get_backend_for_connect(vpn_name)
+        return backend.connect_vpn_async(vpn_name, parent=parent, **kwargs)
+
+    def disconnect_vpn_async(self, vpn_name: str, parent: Optional[QObject] = None):
+        """Return an async op whose `finished(success, message)` signals disconnect result."""
+        return self._get_backend(vpn_name).disconnect_vpn_async(vpn_name, parent=parent)
+
+    def bounce_vpn_async(self, vpn_name: str, grace_seconds: int = 2,
+                         parent: Optional[QObject] = None) -> "BounceOperation":
+        """Return an async op that disconnects, waits grace_seconds, then reconnects."""
+        return BounceOperation(self, vpn_name, grace_seconds, parent=parent)
+
+
+class BounceOperation(QObject):
+    """Disconnect → grace wait → connect, emitting finished(success, message).
+
+    Mirrors `VPNBackend.bounce_vpn` but without blocking the thread.
+    """
+
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, manager: VPNManager, vpn_name: str, grace_seconds: int,
+                 parent: Optional[QObject] = None):
+        super().__init__(parent)
+        self._manager = manager
+        self._vpn_name = vpn_name
+        self._grace_ms = max(0, int(grace_seconds * 1000))
+        self._done = False
+
+    def start(self) -> None:
+        if self._done:
+            return
+        logger.info(f"Bouncing VPN: {self._vpn_name}")
+        op = self._manager.disconnect_vpn_async(self._vpn_name, parent=self)
+        op.finished.connect(self._on_disconnected)
+        op.start()
+
+    def _on_disconnected(self, success: bool, message: str) -> None:
+        if self._done:
+            return
+        if not success:
+            logger.warning(f"Disconnect failed (may not have been connected): {message}")
+        QTimer.singleShot(self._grace_ms, self._reconnect)
+
+    def _reconnect(self) -> None:
+        if self._done:
+            return
+        op = self._manager.connect_vpn_async(self._vpn_name, parent=self)
+        op.finished.connect(self._on_reconnected)
+        op.start()
+
+    def _on_reconnected(self, success: bool, message: str) -> None:
+        if self._done:
+            return
+        self._done = True
+        if success:
+            msg = f"Bounced {self._vpn_name} successfully"
+            logger.info(msg)
+            self.finished.emit(True, msg)
+        else:
+            msg = f"Bounce failed (reconnect failed): {message}"
+            logger.error(msg)
+            self.finished.emit(False, msg)
