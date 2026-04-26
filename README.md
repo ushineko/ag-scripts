@@ -32,7 +32,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [kvm-setup](kvm-setup/) | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions. |
 | [misc](misc/) | General utilities for NTFS mount fixing and fstab generation during Windows-to-Linux migration. |
 | [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring. |
-| [pinball-fx](pinball-fx/) | Window Fixer utility for Pinball FX. Forces the game onto selected monitors with persistent KWin rules. |
+| [pinball-fx](pinball-fx/) | Tiny gamescope wrapper for Heroic-launched Pinball FX. Heroic handles Wine/Proton + Epic auth + DLC; this adds gamescope, HDR, and KWin pinning to the portrait monitor. Configured in Heroic's per-game "Wrapper Command" setting. |
 | [plasmashell-restart](plasmashell-restart/) | Restarts or refreshes the KDE Plasma 6 shell via systemd or D-Bus. |
 | [qbittorrent-vpn-wrapper](qbittorrent-vpn-wrapper/) | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and status dashboard. |
 | [set-rgb](set-rgb/) | Controls RGB lighting on hardware devices via OpenRGB, liquidctl, and ckb-next. |
