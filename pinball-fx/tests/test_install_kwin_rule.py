@@ -22,6 +22,8 @@ def test_install_creates_rule_with_geometry(tmp_path):
     assert parsed[sec]["Description"] == ikr.RULE_DESCRIPTION
     assert parsed[sec]["wmclass"] == "gamescope"
     assert parsed[sec]["wmclassmatch"] == "1"
+    assert parsed[sec]["title"] == "PinballFX"
+    assert parsed[sec]["titlematch"] == "2"
     assert parsed[sec]["position"] == "3840,0"
     assert parsed[sec]["positionrule"] == "2"
     assert parsed[sec]["size"] == "2160,3840"
@@ -62,6 +64,36 @@ def test_install_preserves_unrelated_rules(tmp_path):
     assert "99" in rules
     assert len(rules) == 2
     assert parsed["99"]["Description"] == "Unrelated"
+
+
+def test_install_upgrades_pre_v315_rule_in_place(tmp_path):
+    """Pre-v3.1.5 rule had no title narrowing — installer must add it on update."""
+    cfg_path = tmp_path / "kwinrulesrc"
+    cfg_path.write_text(
+        "[General]\n"
+        "count=1\n"
+        "rules=7\n\n"
+        "[7]\n"
+        f"Description={ikr.RULE_DESCRIPTION}\n"
+        "wmclass=gamescope\n"
+        "wmclassmatch=1\n"
+        "position=2560,0\n"
+        "positionrule=2\n"
+        "size=1440,2560\n"
+        "sizerule=2\n"
+        "fullscreen=true\n"
+        "fullscreenrule=2\n"
+        "noborder=true\n"
+        "noborderrule=2\n"
+    )
+
+    ikr.install_rule(x=2560, y=0, width=1440, height=2560, config_path=cfg_path, reconfigure=False)
+
+    parsed = _read(cfg_path)
+    rules = [r for r in parsed["General"]["rules"].split(",") if r]
+    assert rules == ["7"], "in-place update should not allocate a new section"
+    assert parsed["7"]["title"] == "PinballFX"
+    assert parsed["7"]["titlematch"] == "2"
 
 
 def test_install_migrates_legacy_rule(tmp_path):

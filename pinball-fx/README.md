@@ -4,7 +4,7 @@ A small wrapper that adds [gamescope](https://github.com/ValveSoftware/gamescope
 
 HDR support was dropped in v3.1.0 — see the changelog for the wine/Proton/Steam-Input tradeoff that forced the choice.
 
-**Version**: 3.1.4
+**Version**: 3.1.5
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ HDR support was dropped in v3.1.0 — see the changelog for the wine/Proton/Stea
 Heroic GUI ─launch─▶ pinball_fx_wrapper.sh ─exec─▶ gamescope … -- wine PinballFX.exe <epic-auth args>
                             │
                             ├─▶ detect_portrait_screen.py     (logical W H X Y)
-                            └─▶ install_kwin_rule.py          (pin gamescope wmclass to portrait)
+                            └─▶ install_kwin_rule.py          (pin gamescope to portrait — wmclass + title match, transient)
 ```
 
 Heroic invokes `pinball_fx_wrapper.sh` as its per-game "Wrapper Command". Heroic appends the wine command, the game .exe, and the Epic Online Services auth args. The wrapper:
@@ -160,6 +160,13 @@ python3 -m pytest tests/ -v
 Tests cover KWin rule install / uninstall (including legacy v1.x rule migration). The wrapper script (bash) and the screen-detect helper (PyQt6) are smoke-tested manually because they're thin glue around `gamescope` and Qt.
 
 ## Changelog
+
+### v3.1.5
+
+- **Fixed KWin rule hijacking unrelated gamescope windows.** Up to v3.1.4 the rule matched only on `wmclass=gamescope`, with no further narrowing. Any concurrent gamescope session on the host — Battle.net launcher, a Steam game, even `gamescope -- alacritty` for debugging — would also be force-pinned to the portrait monitor at portrait geometry, force-fullscreened, deborderized. The rule then persisted in `kwinrulesrc` between Pinball FX runs, so the hijack survived even after the wrapper had exited. Two changes:
+  - **Title-substring match.** Rule now also requires `title=PinballFX, titlematch=2`. Gamescope propagates the focused inner window's title to its outer xdg-toplevel `set_title`, so UE-Pinball's `"PinballFX"` appears as the gamescope window's caption while a `gamescope -- alacritty` window has caption `"Alacritty"`. KWin re-evaluates rule matches dynamically when caption changes (verified against Plasma 6 with a live `qdbus6 org.kde.kwin.Scripting` probe), so concurrent gamescope windows with other captions are released the moment their title fails to match.
+  - **Transient rule install.** Wrapper's cleanup trap now calls `install_kwin_rule.py --uninstall` on `EXIT INT TERM`. The rule no longer outlives the Pinball FX session — even if a future gamescope version stops setting the outer caption, or sets it differently, an orphan rule can't hijack subsequent gamescope launches.
+- Known startup race: between when gamescope's outer surface maps and when UE sets its window title, gamescope's caption is unset. During that brief window the rule won't match, so gamescope's outer window may appear at default placement (typically fullscreen on the focused output) for a fraction of a second before snapping to the portrait monitor. UE-Pinball sets its title early enough that the flash, if visible at all, is sub-second. If this becomes objectionable, the alternative is a KWin script that listens for `workspace.windowAdded` and matches by `window.pid` (the wrapper already captures gamescope's PID), placing the window before first paint with no caption dependency.
 
 ### v3.1.4
 

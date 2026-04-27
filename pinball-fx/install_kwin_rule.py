@@ -6,6 +6,18 @@ that KWin places like any other. This rule force-positions it on the chosen
 monitor's geometry, force-fullscreen, no border, so the launcher's
 gamescope window always lands where Pinball FX expects.
 
+The rule matches on `wmclass=gamescope` AND `title` substring `PinballFX`.
+The title narrowing is critical: gamescope's outer xdg-toplevel propagates
+the focused inner window's title to its own caption, so when UE-Pinball
+sets its window title to "PinballFX", that's what KWin sees on the outer
+gamescope surface. Without the title match, ANY gamescope window on the
+host (Battle.net launcher, Steam game, `gamescope -- alacritty` for
+debugging) would be force-pinned to the portrait monitor, since they all
+share `wmclass=gamescope`. KWin re-evaluates rule matches dynamically when
+caption changes — verified empirically against Plasma 6 — so concurrent
+gamescope windows with other titles are released the moment their caption
+fails to match.
+
 Also removes the legacy `Pinball FX Portrait Mode` rule from v1.x of this
 tool, so upgrades don't leave dead config behind.
 """
@@ -19,6 +31,7 @@ import sys
 from pathlib import Path
 
 WMCLASS = "gamescope"
+TITLE = "PinballFX"
 RULE_DESCRIPTION = "Pinball FX Gamescope Placement"
 LEGACY_RULE_DESCRIPTION = "Pinball FX Portrait Mode"
 
@@ -111,6 +124,8 @@ def install_rule(
     rule["Description"] = RULE_DESCRIPTION
     rule["wmclass"] = WMCLASS
     rule["wmclassmatch"] = "1"  # Exact match
+    rule["title"] = TITLE
+    rule["titlematch"] = "2"  # Substring match — caption is dynamic
     rule["position"] = f"{x},{y}"
     rule["positionrule"] = "2"  # Force
     rule["size"] = f"{width},{height}"

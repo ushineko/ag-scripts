@@ -1,5 +1,5 @@
 #!/bin/bash
-# Gamescope wrapper for Heroic-launched Pinball FX (v3.1.4).
+# Gamescope wrapper for Heroic-launched Pinball FX (v3.1.5).
 #
 # Heroic invokes this with the wine command + game exe + Epic auth args.
 # We detect the portrait monitor, install/refresh the gamescope KWin rule,
@@ -52,6 +52,19 @@
 #     services.exe / plugplay.exe / explorer.exe) whose /proc/PID/environ
 #     names our WINEPREFIX, scoped so other wine apps using a different prefix
 #     are untouched.
+#
+# v3.1.5 fixed the KWin rule hijacking unrelated gamescope windows. The rule
+#   matched only on wmclass=gamescope, so any concurrent gamescope session
+#   (Battle.net launcher, debug `gamescope -- alacritty`, etc.) would also be
+#   force-pinned to the portrait monitor at portrait geometry. Two changes:
+#   - Rule now also matches on title substring "PinballFX". Gamescope
+#     propagates the focused inner window's title to its outer xdg-toplevel,
+#     and KWin re-evaluates match conditions dynamically when caption changes
+#     (verified empirically on Plasma 6), so other gamescope windows are
+#     released the moment their title fails to match.
+#   - Rule install is now transient: cleanup uninstalls it on wrapper exit.
+#     Belt-and-suspenders against any future caption-set quirk, and avoids
+#     leaving placement state in kwinrulesrc between sessions.
 
 set -euo pipefail
 
@@ -141,6 +154,10 @@ cleanup() {
             fi
         done
     fi
+    # Tear down the transient KWin rule. Belt-and-suspenders alongside the
+    # title-substring match: even if a future gamescope version changes its
+    # caption-set behavior, the rule won't outlive this wrapper invocation.
+    "$SCRIPT_DIR/install_kwin_rule.py" --uninstall >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
