@@ -74,12 +74,13 @@ The list is populated from VSCode's Recent workspaces. Folders show as `<folder-
 
 ### Quick-launcher popup
 
-Tap the configured global hotkey (default `Shift+Tab`) to bring up an Alt-Tab-style popup centered on the active screen. Workspaces are listed running-first, MRU within each group.
+Tap the configured global hotkey (default `Shift+Tab`) to bring up an Alt-Tab-style popup centered on the active screen. Running workspaces appear first in classic Alt-Tab MRU order: row 0 is the *previously* focused workspace, row 1 is the current one, older activations follow, then never-activated running workspaces in VSCode-recents order, then non-running.
 
 - **Tap the hotkey again** to cycle to the next entry. The popup uses tap-to-cycle rather than hold-and-arrow because Wayland blocks keyboard focus stealing on hotkey-triggered windows.
 - **Pause** for the configured commit delay (default 600 ms, tunable in Settings) and the current selection commits: running workspaces are focused, non-running ones are launched.
+- **Mouse motion** over the popup restarts the commit timer with a fresh full duration, so reaching for a click doesn't race the keyboard timer. A stationary cursor (or one the popup happens to pop up under) doesn't count — only actual motion.
 - **Mouse-click** any row to commit immediately.
-- The popup also dismisses on focus-out (X11) and on a long pause without any further taps.
+- Single tap-and-pause behaves like a two-window Alt-Tab flip: row 0 is your previous workspace, you commit it, and the popup is set up to flip back on the next invocation.
 
 ### Settings
 
@@ -229,6 +230,14 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`). You are prompted before the config directory is deleted.
 
 ## Changelog
+
+### v3.1
+
+- Popup ordering now follows classic Alt-Tab MRU. Row 0 is the *previously* focused workspace (single tap-and-pause flips back to it), row 1 is the current one, rows 2+ are older entries in the activation stack, then never-activated running workspaces in VSCode-recents order, then non-running. Two-window flip-flop works exactly like Alt-Tab.
+- Mouse-motion-as-activity: the auto-commit timer is restarted on each mouse move over the popup or its inner list rather than on hover-presence. A popup that pops up under a stationary cursor still counts down normally; only intentional motion holds it open.
+- Bottom hint rewrite: "Tap hotkey to cycle    Pause or click to commit" (the prior text referenced keys that don't reach the popup on Wayland).
+- Style fix: scoped the popup frame's `border: 1px solid` rule to its specific objectName so it stops cascading onto descendant `QLabel`s. Title and hint labels now render flat with their text aligned to the list rows.
+- Internal: replaced `_activated_at_by_path` (timestamp dict) with `_mru_stack` (ordered list, no dupes). Cleaner data model for the Alt-Tab semantics; stale entries are skipped at display time rather than eagerly pruned.
 
 ### v3.0
 

@@ -132,6 +132,54 @@ class TestActivate:
         assert popup.isVisible() is False
 
 
+class TestMouseMoveSignal:
+    """Mouse motion over the popup or its inner list emits `mouse_moved`,
+    which the caller uses to restart its auto-commit timer."""
+
+    def test_mouse_move_event_emits_mouse_moved(
+        self, popup, workspaces_running_first, qapp
+    ):
+        from PyQt6.QtCore import QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        moved: list[None] = []
+        popup.mouse_moved.connect(lambda: moved.append(None))
+        popup.show_with_workspaces(workspaces_running_first)
+        evt = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(10, 10),
+            QPointF(10, 10),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        popup.mouseMoveEvent(evt)
+        assert moved == [None]
+
+    def test_list_viewport_mouse_move_emits_mouse_moved(
+        self, popup, workspaces_running_first, qapp
+    ):
+        """Real mouse motion over rows reaches the QListWidget's viewport
+        child, not the QListWidget itself. Sending a MouseMove there must
+        still emit mouse_moved via the popup's eventFilter."""
+        from PyQt6.QtCore import QCoreApplication, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        moved: list[None] = []
+        popup.mouse_moved.connect(lambda: moved.append(None))
+        popup.show_with_workspaces(workspaces_running_first)
+        evt = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(20, 20),
+            QPointF(20, 20),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QCoreApplication.sendEvent(popup._list.viewport(), evt)
+        assert moved == [None]
+
+
 class TestCancel:
     def test_cancel_emits_and_hides(self, popup, workspaces_running_first, qapp):
         cancelled: list[None] = []

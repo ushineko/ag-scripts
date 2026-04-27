@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QCursor, QGuiApplication, QKeyEvent
 from PyQt6.QtWidgets import (
     QFrame,
@@ -41,6 +41,12 @@ class WorkspacePopup(QWidget):
 
     activate_requested = pyqtSignal(object)
     cancelled = pyqtSignal()
+    # Fires on every pixel of mouse motion over the popup or its inner
+    # list. Caller restarts its commit timer on each emit; motion stops
+    # → most recent countdown runs out → commit. Popup-under-cursor
+    # without movement does NOT fire this — the user has to move the
+    # mouse to signal active intent.
+    mouse_moved = pyqtSignal()
 
     POPUP_WIDTH = 480
     ROW_HEIGHT = 40
@@ -62,15 +68,25 @@ class WorkspacePopup(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Mouse-move signaling: enabled here on the popup itself; the
+        # inner list also gets `setMouseTracking(True)` after creation
+        # plus an event filter so we see motion regardless of which
+        # widget the cursor is over.
+        self.setMouseTracking(True)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         frame = QFrame()
+        # Scope the stylesheet to this exact frame via objectName. Without
+        # the `#popupFrame` selector, Qt cascades `QFrame { border: ... }`
+        # onto every QLabel inside the popup (QLabel inherits QFrame), which
+        # paints a 1-pixel border around the title and hint labels.
+        frame.setObjectName("popupFrame")
         frame.setFrameShape(QFrame.Shape.StyledPanel)
         frame.setStyleSheet(
-            "QFrame { background: #2b2b2b; border: 1px solid #555; }"
+            "QFrame#popupFrame { background: #2b2b2b; border: 1px solid #555; }"
         )
         outer.addWidget(frame)
 
@@ -79,8 +95,11 @@ class WorkspacePopup(QWidget):
         inner.setSpacing(4)
 
         self._title = QLabel("Switch workspace")
+        # 10 px left padding aligns the title with the list rows (which
+        # use 10 px row padding via their stylesheet); the title sat at
+        # 4 px before, which read as misaligned.
         self._title.setStyleSheet(
-            "QLabel { color: #aaa; font-size: 11px; padding: 0 4px 4px 4px; }"
+            "QLabel { color: #aaa; font-size: 11px; padding: 2px 10px 6px 10px; }"
         )
         inner.addWidget(self._title)
 
@@ -104,15 +123,23 @@ class WorkspacePopup(QWidget):
             """
         )
         self._list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # QAbstractItemView delivers mouse moves through its viewport
+        # child, NOT through the QListWidget itself. Tracking + filtering
+        # has to be installed on both — the list widget catches motion in
+        # the scrollbar margin; the viewport catches motion over rows.
+        self._list.setMouseTracking(True)
+        self._list.installEventFilter(self)
+        self._list.viewport().setMouseTracking(True)
+        self._list.viewport().installEventFilter(self)
         self._list.itemClicked.connect(self._on_clicked)
         inner.addWidget(self._list)
 
-        # Dim hint at the bottom describing the keys.
+        # Dim hint at the bottom describing how to drive the popup.
         hint = QLabel(
-            "Tab / ↑↓ — cycle    Release or Enter — activate    Esc — cancel"
+            "Tap hotkey to cycle    Pause or click to commit"
         )
         hint.setStyleSheet(
-            "QLabel { color: #777; font-size: 10px; padding: 4px 4px 0 4px; }"
+            "QLabel { color: #777; font-size: 10px; padding: 6px 10px 2px 10px; }"
         )
         inner.addWidget(hint)
 
@@ -233,6 +260,25 @@ class WorkspacePopup(QWidget):
         super().focusOutEvent(event)
         if self.isVisible():
             self.cancel()
+
+    def mouseMoveEvent(self, event) -> None:
+        # Mouse motion over the popup background. Motion-not-presence is
+        # the activity signal so a popup that pops up under a stationary
+        # cursor doesn't get pinned open.
+        self.mouse_moved.emit()
+        super().mouseMoveEvent(event)
+
+    def eventFilter(self, obj, event) -> bool:
+        # Mouse moves over rows reach the list's viewport; moves over the
+        # scrollbar margin reach the QListWidget itself. Both paths feed
+        # into the same `mouse_moved` signal so the caller sees motion
+        # uniformly regardless of where in the list the cursor is.
+        if event.type() == QEvent.Type.MouseMove and obj in (
+            self._list,
+            self._list.viewport(),
+        ):
+            self.mouse_moved.emit()
+        return super().eventFilter(obj, event)
 
     def _on_clicked(self, item: QListWidgetItem) -> None:
         # Resolve back to the workspace and activate.

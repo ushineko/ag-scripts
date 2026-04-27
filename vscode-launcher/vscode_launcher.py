@@ -67,7 +67,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.0"
+__version__ = "3.1"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -783,12 +783,14 @@ class MainWindow(QMainWindow):
         self.tray_mode = tray_mode
         self._auto_refresh_timer: QTimer | None = None
         self._launched_at_by_path: dict[str, float] = {}
-        # Per-path "last user-driven activation" timestamp. Updated whenever
-        # the user picks a workspace via the popup, the per-row Activate
-        # button, or the launch path. Used to bubble the most-recently-used
-        # workspace to the top of the running group, regardless of VSCode's
-        # own MRU (which only updates on workspace open, not on focus).
-        self._activated_at_by_path: dict[str, float] = {}
+        # MRU stack of workspace paths the user has activated this session,
+        # most-recent first, no duplicates. Drives the popup's Alt-Tab
+        # ordering: row 0 = MRU[1] (previous), row 1 = MRU[0] (current),
+        # rows 2+ = older entries. Stale (no-longer-running) paths are
+        # skipped at display time rather than eagerly pruned, so a
+        # workspace that briefly stops running and is reopened keeps its
+        # position in the user's switching history.
+        self._mru_stack: list[str] = []
         # Tray-mode-only attributes; populated by _setup_tray_mode below.
         self._tray: QSystemTrayIcon | None = None
         self._global_shortcut: GlobalShortcut | None = None
@@ -1009,28 +1011,60 @@ class MainWindow(QMainWindow):
                 # A workspace that's no longer running invalidates our tracked
                 # timestamp — if it gets relaunched later, we'll record afresh.
                 self._launched_at_by_path.pop(ws.path, None)
-        # Sort: running first, then by user-driven activation time (newest
-        # first), falling back to VSCode's recents order via stable-sort
-        # within the no-activation rows. Workspaces never activated by the
-        # user keep their original VSCode-recents position; one user click
-        # promotes a workspace above untouched ones.
-        workspaces.sort(
-            key=lambda w: (
-                0 if w.is_running else 1,
-                -self._activated_at_by_path.get(w.path, 0.0),
-            )
-        )
+        self._sort_alt_tab_order(workspaces)
+
+    def _push_mru(self, path: str) -> None:
+        """Move (or insert) `path` to the top of the MRU stack. Called
+        on every user-driven activation."""
+        self._mru_stack = [path] + [p for p in self._mru_stack if p != path]
+
+    def _sort_alt_tab_order(self, workspaces: list[Workspace]) -> None:
+        """Sort in place using Alt-Tab semantics built on top of the MRU
+        stack:
+
+          - Row 0: MRU[1] (the workspace previously focused before the
+            current one). Single tap-and-pause lands here, matching the
+            standard "Alt-Tab flips back" convention.
+          - Row 1: MRU[0] (current).
+          - Rows 2+: older MRU entries.
+          - Then never-activated running workspaces in their existing
+            VSCode-recents MRU order (stable sort).
+          - Then non-running workspaces.
+
+        Running workspaces with no activation history sit at the tail of
+        the running group rather than getting interleaved into the MRU,
+        so the displayed switcher only reorders entries the user has
+        actually used.
+        """
+        running_paths = {w.path for w in workspaces if w.is_running}
+        # Project the live MRU stack onto currently-running paths only;
+        # stale entries are skipped (lazy prune).
+        live_mru = [p for p in self._mru_stack if p in running_paths]
+
+        # Apply the Alt-Tab swap: MRU[1] (previous) goes first, then
+        # MRU[0] (current), then older MRU entries.
+        if len(live_mru) >= 2:
+            ordered_mru = [live_mru[1], live_mru[0]] + live_mru[2:]
+        else:
+            ordered_mru = live_mru
+
+        position_in_mru = {path: i for i, path in enumerate(ordered_mru)}
+
+        def sort_key(w: Workspace) -> tuple[int, int]:
+            if not w.is_running:
+                return (2, 0)  # non-running always last; stable within group
+            if w.path in position_in_mru:
+                return (0, position_in_mru[w.path])
+            return (1, 0)  # running, never activated this session
+
+        workspaces.sort(key=sort_key)
 
     def _reorder_for_activation(self) -> None:
         """Re-sort `self.workspaces` and rebuild the table without re-reading
         recents. Called after a user activates a running workspace so the
-        next popup show reflects the new MRU."""
-        self.workspaces.sort(
-            key=lambda w: (
-                0 if w.is_running else 1,
-                -self._activated_at_by_path.get(w.path, 0.0),
-            )
-        )
+        next popup show reflects the new Alt-Tab order (the just-activated
+        workspace is now 'current' and goes to the end of the running group)."""
+        self._sort_alt_tab_order(self.workspaces)
         self._reload_list()
 
     def _build_workspace_list(self) -> list[Workspace]:
@@ -1169,7 +1203,7 @@ class MainWindow(QMainWindow):
         ws = self._find_workspace_by_path(path)
         if ws is None or self.window_scanner is None:
             return
-        self._activated_at_by_path[path] = time.time()
+        self._push_mru(path)
         self.window_scanner.perform_window_action(ws.label, ACTION_ACTIVATE)
         self._reorder_for_activation()
 
@@ -1228,6 +1262,11 @@ class MainWindow(QMainWindow):
         # still rebind via Settings if the initial registration failed.
         self._popup = WorkspacePopup()
         self._popup.activate_requested.connect(self._launch_or_activate)
+        # Mouse motion over the popup restarts the commit timer with a
+        # fresh full duration. Motion-not-presence is the trigger so a
+        # popup that pops up under a stationary cursor still counts down
+        # normally.
+        self._popup.mouse_moved.connect(self._on_popup_mouse_moved)
 
         # Single-shot timer that commits the current popup selection if no
         # further `pressed` event arrives within self.popup_commit_delay_ms.
@@ -1288,6 +1327,15 @@ class MainWindow(QMainWindow):
         if self._popup_commit_timer is not None:
             self._popup_commit_timer.start()
 
+    def _on_popup_mouse_moved(self) -> None:
+        """Each pixel of mouse motion restarts the commit timer. As long
+        as the user keeps moving (active intent to use the mouse), the
+        countdown stays fresh. When motion stops, the most recent
+        countdown commits the current selection — same model as the
+        keyboard tap-and-pause."""
+        if self._popup_commit_timer is not None:
+            self._popup_commit_timer.start()
+
     def _commit_popup_selection(self) -> None:
         """Timeout-driven commit: activate whatever the popup is currently
         showing as selected, then dismiss. Wired only when the popup is
@@ -1301,13 +1349,12 @@ class MainWindow(QMainWindow):
         wants to "do the right thing": focus an existing window if it's
         running, otherwise launch a new one. Used by the popup; could
         be wired to other callers in the future."""
-        self._activated_at_by_path[workspace.path] = time.time()
+        self._push_mru(workspace.path)
         if workspace.is_running and self.window_scanner is not None:
             self.window_scanner.perform_window_action(
                 workspace.label, ACTION_ACTIVATE
             )
-            # Re-sort so the activated workspace bubbles to the top of the
-            # running group on the next popup show.
+            # Re-sort so the new MRU order is visible on the next popup show.
             self._reorder_for_activation()
         else:
             self._launch_paths([workspace.path], allow_running=True)
@@ -1398,10 +1445,9 @@ class MainWindow(QMainWindow):
                 # refresh uses this in preference to /proc (which can only
                 # give us "when VSCode itself started", not per-window).
                 self._launched_at_by_path[ws.path] = time.time()
-                # Activation timestamp too, so the just-launched workspace
-                # bubbles to the top of the running group when the scanner
-                # next sees it.
-                self._activated_at_by_path[ws.path] = time.time()
+                # Push to MRU so the just-launched workspace becomes
+                # current in the next popup view.
+                self._push_mru(ws.path)
                 launched += 1
         if launched > 0:
             QTimer.singleShot(GATHER_DELAY_MS, self._run_gather)
