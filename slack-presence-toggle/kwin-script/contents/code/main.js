@@ -13,7 +13,6 @@ function send(rc, caption) {
     callDBus(BUS_NAME, OBJ_PATH, IFACE, "WindowActivated", rc, caption);
 }
 
-send("__SCRIPT_LOADED__", "");
 console.log("slack-focus-monitor: script loaded");
 
 // Emit the current active window once at load so the listener can sync

@@ -81,15 +81,36 @@ def setup():
     return _make
 
 
+@pytest.fixture
+def setup_with_observer():
+    """Like `setup` but installs an observer that records internal transitions."""
+    def _make(**overrides):
+        cfg = Config(**overrides)
+        slack = FakeSlack()
+        scheduler = FakeScheduler()
+        clock = FakeClock()
+        observed: list[tuple] = []
+        def observer(result, prev_snapshot, label):
+            observed.append((result, prev_snapshot, label))
+        fsm = FocusStateMachine(
+            slack=slack, scheduler=scheduler, config=cfg, clock=clock,
+            on_internal_transition=observer,
+        )
+        return fsm, slack, scheduler, clock, observed
+    return _make
+
+
 # ---------------------------------------------------------------------------
 # Initial state
 # ---------------------------------------------------------------------------
 
-def test_initial_state_is_other_focused_not_forced(setup):
+def test_initial_state_is_slack_focused_not_forced(setup):
+    """Initial state assumes Slack is focused so that a startup
+    non-Slack-window event correctly transitions to pending-away."""
     fsm, slack, scheduler, _ = setup()
     snap = fsm.snapshot
     assert snap.enabled is True
-    assert snap.focus == FocusState.OTHER_FOCUSED
+    assert snap.focus == FocusState.SLACK_FOCUSED
     assert snap.we_forced_away is False
     assert snap.we_forced_status is False
     assert scheduler.scheduled == []
@@ -98,6 +119,26 @@ def test_initial_state_is_other_focused_not_forced(setup):
 def test_disabled_in_config_starts_disabled(setup):
     fsm, *_ = setup(enabled=False)
     assert fsm.snapshot.enabled is False
+
+
+def test_first_event_is_non_slack_schedules_grace_timer(setup):
+    """User's reported scenario: app starts with Slack unfocused. The
+    KWin script's initial-active-window emit should land as a non-Slack
+    event and trigger the grace timer."""
+    fsm, _, scheduler, _ = setup(grace_seconds=30)
+    fsm.on_window_activated("firefox")  # very first event after startup
+    assert len(scheduler.scheduled) == 1
+    assert scheduler.scheduled[0][0] == 30
+    assert fsm.snapshot.focus == FocusState.OTHER_FOCUSED_PENDING_AWAY
+
+
+def test_first_event_is_slack_does_not_schedule(setup):
+    """Mirror of the above: if Slack happens to be focused at startup,
+    the very first event is a Slack window, no timer."""
+    fsm, _, scheduler, _ = setup()
+    fsm.on_window_activated("Slack")
+    assert scheduler.scheduled == []
+    assert fsm.snapshot.focus == FocusState.SLACK_FOCUSED
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +387,55 @@ def test_apply_when_status_set_fails_does_not_set_we_forced_status(setup):
     scheduler.fire_next()
     assert fsm.snapshot.we_forced_away is True  # presence call independent
     assert fsm.snapshot.we_forced_status is False
+
+
+# ---------------------------------------------------------------------------
+# Internal-transition observer (grace-expiry hook)
+# ---------------------------------------------------------------------------
+
+def test_grace_expiry_invokes_observer_with_prev_snapshot(setup_with_observer):
+    fsm, slack, scheduler, _, observed = setup_with_observer()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    assert observed == []  # not triggered yet
+
+    scheduler.fire_next()  # grace expires -> apply forced state
+    assert len(observed) == 1
+    result, prev, label = observed[0]
+    assert label == "grace_expired"
+    # prev_snapshot was captured BEFORE _apply_forced_state ran; flags False
+    assert prev.we_forced_away is False
+    assert prev.we_forced_status is False
+    # result reflects the API calls
+    assert result.presence_call is not None and result.presence_call.ok
+    assert result.status_set_call is not None and result.status_set_call.ok
+
+
+def test_grace_expiry_observer_not_called_when_disabled(setup_with_observer):
+    fsm, _, scheduler, _, observed = setup_with_observer()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    fsm.set_enabled(False)  # cancels timer; observer not invoked
+    assert observed == []
+
+
+def test_observer_not_called_for_method_driven_transitions(setup_with_observer):
+    """Public-method transitions return the result directly, so the
+    observer is reserved for grace-expiry only."""
+    fsm, _, scheduler, _, observed = setup_with_observer()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    fsm.on_window_activated("Slack")  # within grace, cancels
+    assert observed == []
+
+
+def test_observer_optional_default_no_callback(setup):
+    """Observer parameter is optional; FSMs built without one still work."""
+    fsm, _, scheduler, _ = setup()  # no observer argument
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()
+    # Did not crash; that's the test.
 
 
 # ---------------------------------------------------------------------------

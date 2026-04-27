@@ -87,7 +87,10 @@ class Application(QObject):
     def _build_fsm(self) -> None:
         assert self._slack is not None
         self._fsm = FocusStateMachine(
-            slack=self._slack, scheduler=self._scheduler, config=self._config
+            slack=self._slack,
+            scheduler=self._scheduler,
+            config=self._config,
+            on_internal_transition=self._on_internal_transition,
         )
         # Push initial snapshot to tray so menu shows enabled/disabled state.
         self._tray.update_state(
@@ -101,6 +104,10 @@ class Application(QObject):
         prev = self._fsm.snapshot
         result = self._fsm.on_window_activated(resource_class)
         self._after_transition(result, prev_snapshot=prev, label=resource_class)
+
+    def _on_internal_transition(self, result, prev_snapshot, label: str) -> None:
+        """Hook for FSM-internal transitions (currently only grace-expiry)."""
+        self._after_transition(result, prev_snapshot=prev_snapshot, label=label)
 
     def _on_enable_toggle(self, enabled: bool) -> None:
         if self._fsm is None:

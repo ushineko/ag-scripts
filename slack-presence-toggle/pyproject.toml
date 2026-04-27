@@ -1,6 +1,6 @@
 [project]
 name = "slack-presence-toggle"
-version = "0.1.0"
+version = "0.1.1"
 description = "Tray utility that toggles Slack presence based on Slack window focus on KDE Plasma 6 / Wayland."
 requires-python = ">=3.11"
 

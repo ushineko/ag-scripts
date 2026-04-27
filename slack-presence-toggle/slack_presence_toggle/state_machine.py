@@ -69,14 +69,25 @@ class FocusStateMachine:
         scheduler: Scheduler,
         config: Config,
         clock: Callable[[], float] = time.time,
+        on_internal_transition: Callable[
+            [TransitionResult, "StateSnapshot", str], None
+        ] | None = None,
     ) -> None:
         self._slack = slack
         self._scheduler = scheduler
         self._config = config
         self._clock = clock
+        self._on_internal_transition = on_internal_transition
 
         self._enabled = config.enabled
-        self._focus = FocusState.OTHER_FOCUSED  # conservative: assume not in Slack
+        # Initial state assumes Slack is focused. This way, when the KWin
+        # script reloads on startup and emits the current active window,
+        # a non-Slack window correctly transitions us into the pending-away
+        # path (and the grace timer fires). If we initialized at
+        # OTHER_FOCUSED instead, a startup with Slack unfocused would never
+        # schedule a timer because we'd never see a slack -> non-slack
+        # transition.
+        self._focus = FocusState.SLACK_FOCUSED
         self._we_forced_away = False
         self._we_forced_status = False
         self._grace_handle: object | None = None
@@ -129,11 +140,17 @@ class FocusStateMachine:
         # and fire; re-check.
         if self._focus != FocusState.OTHER_FOCUSED_PENDING_AWAY:
             return
+        prev_snapshot = self.snapshot  # capture before any state mutation
         self._focus = FocusState.OTHER_FOCUSED
         if not self._enabled:
             return
         result = self._apply_forced_state()
         log.info("grace expired -> applied forced state: %s", result)
+        # Internal transition (timer-driven, not method-call-driven). The
+        # orchestrator wouldn't otherwise know to update the tray, send a
+        # notification, or refresh status — wake it up explicitly.
+        if self._on_internal_transition is not None:
+            self._on_internal_transition(result, prev_snapshot, "grace_expired")
 
     def _apply_forced_state(self) -> TransitionResult:
         presence_health = self._slack.set_presence("away")

@@ -437,7 +437,7 @@ Suggested order; each phase produces a working but limited binary:
       text matches our configured text (do not clobber user-set statuses).
 - [x] When focus returns to Slack within the grace period: no API call,
       timer cancelled.
-- [ ] When focus returns to Slack after grace expired: presence is `auto`
+- [x] When focus returns to Slack after grace expired: presence is `auto`
       within 1 second.
 - [ ] Quick-disable: clicking immediately calls `setPresence(auto)` and
       stops responding to focus events. Menu updates.
