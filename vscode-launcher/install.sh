@@ -6,6 +6,7 @@ APP_NAME="vscode-launcher"
 LOOKUP_NAME="vscl-tmux-lookup"
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
+AUTOSTART_DIR="$HOME/.config/autostart"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 MAIN_SCRIPT="$SCRIPT_DIR/vscode_launcher.py"
 LOOKUP_SCRIPT="$SCRIPT_DIR/tmux_lookup.py"
@@ -52,6 +53,7 @@ fi
 # --- Create dirs ---
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$DESKTOP_DIR"
+mkdir -p "$AUTOSTART_DIR"
 mkdir -p "$ICON_DIR"
 
 # --- Install icon ---
@@ -78,6 +80,26 @@ update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 # KRunner and the app menu keep showing the old icon (or a blank fallback
 # when the old Icon= name is renamed). kbuildsycoca6 is the canonical refresh.
 kbuildsycoca6 --noincremental 2>/dev/null || kbuildsycoca5 --noincremental 2>/dev/null || true
+
+# --- Autostart entry (tray-resident daemon) ---
+# Generated rather than copied from the menu .desktop because it needs a
+# different Exec line (--tray) and an X-GNOME-Autostart-enabled hint. KDE
+# and GNOME both honor ~/.config/autostart per the XDG Autostart spec.
+cat > "$AUTOSTART_DIR/$APP_NAME.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=VSCode Launcher (tray daemon)
+Comment=Tray-resident daemon hosting the global popup hotkey
+Exec=$INSTALL_DIR/$APP_NAME --tray
+Icon=$APP_NAME
+Terminal=false
+Categories=Development;Utility;
+X-GNOME-Autostart-enabled=true
+StartupWMClass=$APP_NAME
+EOF
+echo "  Autostart entry: $AUTOSTART_DIR/$APP_NAME.desktop"
+echo "  (Tray daemon will start on next login. To start it now without"
+echo "   logging out: $APP_NAME --tray &)"
 
 # --- Install zsh hook idempotently ---
 if [ ! -f "$ZSHRC" ]; then

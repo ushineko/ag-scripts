@@ -28,13 +28,16 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtGui import QAction, QIcon, QKeySequence
 
+from global_shortcut import GlobalShortcut, parse_hotkey
 from platform_support import (
     launcher_config_dir,
     process_start_time,
     vscode_state_db_path,
 )
+from popup import WorkspacePopup
+from single_instance import SingletonGuard
 from window_scanner import (
     ACTION_ACTIVATE,
     ACTION_CLOSE,
@@ -50,29 +53,50 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QHeaderView,
+    QKeySequenceEdit,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
+    QSpinBox,
+    QSystemTrayIcon,
     QTableWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-__version__ = "2.0"
+__version__ = "3.0"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
 CONFIG_VERSION = 2
+
+DEFAULT_HOTKEY = "Shift+Tab"
+# Tap-to-cycle popup: each `pressed` event from KGlobalAccel either shows the
+# popup (if hidden) or cycles to the next entry (if visible). Each `released`
+# event restarts a single-shot timer; if the timer fires without another
+# `pressed` arriving, the current selection is committed and the popup
+# dismisses. Tune via Settings → Popup commit delay (ms) — config-driven so
+# users can iterate without an edit-rebuild cycle.
+DEFAULT_POPUP_COMMIT_DELAY_MS = 600
+POPUP_COMMIT_DELAY_MIN_MS = 100
+POPUP_COMMIT_DELAY_MAX_MS = 5000
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "version": CONFIG_VERSION,
     "tmux_mappings": {},
     "hidden_paths": [],
     "window_geometry": {"x": 100, "y": 100, "w": 700, "h": 500},
+    "global_hotkey": DEFAULT_HOTKEY,
+    "popup_commit_delay_ms": DEFAULT_POPUP_COMMIT_DELAY_MS,
 }
+
+SHORTCUT_COMPONENT = "vscode-launcher"
+SHORTCUT_ACTION = "show-popup"
+SHORTCUT_COMPONENT_FRIENDLY = "VSCode Launcher"
+SHORTCUT_ACTION_FRIENDLY = "Show quick-launcher popup"
 
 GATHER_DELAY_MS = 1500
 AUTO_REFRESH_INTERVAL_MS = 5000
@@ -246,19 +270,19 @@ class ConfigManager:
         version = self._raw.get("version")
         if version == 1:
             self._raw = self._migrate_v1_to_v2(self._raw)
-        elif version != CONFIG_VERSION:
-            # Unknown / future version: treat as default but keep raw for round-trip
-            self._raw.setdefault("tmux_mappings", {})
-            self._raw.setdefault("hidden_paths", [])
-            self._raw.setdefault(
-                "window_geometry", dict(DEFAULT_CONFIG["window_geometry"])
-            )
-        else:
-            self._raw.setdefault("tmux_mappings", {})
-            self._raw.setdefault("hidden_paths", [])
-            self._raw.setdefault(
-                "window_geometry", dict(DEFAULT_CONFIG["window_geometry"])
-            )
+        # Defaults for any v2-era fields added after a config was first
+        # written. Same code path for current-version and future-version
+        # configs — we leave unknown keys alone and only backfill missing
+        # ones.
+        self._raw.setdefault("tmux_mappings", {})
+        self._raw.setdefault("hidden_paths", [])
+        self._raw.setdefault(
+            "window_geometry", dict(DEFAULT_CONFIG["window_geometry"])
+        )
+        self._raw.setdefault("global_hotkey", DEFAULT_HOTKEY)
+        self._raw.setdefault(
+            "popup_commit_delay_ms", DEFAULT_POPUP_COMMIT_DELAY_MS
+        )
         return self._raw
 
     def save(
@@ -266,6 +290,8 @@ class ConfigManager:
         tmux_mappings: dict[str, str],
         hidden_paths: list[str],
         window_geometry: dict[str, int],
+        global_hotkey: str | None = None,
+        popup_commit_delay_ms: int | None = None,
     ) -> None:
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
         payload = dict(self._raw) if self._raw else {}
@@ -273,6 +299,14 @@ class ConfigManager:
         payload["tmux_mappings"] = dict(tmux_mappings)
         payload["hidden_paths"] = list(hidden_paths)
         payload["window_geometry"] = dict(window_geometry)
+        if global_hotkey is not None:
+            payload["global_hotkey"] = global_hotkey
+        elif "global_hotkey" not in payload:
+            payload["global_hotkey"] = DEFAULT_HOTKEY
+        if popup_commit_delay_ms is not None:
+            payload["popup_commit_delay_ms"] = int(popup_commit_delay_ms)
+        elif "popup_commit_delay_ms" not in payload:
+            payload["popup_commit_delay_ms"] = DEFAULT_POPUP_COMMIT_DELAY_MS
         # Drop v1-only key if present
         payload.pop("workspaces", None)
         tmp = self.config_file.with_suffix(".json.tmp")
@@ -447,6 +481,84 @@ class TmuxSessionDialog(QDialog):
 
     def selected_session(self) -> str:
         return self.combo.currentText().strip()
+
+
+class SettingsDialog(QDialog):
+    """Modal dialog for tunable launcher settings: popup hotkey and the
+    tap-to-cycle commit delay. Both apply live in tray-resident mode."""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        current_hotkey: str = DEFAULT_HOTKEY,
+        current_commit_delay_ms: int = DEFAULT_POPUP_COMMIT_DELAY_MS,
+        rebind_live: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Global popup hotkey:"))
+        self._key_edit = QKeySequenceEdit(QKeySequence(current_hotkey))
+        layout.addWidget(self._key_edit)
+
+        if rebind_live:
+            hint_text = (
+                "Applies immediately. Use Meta (Super), Ctrl, Alt, Shift "
+                "with one non-modifier key."
+            )
+        else:
+            hint_text = (
+                "Saved to config. Takes effect on next daemon start."
+            )
+        hint = QLabel(hint_text)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("QLabel { color: gray; }")
+        layout.addWidget(hint)
+
+        # Commit delay (ms) — tap-to-cycle: how long after the last tap
+        # the popup waits before activating the current selection.
+        layout.addSpacing(8)
+        layout.addWidget(QLabel("Popup commit delay (ms):"))
+        self._delay_spin = QSpinBox()
+        self._delay_spin.setRange(POPUP_COMMIT_DELAY_MIN_MS, POPUP_COMMIT_DELAY_MAX_MS)
+        self._delay_spin.setSingleStep(50)
+        self._delay_spin.setValue(int(current_commit_delay_ms))
+        layout.addWidget(self._delay_spin)
+        delay_hint = QLabel(
+            "Lower = single-tap activates faster; higher = more time to "
+            "tap-cycle through entries before commit."
+        )
+        delay_hint.setWordWrap(True)
+        delay_hint.setStyleSheet("QLabel { color: gray; }")
+        layout.addWidget(delay_hint)
+
+        self._error_label = QLabel("")
+        self._error_label.setStyleSheet("QLabel { color: #d44; }")
+        self._error_label.setVisible(False)
+        layout.addWidget(self._error_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_hotkey(self) -> str:
+        return self._key_edit.keySequence().toString(
+            QKeySequence.SequenceFormat.PortableText
+        )
+
+    def selected_commit_delay_ms(self) -> int:
+        return int(self._delay_spin.value())
+
+    def show_error(self, message: str) -> None:
+        self._error_label.setText(message)
+        self._error_label.setVisible(True)
 
 
 class WorkspaceTableWidget(QTableWidget):
@@ -660,6 +772,7 @@ class MainWindow(QMainWindow):
         launcher: Launcher,
         recents_reader: VSCodeRecentsReader,
         window_scanner: WindowScanner | None = None,
+        tray_mode: bool = False,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"VSCode Launcher v{__version__}")
@@ -667,21 +780,28 @@ class MainWindow(QMainWindow):
         self.launcher = launcher
         self.recents_reader = recents_reader
         self.window_scanner = window_scanner
-        # v2.0 scanner is IPC-backed and sync (~3 ms). We just call
-        # list_vscode_entries() directly every poll — no QProcess state
-        # machine, no background thread, no signal wiring.
+        self.tray_mode = tray_mode
         self._auto_refresh_timer: QTimer | None = None
-        # Per-path launch timestamps we record ourselves when the launcher
-        # spawns `code --new-window`. Preferred source for the Launched
-        # column — IPC gives us the real renderer PID, but /proc's starttime
-        # on that PID can lag slightly behind the actual window open
-        # (renderer is forked after the `code --new-window` IPC roundtrip).
-        # Our own timestamp is closest to "moment the user clicked Start".
         self._launched_at_by_path: dict[str, float] = {}
+        # Per-path "last user-driven activation" timestamp. Updated whenever
+        # the user picks a workspace via the popup, the per-row Activate
+        # button, or the launch path. Used to bubble the most-recently-used
+        # workspace to the top of the running group, regardless of VSCode's
+        # own MRU (which only updates on workspace open, not on focus).
+        self._activated_at_by_path: dict[str, float] = {}
+        # Tray-mode-only attributes; populated by _setup_tray_mode below.
+        self._tray: QSystemTrayIcon | None = None
+        self._global_shortcut: GlobalShortcut | None = None
+        self._popup: WorkspacePopup | None = None
+        self._popup_commit_timer: QTimer | None = None
 
         raw = self.config_manager.load()
         self.tmux_mappings: dict[str, str] = dict(raw.get("tmux_mappings", {}) or {})
         self.hidden_paths: set[str] = set(raw.get("hidden_paths", []) or [])
+        self.global_hotkey: str = str(raw.get("global_hotkey") or DEFAULT_HOTKEY)
+        self.popup_commit_delay_ms: int = int(
+            raw.get("popup_commit_delay_ms") or DEFAULT_POPUP_COMMIT_DELAY_MS
+        )
         geom = raw.get("window_geometry") or DEFAULT_CONFIG["window_geometry"]
         self.setGeometry(
             int(geom.get("x", 100)),
@@ -691,9 +811,16 @@ class MainWindow(QMainWindow):
         )
 
         self.workspaces: list[Workspace] = []
+        # Track whether tray-mode bring-up succeeded — main() reads this to
+        # decide whether to exit when --tray was requested but the global
+        # shortcut couldn't bind (typically: duplicate daemon).
+        self.tray_setup_ok = False
+
         self._build_ui()
         self._refresh()
         self._start_auto_refresh()
+        if self.tray_mode:
+            self.tray_setup_ok = self._setup_tray_mode()
 
     def _start_auto_refresh(self) -> None:
         """Poll the window scanner on an interval so the running-state column
@@ -711,11 +838,12 @@ class MainWindow(QMainWindow):
         for threads or async machinery). If any row's running state
         changed, re-read VSCode recents and rebuild the list so the
         running group re-sorts with fresh MRU. Otherwise refresh only the
-        Launched column so its relative times tick forward."""
+        Launched column so its relative times tick forward.
+
+        Runs unconditionally in tray-resident mode: even when the main
+        window is hidden, the popup still consumes `self.workspaces` and
+        needs current is_running data."""
         if self.window_scanner is None:
-            return
-        if not self.isVisible():
-            _dlog("tick: skipping, window not visible")
             return
 
         result = self.window_scanner.list_vscode_entries()
@@ -788,6 +916,12 @@ class MainWindow(QMainWindow):
         act_unhide_all = QAction("Unhide All", self)
         act_unhide_all.triggered.connect(self._unhide_all)
         toolbar.addAction(act_unhide_all)
+
+        toolbar.addSeparator()
+
+        act_settings = QAction("Settings…", self)
+        act_settings.triggered.connect(self._open_settings)
+        toolbar.addAction(act_settings)
 
         self.empty_label = QLabel()
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -875,7 +1009,29 @@ class MainWindow(QMainWindow):
                 # A workspace that's no longer running invalidates our tracked
                 # timestamp — if it gets relaunched later, we'll record afresh.
                 self._launched_at_by_path.pop(ws.path, None)
-        workspaces.sort(key=lambda w: 0 if w.is_running else 1)
+        # Sort: running first, then by user-driven activation time (newest
+        # first), falling back to VSCode's recents order via stable-sort
+        # within the no-activation rows. Workspaces never activated by the
+        # user keep their original VSCode-recents position; one user click
+        # promotes a workspace above untouched ones.
+        workspaces.sort(
+            key=lambda w: (
+                0 if w.is_running else 1,
+                -self._activated_at_by_path.get(w.path, 0.0),
+            )
+        )
+
+    def _reorder_for_activation(self) -> None:
+        """Re-sort `self.workspaces` and rebuild the table without re-reading
+        recents. Called after a user activates a running workspace so the
+        next popup show reflects the new MRU."""
+        self.workspaces.sort(
+            key=lambda w: (
+                0 if w.is_running else 1,
+                -self._activated_at_by_path.get(w.path, 0.0),
+            )
+        )
+        self._reload_list()
 
     def _build_workspace_list(self) -> list[Workspace]:
         """Called by manual Refresh and by __init__. Uses the sync scan path
@@ -1013,13 +1169,190 @@ class MainWindow(QMainWindow):
         ws = self._find_workspace_by_path(path)
         if ws is None or self.window_scanner is None:
             return
+        self._activated_at_by_path[path] = time.time()
         self.window_scanner.perform_window_action(ws.label, ACTION_ACTIVATE)
+        self._reorder_for_activation()
 
     def _find_workspace_by_path(self, path: str) -> Workspace | None:
         for w in self.workspaces:
             if w.path == path:
                 return w
         return None
+
+    # ------------------------------------------------------------------
+    # Tray-resident mode + global shortcut + popup
+    # ------------------------------------------------------------------
+
+    def _setup_tray_mode(self) -> bool:
+        """Initialize tray icon, global shortcut, and popup widget. Only
+        called when the launcher was started with --tray.
+
+        Returns True if the global shortcut bound successfully. Returns
+        False if KGlobalAccel is unavailable OR registration failed (most
+        commonly because another --tray daemon is already running and
+        holds the same component name). Caller decides whether to exit
+        the process or just degrade to no-popup mode.
+        """
+        # Tray icon — left-click toggles main window, right-click menu.
+        icon = _resolve_app_icon()
+        self._tray = QSystemTrayIcon(icon, self)
+        self._tray.setToolTip("VSCode Launcher")
+        self._tray.activated.connect(self._on_tray_activated)
+
+        menu = QMenu(self)
+        menu.addAction("Show", self._show_main_window)
+        menu.addSeparator()
+        menu.addAction("Quit", self._quit_from_tray)
+        self._tray.setContextMenu(menu)
+        self._tray.show()
+
+        # Global shortcut — KGlobalAccel via D-Bus.
+        self._global_shortcut = GlobalShortcut(
+            SHORTCUT_COMPONENT,
+            SHORTCUT_ACTION,
+            SHORTCUT_COMPONENT_FRIENDLY,
+            SHORTCUT_ACTION_FRIENDLY,
+            parent=self,
+        )
+        if not self._global_shortcut.is_available():
+            _dlog("KGlobalAccel unavailable; popup hotkey disabled")
+            return False
+
+        self._global_shortcut.pressed.connect(self._on_hotkey_pressed)
+        self._global_shortcut.released.connect(self._on_hotkey_released)
+        bound = self._global_shortcut.set_binding(parse_hotkey(self.global_hotkey))
+        if not bound:
+            _dlog(f"failed to register hotkey {self.global_hotkey!r}")
+
+        # Popup widget — built regardless of binding state so the user can
+        # still rebind via Settings if the initial registration failed.
+        self._popup = WorkspacePopup()
+        self._popup.activate_requested.connect(self._launch_or_activate)
+
+        # Single-shot timer that commits the current popup selection if no
+        # further `pressed` event arrives within self.popup_commit_delay_ms.
+        # is the entire mechanism behind tap-to-cycle on Wayland — see the
+        # constant's comment at the top of the file.
+        self._popup_commit_timer = QTimer(self)
+        self._popup_commit_timer.setSingleShot(True)
+        self._popup_commit_timer.setInterval(self.popup_commit_delay_ms)
+        self._popup_commit_timer.timeout.connect(self._commit_popup_selection)
+
+        return bound
+
+    def _on_tray_activated(self, reason: int) -> None:
+        # Trigger.Reason values: 1 = Context (right-click, handled by menu),
+        # 2 = DoubleClick, 3 = Trigger (single click). Treat single-click as
+        # toggle.
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._toggle_main_window()
+
+    def _toggle_main_window(self) -> None:
+        if self.isVisible() and not self.isMinimized():
+            self.hide()
+        else:
+            self._show_main_window()
+
+    def _show_main_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_from_tray(self) -> None:
+        # Bypass the hide-to-tray closeEvent and actually exit.
+        self.tray_mode = False
+        self.close()
+        QApplication.quit()
+
+    def _on_hotkey_pressed(self) -> None:
+        """Tap-to-cycle: first press shows the popup with row 0 selected;
+        subsequent presses (while the popup is visible) cycle to the next
+        entry. Cancels the pending commit so the user can keep cycling."""
+        if self._popup is None:
+            return
+        if self._popup_commit_timer is not None:
+            self._popup_commit_timer.stop()
+        if self._popup.isVisible():
+            self._popup.cycle_next()
+        else:
+            # Workspace list is kept fresh by the 5 s auto-refresh; no
+            # per-press scan needed.
+            self._popup.show_with_workspaces(self.workspaces)
+
+    def _on_hotkey_released(self) -> None:
+        """Restart the commit timer. If the user re-presses within the
+        timeout, the timer is cancelled in `_on_hotkey_pressed`. Otherwise
+        the timer fires and commits the current selection."""
+        if self._popup is None or not self._popup.isVisible():
+            return
+        if self._popup_commit_timer is not None:
+            self._popup_commit_timer.start()
+
+    def _commit_popup_selection(self) -> None:
+        """Timeout-driven commit: activate whatever the popup is currently
+        showing as selected, then dismiss. Wired only when the popup is
+        visible — guards against late timer firings."""
+        if self._popup is None or not self._popup.isVisible():
+            return
+        self._popup.activate_current()
+
+    def _launch_or_activate(self, workspace: Workspace) -> None:
+        """Single entry point for any caller that has a workspace and
+        wants to "do the right thing": focus an existing window if it's
+        running, otherwise launch a new one. Used by the popup; could
+        be wired to other callers in the future."""
+        self._activated_at_by_path[workspace.path] = time.time()
+        if workspace.is_running and self.window_scanner is not None:
+            self.window_scanner.perform_window_action(
+                workspace.label, ACTION_ACTIVATE
+            )
+            # Re-sort so the activated workspace bubbles to the top of the
+            # running group on the next popup show.
+            self._reorder_for_activation()
+        else:
+            self._launch_paths([workspace.path], allow_running=True)
+
+    def _open_settings(self) -> None:
+        """Show the Settings dialog and apply on OK. Hotkey and commit
+        delay are applied live whenever KGlobalAccel is reachable; if it
+        isn't, the values are still persisted and take effect at next
+        daemon start."""
+        rebind_live = self._global_shortcut is not None and self._global_shortcut.is_available()
+        dialog = SettingsDialog(
+            self,
+            current_hotkey=self.global_hotkey,
+            current_commit_delay_ms=self.popup_commit_delay_ms,
+            rebind_live=rebind_live,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_hotkey = dialog.selected_hotkey()
+        new_delay_ms = dialog.selected_commit_delay_ms()
+
+        # Hotkey rebind first — if it fails, abort before persisting any
+        # changes so the dialog stays consistent with the live state.
+        if new_hotkey and new_hotkey != self.global_hotkey and rebind_live:
+            qt_code = parse_hotkey(new_hotkey)
+            if qt_code is None:
+                dialog.show_error(f"Could not parse {new_hotkey!r}")
+                return
+            if not self._global_shortcut.set_binding(qt_code):
+                QMessageBox.warning(
+                    self,
+                    "Hotkey unavailable",
+                    f"Could not bind {new_hotkey!r}. The combo may already be in use.",
+                )
+                return
+
+        # Apply commit delay live to the running timer.
+        if self._popup_commit_timer is not None:
+            self._popup_commit_timer.setInterval(new_delay_ms)
+
+        if new_hotkey:
+            self.global_hotkey = new_hotkey
+        self.popup_commit_delay_ms = new_delay_ms
+        self._save()
 
     def _launch_selected(self) -> None:
         paths = self.list_widget.checked_workspace_paths()
@@ -1065,9 +1398,19 @@ class MainWindow(QMainWindow):
                 # refresh uses this in preference to /proc (which can only
                 # give us "when VSCode itself started", not per-window).
                 self._launched_at_by_path[ws.path] = time.time()
+                # Activation timestamp too, so the just-launched workspace
+                # bubbles to the top of the running group when the scanner
+                # next sees it.
+                self._activated_at_by_path[ws.path] = time.time()
                 launched += 1
         if launched > 0:
             QTimer.singleShot(GATHER_DELAY_MS, self._run_gather)
+            # The 5 s auto-refresh would catch the new VSCode window
+            # eventually; schedule explicit follow-up scans so the popup
+            # reflects the new running state sooner. VSCode can take 1-3 s
+            # to bind its IPC socket; two passes cover the common cases.
+            QTimer.singleShot(2500, self._trigger_background_scan)
+            QTimer.singleShot(5000, self._trigger_background_scan)
 
     def _run_gather(self) -> None:
         ok = self.launcher.run_gather()
@@ -1091,13 +1434,23 @@ class MainWindow(QMainWindow):
                 "w": geom.width(),
                 "h": geom.height(),
             },
+            global_hotkey=self.global_hotkey,
+            popup_commit_delay_ms=self.popup_commit_delay_ms,
         )
 
     def closeEvent(self, event: Any) -> None:
+        # In tray mode, the X button hides to tray instead of quitting.
+        # The user has to explicitly Quit from the tray context menu.
+        if self.tray_mode and self._tray is not None:
+            self._save()
+            self.hide()
+            event.ignore()
+            return
+
         if self._auto_refresh_timer is not None:
             self._auto_refresh_timer.stop()
-        # No thread to wait on — any in-flight QProcess will be cleaned up
-        # by the scanner's parent-child tree when the app exits.
+        if self._global_shortcut is not None:
+            self._global_shortcut.unregister()
         self._save()
         super().closeEvent(event)
 
@@ -1121,16 +1474,54 @@ def _resolve_app_icon() -> QIcon:
 
 
 def main() -> int:
+    # `--tray` is now an autostart-only flag: don't auto-show the main
+    # window on launch. With no flag, the user is presumed to have invoked
+    # the launcher manually and wants the main window in front of them.
+    autostart_mode = "--tray" in sys.argv
     app = QApplication(sys.argv)
     app.setApplicationName("vscode-launcher")
     app.setDesktopFileName("vscode-launcher")
     app.setWindowIcon(_resolve_app_icon())
+    # Tray-resident is the only mode now — main window is just an
+    # occasionally-shown UI for the same daemon.
+    app.setQuitOnLastWindowClosed(False)
+
+    # Single-instance enforcement. If another daemon is already running,
+    # ask it to surface its main window (manual invocation) or just exit
+    # quietly (autostart invocation racing the user's manual run).
+    guard = SingletonGuard()
+    if not guard.claim():
+        if not autostart_mode:
+            err = guard.signal_show_main_window()
+            if err:
+                print(
+                    f"vscode-launcher: another instance is running but the "
+                    f"D-Bus signal failed ({err}). Click the tray icon "
+                    f"to surface its main window.",
+                    file=sys.stderr,
+                )
+        return 0
+
     config = ConfigManager()
     launcher = Launcher()
     recents = VSCodeRecentsReader()
     scanner = WindowScanner()
-    window = MainWindow(config, launcher, recents, window_scanner=scanner)
-    window.show()
+    window = MainWindow(
+        config, launcher, recents, window_scanner=scanner, tray_mode=True
+    )
+    if not window.tray_setup_ok:
+        # KGlobalAccel registration failed. Most common cause: a stale
+        # registration from a prior daemon, or a non-KDE Wayland session.
+        print(
+            "vscode-launcher: failed to register the global hotkey "
+            "(KGlobalAccel unavailable, or the configured combo is taken). "
+            "The main window will still work; the popup hotkey will not.",
+            file=sys.stderr,
+        )
+    guard.export(window, window._show_main_window)
+
+    if not autostart_mode:
+        window._show_main_window()
     return app.exec()
 
 

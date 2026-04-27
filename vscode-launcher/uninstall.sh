@@ -5,6 +5,7 @@ APP_NAME="vscode-launcher"
 LOOKUP_NAME="vscl-tmux-lookup"
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
+AUTOSTART_DIR="$HOME/.config/autostart"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 CONFIG_DIR="$HOME/.config/vscode-launcher"
 ZSHRC="$HOME/.zshrc"
@@ -31,6 +32,12 @@ if [ -f "$DESKTOP_DIR/$APP_NAME.desktop" ]; then
     echo "  Removed desktop entry: $DESKTOP_DIR/$APP_NAME.desktop"
 fi
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+
+# --- Remove autostart entry ---
+if [ -f "$AUTOSTART_DIR/$APP_NAME.desktop" ]; then
+    rm "$AUTOSTART_DIR/$APP_NAME.desktop"
+    echo "  Removed autostart entry: $AUTOSTART_DIR/$APP_NAME.desktop"
+fi
 
 # --- Remove icon ---
 if [ -f "$ICON_DIR/$APP_NAME.svg" ]; then

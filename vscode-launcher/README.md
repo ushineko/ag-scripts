@@ -2,11 +2,12 @@
 
 Bulk-launch VSCode workspaces directly from VSCode's own **Recent** list, with automatic window placement and tmux session switching. Targets CachyOS / KDE Plasma 6 (Wayland).
 
-Solves three recurring pain points:
+Solves four recurring pain points:
 
-- VSCode opens at a small default size every time — this tool maximizes it on the primary monitor
-- Each workspace has to be opened manually — this tool launches any number at once
-- A shared system-wide tmux server needs a manual `switch-client` after each launch — this tool wires the integrated terminal to the correct session automatically
+- VSCode opens at a small default size every time. This tool maximizes it on the primary monitor.
+- Each workspace has to be opened manually. This tool launches any number at once.
+- A shared system-wide tmux server needs a manual `switch-client` after each launch. This tool wires the integrated terminal to the correct session automatically.
+- Switching workspaces means alt-tabbing through every VSCode window. This tool surfaces an Alt-Tab-style quick-launcher popup behind a global hotkey, with running workspaces first.
 
 ## Table of Contents
 
@@ -21,15 +22,17 @@ Solves three recurring pain points:
 
 ## Features
 
-- Reads your workspace list live from VSCode's own Recent history — nothing to maintain by hand
-- **Shows which workspaces are currently open**, with running ones sorted to the top and a `● running` badge — prompts before double-launching
-- **Per-row Start / Stop / Activate buttons**: Start (non-running) launches the workspace; Activate (running) raises and focuses its VSCode window; Stop (running) closes the window via KWin while leaving the main VSCode process alive
-- PyQt6 GUI with multi-select checkboxes; bulk-launch with one click
-- Per-workspace tmux-session mapping, editable via a dropdown populated from `tmux list-sessions`
-- Hide / Unhide workspaces you don't want cluttering the launcher
-- Delegates window placement to the sibling [`vscode-gather`](../vscode-gather) tool — each launched window is moved to the primary monitor and maximized
-- Installs a small zsh hook into `~/.zshrc` so the VSCode integrated terminal attaches to (or switches to) the correct pre-existing tmux session automatically
-- Never creates, kills, or renames tmux sessions — the shared system tmux server is left alone
+- Reads your workspace list live from VSCode's own Recent history. Nothing to maintain by hand.
+- **Tray-resident daemon** with a configurable global hotkey (default `Shift+Tab`). Tap to surface a quick-launcher popup; tap again to cycle through workspaces. Pause to commit. Mouse-click also commits.
+- **Shows which workspaces are currently open**, with running ones sorted to the top and a `● running` badge. Activated workspaces bubble to the top of the running group on next view.
+- **Per-row Start / Stop / Activate buttons**: Start (non-running) launches the workspace; Activate (running) raises and focuses its VSCode window; Stop (running) closes the window via KWin while leaving the main VSCode process alive.
+- **Single-instance**: a second `vscode-launcher` invocation signals the running daemon to surface its main window over D-Bus, instead of starting a duplicate.
+- PyQt6 GUI with multi-select checkboxes; bulk-launch with one click.
+- Per-workspace tmux-session mapping, editable via a dropdown populated from `tmux list-sessions`.
+- Hide / Unhide workspaces you don't want cluttering the launcher.
+- Delegates window placement to the sibling [`vscode-gather`](../vscode-gather) tool. Each launched window is moved to the primary monitor and maximized.
+- Installs a small zsh hook into `~/.zshrc` so the VSCode integrated terminal attaches to (or switches to) the correct pre-existing tmux session automatically.
+- Never creates, kills, or renames tmux sessions. The shared system tmux server is left alone.
 
 ## Requirements
 
@@ -50,20 +53,40 @@ Solves three recurring pain points:
 This:
 
 1. Symlinks `vscode_launcher.py` to `~/.local/bin/vscode-launcher`
-2. Installs a `.desktop` entry so it shows up in KRunner and the app menu
-3. Appends the tmux shell hook into `~/.zshrc` (idempotent, bounded by markers)
+2. Installs a `.desktop` entry in `~/.local/share/applications/` so it shows up in KRunner and the app menu
+3. Installs an XDG autostart entry at `~/.config/autostart/vscode-launcher.desktop` with `Exec=vscode-launcher --tray`. The tray daemon will start automatically on next login.
+4. Appends the tmux shell hook into `~/.zshrc` (idempotent, bounded by markers)
 
-Open a new zsh session (or `exec zsh`) for the hook to take effect.
+Open a new zsh session (or `exec zsh`) for the hook to take effect. To start the tray daemon now without logging out: `vscode-launcher --tray &`.
 
 ## Usage
 
-Launch the GUI:
+The launcher runs as a tray-resident daemon. The first invocation starts the daemon and shows the main window; subsequent `vscode-launcher` invocations signal the existing daemon to surface its main window (no duplicate process).
 
 ```bash
-vscode-launcher
+vscode-launcher          # foreground: start daemon + show main window
+vscode-launcher --tray   # autostart: start daemon hidden (no main window)
 ```
 
-The list is populated from VSCode's Recent workspaces. Folders show as `<folder-name>`; multi-root workspace files show as `<stem> (Workspace)` — matching VSCode's own labeling.
+Closing the main window with the X button hides it back to the tray. The tray icon's right-click menu has an explicit Quit action.
+
+The list is populated from VSCode's Recent workspaces. Folders show as `<folder-name>`; multi-root workspace files show as `<stem> (Workspace)`, matching VSCode's own labeling.
+
+### Quick-launcher popup
+
+Tap the configured global hotkey (default `Shift+Tab`) to bring up an Alt-Tab-style popup centered on the active screen. Workspaces are listed running-first, MRU within each group.
+
+- **Tap the hotkey again** to cycle to the next entry. The popup uses tap-to-cycle rather than hold-and-arrow because Wayland blocks keyboard focus stealing on hotkey-triggered windows.
+- **Pause** for the configured commit delay (default 600 ms, tunable in Settings) and the current selection commits: running workspaces are focused, non-running ones are launched.
+- **Mouse-click** any row to commit immediately.
+- The popup also dismisses on focus-out (X11) and on a long pause without any further taps.
+
+### Settings
+
+Click **Settings…** in the toolbar to change:
+
+- **Global popup hotkey** — any `QKeySequence`-parseable combo. Applies live.
+- **Popup commit delay (ms)** — how long after the last tap the popup waits before committing. Lower = faster single-tap activate; higher = more time to tap-cycle. Applies live.
 
 ### Assigning a tmux session to a workspace
 
@@ -94,13 +117,15 @@ VSCode keeps every workspace you've ever touched in its Recent list. To declutte
 
 ### Refreshing
 
-The running-state column auto-refreshes in the background every 5 seconds, so opening or closing a VSCode window shows up in the launcher within 5 s without user action. Rows update in place — no scroll or selection loss. Auto-refresh pauses while the launcher window is minimized.
+The running-state column auto-refreshes in the background every 5 seconds, so opening or closing a VSCode window shows up in the launcher within 5 s without user action. Rows update in place: no scroll or selection loss. Auto-refresh continues to run while the main window is hidden so the popup always reads fresh state.
+
+A launch via the popup or the Start button schedules two extra scans at 2.5 s and 5 s after spawn so the new VSCode window's IPC socket is picked up as soon as it binds.
 
 Click **Refresh** when you want the full pass: re-read VSCode's state DB (to pick up newly-added workspaces) AND re-sort the list so running rows move back to the top.
 
 ### Running workspaces
 
-The **Status** column shows `● running` (green) when the workspace is already open in a VSCode window. Running workspaces sort ahead of the rest, and within each group (running / not running) MRU order from VSCode's Recent list is preserved.
+The **Status** column shows `● running` (green) when the workspace is already open in a VSCode window. Running workspaces sort ahead of the rest, and within the running group the most recently activated workspace bubbles to the top. Activation is tracked per-path on every popup commit, every Activate button click, and every launch.
 
 Running rows have their checkbox disabled — you can't accidentally bulk-re-launch something that's already open. Use the **Activate** button to bring the existing window to the front, or **Stop** to close it. If you genuinely want to open a duplicate window, right-click the row and choose **Launch**.
 
@@ -173,12 +198,16 @@ Stored at `~/.config/vscode-launcher/workspaces.json`:
   "hidden_paths": [
     "/home/user/git/some-old-project"
   ],
-  "window_geometry": {"x": 100, "y": 100, "w": 700, "h": 500}
+  "window_geometry": {"x": 100, "y": 100, "w": 700, "h": 500},
+  "global_hotkey": "Shift+Tab",
+  "popup_commit_delay_ms": 600
 }
 ```
 
 - `tmux_mappings` — path → tmux session name (empty / missing = no mapping)
 - `hidden_paths` — paths to filter out of the launcher view (VSCode's own Recent list is never modified)
+- `global_hotkey` — `QKeySequence`-parseable combo for the global popup. Applied at daemon start; live-rebindable via the Settings dialog.
+- `popup_commit_delay_ms` — tap-to-cycle commit timeout, range 100–5000 ms. Applied live by the Settings dialog.
 - Unknown top-level keys are preserved on save for forward compatibility
 
 The file is human-readable and safe to edit manually.
@@ -200,6 +229,17 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`). You are prompted before the config directory is deleted.
 
 ## Changelog
+
+### v3.0
+
+- New: **tray-resident daemon with global quick-launcher popup**. A configurable hotkey (default `Shift+Tab`) surfaces an Alt-Tab-style popup centered on the active screen, showing all workspaces with running ones first.
+- New: **tap-to-cycle popup**. Each tap of the hotkey advances the selection; pausing for the configured commit delay activates the current entry. Designed for Wayland sessions where global-hotkey-triggered windows can't grab keyboard focus, so arrow-key cycling isn't viable.
+- New: **single-instance enforcement** via D-Bus (`org.kde.vscode_launcher`). A second `vscode-launcher` invocation signals the existing daemon to surface its main window instead of starting a duplicate. KGlobalAccel registration provides a second layer of protection on the hotkey itself.
+- New: **autostart entry** at `~/.config/autostart/vscode-launcher.desktop` (`Exec=vscode-launcher --tray`). The daemon starts hidden on login.
+- New: **Settings dialog** (toolbar button) for the popup hotkey and commit delay. Both apply live without a daemon restart.
+- New: **activation MRU** within the running group. Activated workspaces bubble to the top; un-touched workspaces keep their VSCode-recents order.
+- Changed: tray-resident is the only mode now. Closing the main window with the X button hides it to the tray; the tray icon's right-click menu has an explicit Quit action. The 5 s auto-refresh continues while the main window is hidden so the popup always reads current state.
+- Internal: built on the KGlobalAccel D-Bus surface validated by a research spike (`research/global_shortcut_findings.md`). Productionized into [global_shortcut.py](global_shortcut.py); popup widget in [popup.py](popup.py); D-Bus singleton in [single_instance.py](single_instance.py).
 
 ### v2.0
 

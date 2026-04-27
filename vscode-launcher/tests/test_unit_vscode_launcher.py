@@ -251,6 +251,38 @@ class TestConfigManager:
         reloaded = json.loads(path.read_text(encoding="utf-8"))
         assert reloaded["future_feature"] == {"enabled": True}
 
+    def test_global_hotkey_default_when_missing(self, tmp_path):
+        """Existing v2 configs predate the global_hotkey field; load must
+        backfill the default rather than KeyError."""
+        from vscode_launcher import DEFAULT_HOTKEY
+
+        path = tmp_path / "workspaces.json"
+        payload = {
+            "version": 2,
+            "tmux_mappings": {},
+            "hidden_paths": [],
+            "window_geometry": {"x": 0, "y": 0, "w": 100, "h": 100},
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        cm = ConfigManager(path)
+        data = cm.load()
+        assert data["global_hotkey"] == DEFAULT_HOTKEY
+
+    def test_global_hotkey_round_trip(self, tmp_path):
+        path = tmp_path / "workspaces.json"
+        cm = ConfigManager(path)
+        cm.load()
+        cm.save(
+            tmux_mappings={},
+            hidden_paths=[],
+            window_geometry={"x": 0, "y": 0, "w": 100, "h": 100},
+            global_hotkey="Ctrl+Shift+F1",
+        )
+
+        cm2 = ConfigManager(path)
+        data = cm2.load()
+        assert data["global_hotkey"] == "Ctrl+Shift+F1"
+
     def test_v1_migration(self, tmp_path):
         """v1 config with workspaces list must migrate path -> tmux_session pairs into tmux_mappings."""
         path = tmp_path / "workspaces.json"
@@ -1065,10 +1097,11 @@ class TestMainWindowSmoke:
             window._trigger_background_scan()
         assert window.workspaces[0].is_running is True
 
-    def test_trigger_background_scan_skips_when_hidden(
+    def test_trigger_background_scan_runs_while_hidden(
         self, qapp, tmp_path, fake_vscode_db
     ):
-        """Don't burn CPU polling while the launcher is minimized."""
+        """Tray-resident: scans MUST run while the main window is hidden,
+        so the popup gets fresh running-state data."""
         from vscode_launcher import MainWindow
 
         db_path, build = fake_vscode_db
@@ -1078,8 +1111,11 @@ class TestMainWindowSmoke:
             def __init__(self):
                 self.calls = 0
 
-            def list_vscode_captions(self):
+            def list_vscode_entries(self):
                 self.calls += 1
+                return []
+
+            def list_vscode_captions(self):
                 return []
 
         scanner = CountingScanner()
@@ -1089,10 +1125,11 @@ class TestMainWindowSmoke:
             VSCodeRecentsReader(db_path=db_path),
             window_scanner=scanner,
         )
+        # Constructor's _build_workspace_list will have called the scanner
+        # already; record that baseline before re-triggering.
         initial = scanner.calls
-        # Window was never show()n, so isVisible() is False. Trigger should skip.
         window._trigger_background_scan()
-        assert scanner.calls == initial
+        assert scanner.calls == initial + 1
 
     def test_scanner_none_result_does_not_break_list(
         self, qapp, tmp_path, fake_vscode_db
