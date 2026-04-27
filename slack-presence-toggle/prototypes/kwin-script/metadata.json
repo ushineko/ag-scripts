@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Id": "slack-focus-monitor",
+        "Name": "Slack Focus Monitor (prototype)",
+        "Description": "Emit a D-Bus call on every window activation. Used by the slack-presence-toggle focus-detection prototype.",
+        "Version": "0.1",
+        "License": "MIT",
+        "EnabledByDefault": true,
+        "Authors": [
+            {
+                "Name": "ag-scripts prototype",
+                "Email": ""
+            }
+        ]
+    }
+}

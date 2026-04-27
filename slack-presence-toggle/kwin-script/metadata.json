@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Id": "slack-focus-monitor",
+        "Name": "Slack Focus Monitor",
+        "Description": "Forwards window-activation events to the slack-presence-toggle tray app over D-Bus.",
+        "Version": "0.1",
+        "License": "MIT",
+        "EnabledByDefault": true,
+        "Authors": [
+            {
+                "Name": "ushineko",
+                "Email": ""
+            }
+        ]
+    }
+}

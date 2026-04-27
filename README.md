@@ -36,6 +36,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [plasmashell-restart](plasmashell-restart/) | Restarts or refreshes the KDE Plasma 6 shell via systemd or D-Bus. |
 | [qbittorrent-vpn-wrapper](qbittorrent-vpn-wrapper/) | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and status dashboard. |
 | [set-rgb](set-rgb/) | Controls RGB lighting on hardware devices via OpenRGB, liquidctl, and ckb-next. |
+| [slack-presence-toggle](slack-presence-toggle/) | Tray utility that auto-toggles Slack presence and custom status based on Slack window focus on KDE Plasma 6 / Wayland. Forces away after a configurable grace period when focus leaves Slack; restores active when focus returns. |
 | [ssh-agent-setup](ssh-agent-setup/) | Automatic SSH key loading on Plasma desktop login using KWallet for secure passphrase storage. |
 | [the-great-cachyos-move](the-great-cachyos-move/) | Migration toolkit for moving CachyOS (Btrfs) installations between drives using `btrfs send/receive`. |
 | [ufw-config](ufw-config/) | UFW/iptables configuration documentation and backups for a gateway/router setup with Pi-hole and VPN forwarding. |
