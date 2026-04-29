@@ -427,13 +427,14 @@ class Application(QObject):
         bus = QDBusConnection.sessionBus()
         if not bus.isConnected():
             return
+        # PyQt6 only supports passing the slot as a callable here, not the
+        # Qt-style (receiver, slot_name_string) overload.
         ok = bus.connect(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
             "org.freedesktop.DBus",
             "NameOwnerChanged",
-            self,
-            "_on_dbus_name_owner_changed",
+            self._on_dbus_name_owner_changed,
         )
         if not ok:
             log.warning(
