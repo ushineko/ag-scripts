@@ -40,6 +40,7 @@ Solves four recurring pain points:
 - Python 3 with PyQt6
 - VSCode (reads `~/.config/Code/User/globalStorage/state.vscdb`)
 - `code` (VSCode CLI) on `PATH`
+- `qdbus6` (optional — only needed for the per-row Stop / Activate buttons, which use KWin scripting)
 - `tmux` (optional — only needed for session switching)
 - `vscode-gather` (optional — only needed for auto-placement / maximize)
 - zsh (the shell hook targets zsh; bash support could be added later)
@@ -53,9 +54,11 @@ Solves four recurring pain points:
 This:
 
 1. Symlinks `vscode_launcher.py` to `~/.local/bin/vscode-launcher`
-2. Installs a `.desktop` entry in `~/.local/share/applications/` so it shows up in KRunner and the app menu
-3. Installs an XDG autostart entry at `~/.config/autostart/vscode-launcher.desktop` with `Exec=vscode-launcher --tray`. The tray daemon will start automatically on next login.
-4. Appends the tmux shell hook into `~/.zshrc` (idempotent, bounded by markers)
+2. Symlinks `tmux_lookup.py` to `~/.local/bin/vscl-tmux-lookup` (used by the zsh hook)
+3. Installs the SVG icon to `~/.local/share/icons/hicolor/scalable/apps/vscode-launcher.svg` and refreshes the GTK / KDE icon caches
+4. Installs a `.desktop` entry in `~/.local/share/applications/` so it shows up in KRunner and the app menu
+5. Installs an XDG autostart entry at `~/.config/autostart/vscode-launcher.desktop` with `Exec=vscode-launcher --tray`. The tray daemon will start automatically on next login.
+6. Appends the tmux shell hook into `~/.zshrc` (idempotent, bounded by markers)
 
 Open a new zsh session (or `exec zsh`) for the hook to take effect. To start the tray daemon now without logging out: `vscode-launcher --tray &`.
 
@@ -130,7 +133,7 @@ The **Status** column shows `● running` (green) when the workspace is already 
 
 Running rows have their checkbox disabled — you can't accidentally bulk-re-launch something that's already open. Use the **Activate** button to bring the existing window to the front, or **Stop** to close it. If you genuinely want to open a duplicate window, right-click the row and choose **Launch**.
 
-Detection uses KWin scripting via D-Bus — the same mechanism the sibling `vscode-gather` tool uses — and silently degrades (no badges, no button filtering) if `qdbus6` or `journalctl` aren't available.
+Detection speaks VSCode's internal IPC protocol directly over its Unix domain socket (`$XDG_RUNTIME_DIR/Code <pid>-<token>-main.sock`) — no KWin scripting, no `qdbus6`, no `journalctl` involved in the read path. The Stop and Activate per-row buttons still use KWin scripting and require `qdbus6`. Detection silently degrades (no badges, no button filtering) when no VSCode socket is found.
 
 ### Per-row actions
 
@@ -170,7 +173,7 @@ After all workspaces have been spawned, the launcher waits 1.5 s (so windows reg
 
 ### Tmux switching
 
-The zsh hook installed into `~/.zshrc` runs on every shell startup. When it detects it's inside a VSCode integrated terminal (`TERM_PROGRAM=vscode`), it calls a small Python helper `vscl-tmux-lookup "$PWD"` that:
+The zsh hook installed into `~/.zshrc` runs on every shell startup. When it detects it's inside a VSCode integrated terminal — checking `VSCODE_INJECTION`, `VSCODE_PID`, or `TERM_PROGRAM=vscode`, since tmux rewrites `TERM_PROGRAM` to `tmux` for nested invocations — it calls a small Python helper `vscl-tmux-lookup "$PWD"` that:
 
 1. Walks up from `$PWD` looking for the longest ancestor path present in `tmux_mappings`
 2. If nothing matches directly, scans any `.code-workspace` file keyed in `tmux_mappings`, resolves its `folders[]` array (absolute + relative paths), and checks whether `$PWD` is inside one of those folders
@@ -227,7 +230,15 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 ./uninstall.sh
 ```
 
-Removes the symlink, the `.desktop` entry, and the zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`). You are prompted before the config directory is deleted.
+Removes:
+
+- Both `~/.local/bin` symlinks (`vscode-launcher` and `vscl-tmux-lookup`)
+- The `.desktop` entry in `~/.local/share/applications/`
+- The XDG autostart entry in `~/.config/autostart/`
+- The SVG icon in `~/.local/share/icons/hicolor/scalable/apps/`
+- The zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`)
+
+The KDE / GTK icon caches are refreshed afterwards. You are prompted before the config directory at `~/.config/vscode-launcher/` is deleted.
 
 ## Changelog
 
