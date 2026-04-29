@@ -33,6 +33,7 @@ class TrayApp(QObject):
 
     enable_toggle_requested = pyqtSignal(bool)
     reload_token_requested = pyqtSignal()
+    reload_kwin_script_requested = pyqtSignal()
     config_change_requested = pyqtSignal(str, object)
     quit_requested = pyqtSignal()
 
@@ -125,6 +126,10 @@ class TrayApp(QObject):
         self._action_reload_token.triggered.connect(self.reload_token_requested.emit)
         self._action_reload_token.setVisible(False)  # only show on auth failure
         self._menu.addAction(self._action_reload_token)
+
+        self._action_reload_kwin = QAction("Reload KWin script")
+        self._action_reload_kwin.triggered.connect(self.reload_kwin_script_requested.emit)
+        self._menu.addAction(self._action_reload_kwin)
 
         self._menu.addSeparator()
 

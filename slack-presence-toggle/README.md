@@ -175,14 +175,23 @@ state. The notification on startup explains the specific issue.
 or fixing scope issues.
 
 **Tray icon stays green when Slack loses focus.** The KWin script may not
-be loaded. Verify with:
+be loaded. KDE sometimes drops loaded scripts after Plasma restarts /
+log-out cycles, even when the `kwinrc` Plugins entry is intact. The app
+auto-heals every 5 minutes (loads the script if files are on disk and
+KWin reports `isScriptLoaded=false`), and emits a confirmation
+notification when recovery succeeds. To force recovery immediately:
+
+- Right-click the tray icon → **Reload KWin script**
+
+If that does nothing, the script files are missing on disk:
 
 ```bash
 qdbus6 org.kde.KWin /Scripting isScriptLoaded slack-focus-monitor
 journalctl --user -f | grep slack-focus-monitor
 ```
 
-If `isScriptLoaded` returns `false`, run `kwin-script/install.sh` again.
+If `isScriptLoaded` returns `false` and the menu action does not recover
+it, run `kwin-script/install.sh` again.
 
 **Slack window class is not "Slack" on my system.** Some Slack distributions
 (Flatpak, Snap, dev builds) use different `WM_CLASS` values. Inspect the

@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 
 
 KWIN_SCRIPT_NAME = "slack-focus-monitor"
+KWIN_SCRIPT_PATH = (
+    Path.home() / ".local/share/kwin/scripts" / KWIN_SCRIPT_NAME / "contents/code/main.js"
+)
+KWIN_HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000  # 5 minutes
 
 
 class Application(QObject):
@@ -44,6 +48,7 @@ class Application(QObject):
         self._tray = TrayApp(config=self._config, parent=self)
         self._tray.enable_toggle_requested.connect(self._on_enable_toggle)
         self._tray.reload_token_requested.connect(self._on_reload_token)
+        self._tray.reload_kwin_script_requested.connect(self._on_reload_kwin_script)
         self._tray.config_change_requested.connect(self._on_config_change)
         self._tray.quit_requested.connect(self._on_quit)
         self._tray.set_pre_show_refresh(self._refresh_status)
@@ -72,6 +77,13 @@ class Application(QObject):
         # current focus to us. Best-effort; safe to fail (script may not be
         # installed yet).
         QTimer.singleShot(500, self._reload_kwin_script_for_initial_focus)
+
+        # Periodic auto-heal: if KWin restarts (Plasma update / crash / log
+        # out and back in) it sometimes drops loaded scripts even when the
+        # kwinrc Plugins entry is intact. The check + reload is cheap.
+        self._kwin_health_timer = QTimer(self)
+        self._kwin_health_timer.timeout.connect(self._kwin_health_tick)
+        self._kwin_health_timer.start(KWIN_HEALTH_CHECK_INTERVAL_MS)
 
         return self._qapp.exec()
 
@@ -108,6 +120,21 @@ class Application(QObject):
     def _on_internal_transition(self, result, prev_snapshot, label: str) -> None:
         """Hook for FSM-internal transitions (currently only grace-expiry)."""
         self._after_transition(result, prev_snapshot=prev_snapshot, label=label)
+
+    def _on_reload_kwin_script(self) -> None:
+        """Tray-menu-triggered KWin script reload (manual recovery)."""
+        log.info("user-requested KWin script reload")
+        self._reload_kwin_script_for_initial_focus()
+        # Confirm to the user that something happened, since the action
+        # otherwise has no visible feedback.
+        if self._is_kwin_script_loaded():
+            notify(
+                "Slack Presence Toggle",
+                "KWin focus monitor reloaded.",
+                urgency=Urgency.LOW,
+                icon="dialog-ok",
+                tray=self._tray.system_tray,
+            )
 
     def _on_enable_toggle(self, enabled: bool) -> None:
         if self._fsm is None:
@@ -289,33 +316,92 @@ class Application(QObject):
         except Exception as e:
             log.warning("could not save config: %s", e)
 
-    def _reload_kwin_script_for_initial_focus(self) -> None:
-        """Force KWin to re-fire windowActivated for the current focus."""
+    # ----------------------------------------------------- KWin script ops
+    def _kwin_scripting_iface(self) -> QDBusInterface | None:
         bus = QDBusConnection.sessionBus()
         if not bus.isConnected():
-            return
+            return None
         iface = QDBusInterface("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", bus)
-        if not iface.isValid():
+        return iface if iface.isValid() else None
+
+    def _is_kwin_script_loaded(self, iface: QDBusInterface | None = None) -> bool:
+        iface = iface or self._kwin_scripting_iface()
+        if iface is None:
+            return False
+        reply = iface.call("isScriptLoaded", KWIN_SCRIPT_NAME)
+        args = reply.arguments() if reply is not None else None
+        return bool(args[0]) if args else False
+
+    def _load_kwin_script(self, iface: QDBusInterface) -> None:
+        iface.call("loadScript", str(KWIN_SCRIPT_PATH), KWIN_SCRIPT_NAME)
+        iface.call("start")
+
+    def _ensure_kwin_script_loaded(self, *, notify_on_recovery: bool = True) -> bool:
+        """Load the KWin script if it's currently unloaded.
+
+        Returns True if the script is loaded after this call, False if it
+        could not be loaded (D-Bus down, files missing, etc).
+        """
+        iface = self._kwin_scripting_iface()
+        if iface is None:
+            return False
+        if self._is_kwin_script_loaded(iface):
+            return True
+        if not KWIN_SCRIPT_PATH.exists():
+            log.warning(
+                "KWin script files missing at %s; run kwin-script/install.sh",
+                KWIN_SCRIPT_PATH,
+            )
+            return False
+        log.info("KWin script not loaded; auto-loading from %s", KWIN_SCRIPT_PATH)
+        self._load_kwin_script(iface)
+        if notify_on_recovery:
+            notify(
+                "Slack Presence Toggle",
+                "Reconnected to KWin focus monitor.",
+                urgency=Urgency.LOW,
+                icon="dialog-ok",
+                tray=self._tray.system_tray,
+            )
+        return True
+
+    def _reload_kwin_script_for_initial_focus(self) -> None:
+        """Force KWin to re-fire windowActivated for the current focus.
+
+        Auto-loads the script if it's not currently loaded (handles the case
+        where KWin restarted between sessions and didn't pick the script
+        back up despite the kwinrc Plugins entry).
+        """
+        iface = self._kwin_scripting_iface()
+        if iface is None:
             log.debug("KWin Scripting interface unavailable; skipping reload")
             return
-        check = iface.call("isScriptLoaded", KWIN_SCRIPT_NAME)
-        loaded = bool(check.arguments()[0]) if check.arguments() else False
-        if not loaded:
+        if not KWIN_SCRIPT_PATH.exists():
             log.warning(
-                "KWin script %r is not loaded; install it via "
-                "kwin-script/install.sh in the project root.",
-                KWIN_SCRIPT_NAME,
+                "KWin script files missing at %s; run kwin-script/install.sh",
+                KWIN_SCRIPT_PATH,
+            )
+            notify(
+                "Slack Presence Toggle — KWin script missing",
+                f"Files not found at {KWIN_SCRIPT_PATH}. "
+                "Run kwin-script/install.sh from the project root.",
+                urgency=Urgency.CRITICAL,
+                icon="dialog-error",
+                tray=self._tray.system_tray,
             )
             return
-        # Unload + reload triggers re-execution of the script body, which
-        # immediately emits a windowActivated event for the current focus.
-        iface.call("unloadScript", KWIN_SCRIPT_NAME)
-        script_path = str(
-            Path.home() / ".local/share/kwin/scripts" / KWIN_SCRIPT_NAME
-            / "contents/code/main.js"
-        )
-        iface.call("loadScript", script_path, KWIN_SCRIPT_NAME)
-        iface.call("start")
+        # Unload (if loaded) + load forces re-execution of the script body,
+        # which immediately emits a windowActivated event for the current
+        # focus.
+        if self._is_kwin_script_loaded(iface):
+            iface.call("unloadScript", KWIN_SCRIPT_NAME)
+        self._load_kwin_script(iface)
+
+    def _kwin_health_tick(self) -> None:
+        """Periodic timer callback. Auto-recovers if the script unloaded."""
+        if self._fsm is None or not self._fsm.snapshot.enabled:
+            return
+        self._ensure_kwin_script_loaded(notify_on_recovery=True)
 
 
 def main() -> int:
