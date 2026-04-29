@@ -114,10 +114,10 @@ The app lives in the system tray. The icon's color reflects state:
 
 | Color | Meaning |
 | --- | --- |
-| Green | Enabled, API healthy, Slack active |
-| Yellow | Enabled, API healthy, Slack away |
+| Green | Enabled, API healthy, KWin focus monitor connected, Slack active |
+| Yellow | Enabled, API healthy, KWin focus monitor connected, Slack away |
 | Gray | Disabled (or no data yet) |
-| Red | API auth failure (token missing/revoked/missing-scope) |
+| Red | API auth failure (token missing/revoked/missing-scope), or KWin focus monitor not loaded |
 | Yellow + warning glyph | Enabled, transient API failure (network, rate limit, 5xx) |
 
 Right-click for the menu:
@@ -174,24 +174,28 @@ state. The notification on startup explains the specific issue.
 **Reload token from file** after either regenerating the token in Slack
 or fixing scope issues.
 
-**Tray icon stays green when Slack loses focus.** The KWin script may not
-be loaded. KDE sometimes drops loaded scripts after Plasma restarts /
-log-out cycles, even when the `kwinrc` Plugins entry is intact. The app
-auto-heals every 5 minutes (loads the script if files are on disk and
-KWin reports `isScriptLoaded=false`), and emits a confirmation
-notification when recovery succeeds. To force recovery immediately:
+**Tray icon turns red and shows "Focus monitor: NOT CONNECTED".** The
+KWin script is not loaded. KDE sometimes drops loaded scripts after
+Plasma restarts / log-out cycles, even when the `kwinrc` Plugins entry
+is intact. The app handles this in three layers:
 
-- Right-click the tray icon → **Reload KWin script**
+1. **Proactive**: subscribes to the session bus's `NameOwnerChanged` for
+   `org.kde.KWin`, so it auto-reloads the script the moment KWin
+   reappears after a restart (no waiting).
+2. **Periodic**: every 5 minutes, polls `isScriptLoaded` and reloads if
+   needed. Safety net for cases the proactive subscriber misses.
+3. **Manual**: right-click the tray icon → **Reload KWin script**.
 
-If that does nothing, the script files are missing on disk:
+A successful recovery emits a low-urgency notification. If the script
+files are missing entirely, you'll get a critical notification telling
+you to run `kwin-script/install.sh`.
+
+For deeper debugging:
 
 ```bash
 qdbus6 org.kde.KWin /Scripting isScriptLoaded slack-focus-monitor
 journalctl --user -f | grep slack-focus-monitor
 ```
-
-If `isScriptLoaded` returns `false` and the menu action does not recover
-it, run `kwin-script/install.sh` again.
 
 **Slack window class is not "Slack" on my system.** Some Slack distributions
 (Flatpak, Snap, dev builds) use different `WM_CLASS` values. Inspect the

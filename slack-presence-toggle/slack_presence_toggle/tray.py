@@ -54,6 +54,10 @@ class TrayApp(QObject):
         self._profile: ProfileStatus | None = None
         self._health: ApiHealth = ApiHealth.success()
         self._user_label: str | None = None
+        # None until the orchestrator reports KWin script state for the first
+        # time. Render as "unknown" rather than green-by-default so a
+        # mid-refactor regression is at least visible.
+        self._kwin_loaded: bool | None = None
 
         self._refresh_about_to_show: callable | None = None
 
@@ -92,6 +96,11 @@ class TrayApp(QObject):
         self._refresh_menu_text()
         self._refresh_icon_and_tooltip()
 
+    def update_kwin_state(self, loaded: bool) -> None:
+        self._kwin_loaded = loaded
+        self._refresh_menu_text()
+        self._refresh_icon_and_tooltip()
+
     def update_user(self, user: str, team: str) -> None:
         self._user_label = f"{user} @ {team}"
         self._refresh_menu_text()
@@ -110,6 +119,10 @@ class TrayApp(QObject):
         self._action_health = QAction("API: connected")
         self._action_health.setEnabled(False)
         self._menu.addAction(self._action_health)
+
+        self._action_focus_monitor = QAction("Focus monitor: ?")
+        self._action_focus_monitor.setEnabled(False)
+        self._menu.addAction(self._action_focus_monitor)
 
         self._action_user = QAction("")
         self._action_user.setEnabled(False)
@@ -174,6 +187,9 @@ class TrayApp(QObject):
         # Health header
         self._action_health.setText(f"API: {self._health_string()}")
 
+        # Focus monitor header
+        self._action_focus_monitor.setText(f"Focus monitor: {self._focus_monitor_string()}")
+
         # User label (only show once we know it)
         if self._user_label:
             self._action_user.setVisible(True)
@@ -227,6 +243,11 @@ class TrayApp(QObject):
             return "Slack server error"
         return e
 
+    def _focus_monitor_string(self) -> str:
+        if self._kwin_loaded is None:
+            return "checking..."
+        return "connected" if self._kwin_loaded else "NOT CONNECTED"
+
     # ----------------------------------------------------------- icon render
     def _refresh_icon_and_tooltip(self) -> None:
         color = self._icon_color()
@@ -234,7 +255,12 @@ class TrayApp(QObject):
             "invalid_auth", "token_revoked", "account_inactive", "missing_scope"
         )
         self._tray.setIcon(_make_icon(color, warning_overlay=warning))
-        self._tray.setToolTip(f"Slack Presence Toggle\n{self._action_status.text()}\n{self._action_health.text()}")
+        self._tray.setToolTip(
+            "Slack Presence Toggle\n"
+            f"{self._action_status.text()}\n"
+            f"{self._action_health.text()}\n"
+            f"{self._action_focus_monitor.text()}"
+        )
 
     def _icon_color(self) -> QColor:
         if self._snapshot is None:
@@ -242,6 +268,10 @@ class TrayApp(QObject):
         if not self._snapshot.enabled:
             return COLOR_GRAY
         if self._health.error in ("invalid_auth", "token_revoked", "account_inactive", "missing_scope"):
+            return COLOR_RED
+        # KWin script unloaded means focus events stop flowing; the app
+        # cannot do its job. Equivalent severity to an auth failure.
+        if self._kwin_loaded is False:
             return COLOR_RED
         if self._presence is None:
             return COLOR_GRAY

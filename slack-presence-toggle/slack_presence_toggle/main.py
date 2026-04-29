@@ -9,7 +9,7 @@ import signal
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtCore import QObject, QTimer, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusInterface
 from PyQt6.QtWidgets import QApplication
 
@@ -84,6 +84,12 @@ class Application(QObject):
         self._kwin_health_timer = QTimer(self)
         self._kwin_health_timer.timeout.connect(self._kwin_health_tick)
         self._kwin_health_timer.start(KWIN_HEALTH_CHECK_INTERVAL_MS)
+
+        # Proactive auto-heal: subscribe to the session bus's
+        # NameOwnerChanged signal so we hear about KWin restarts the moment
+        # they happen, instead of waiting up to 5 minutes for the periodic
+        # check above.
+        self._wire_kwin_owner_watcher()
 
         return self._qapp.exec()
 
@@ -344,17 +350,21 @@ class Application(QObject):
         """
         iface = self._kwin_scripting_iface()
         if iface is None:
+            self._tray.update_kwin_state(False)
             return False
         if self._is_kwin_script_loaded(iface):
+            self._tray.update_kwin_state(True)
             return True
         if not KWIN_SCRIPT_PATH.exists():
             log.warning(
                 "KWin script files missing at %s; run kwin-script/install.sh",
                 KWIN_SCRIPT_PATH,
             )
+            self._tray.update_kwin_state(False)
             return False
         log.info("KWin script not loaded; auto-loading from %s", KWIN_SCRIPT_PATH)
         self._load_kwin_script(iface)
+        self._tray.update_kwin_state(True)
         if notify_on_recovery:
             notify(
                 "Slack Presence Toggle",
@@ -375,12 +385,14 @@ class Application(QObject):
         iface = self._kwin_scripting_iface()
         if iface is None:
             log.debug("KWin Scripting interface unavailable; skipping reload")
+            self._tray.update_kwin_state(False)
             return
         if not KWIN_SCRIPT_PATH.exists():
             log.warning(
                 "KWin script files missing at %s; run kwin-script/install.sh",
                 KWIN_SCRIPT_PATH,
             )
+            self._tray.update_kwin_state(False)
             notify(
                 "Slack Presence Toggle — KWin script missing",
                 f"Files not found at {KWIN_SCRIPT_PATH}. "
@@ -396,12 +408,65 @@ class Application(QObject):
         if self._is_kwin_script_loaded(iface):
             iface.call("unloadScript", KWIN_SCRIPT_NAME)
         self._load_kwin_script(iface)
+        self._tray.update_kwin_state(True)
 
     def _kwin_health_tick(self) -> None:
         """Periodic timer callback. Auto-recovers if the script unloaded."""
         if self._fsm is None or not self._fsm.snapshot.enabled:
             return
         self._ensure_kwin_script_loaded(notify_on_recovery=True)
+
+    def _wire_kwin_owner_watcher(self) -> None:
+        """Subscribe to NameOwnerChanged to detect KWin restarts immediately.
+
+        QDBusConnection.connect doesn't filter by signal arguments, so we
+        receive all NameOwnerChanged events on the bus and filter for
+        org.kde.KWin in the slot. The volume on a desktop session is low
+        enough that this is fine.
+        """
+        bus = QDBusConnection.sessionBus()
+        if not bus.isConnected():
+            return
+        ok = bus.connect(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+            self,
+            "_on_dbus_name_owner_changed",
+        )
+        if not ok:
+            log.warning(
+                "could not subscribe to NameOwnerChanged; "
+                "falling back to periodic-only auto-heal"
+            )
+
+    @pyqtSlot(str, str, str)
+    def _on_dbus_name_owner_changed(
+        self, name: str, old_owner: str, new_owner: str
+    ) -> None:
+        if name != "org.kde.KWin":
+            return
+        if old_owner and not new_owner:
+            log.info("KWin disconnected from session bus")
+            self._tray.update_kwin_state(False)
+        elif not old_owner and new_owner:
+            log.info("KWin reconnected; will reload focus script in 1s")
+            # Brief delay so KWin's Scripting interface is actually ready.
+            QTimer.singleShot(1000, self._on_kwin_reconnected)
+
+    def _on_kwin_reconnected(self) -> None:
+        if self._fsm is None or not self._fsm.snapshot.enabled:
+            return
+        self._reload_kwin_script_for_initial_focus()
+        if self._is_kwin_script_loaded():
+            notify(
+                "Slack Presence Toggle",
+                "Reconnected after KWin restart.",
+                urgency=Urgency.LOW,
+                icon="dialog-ok",
+                tray=self._tray.system_tray,
+            )
 
 
 def main() -> int:
