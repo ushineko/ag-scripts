@@ -24,7 +24,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.5.5"
+__version__ = "1.5.6"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -93,6 +93,27 @@ def get_time_until_reset(resets_at: str) -> str:
     if hours > 0:
         return f"Resets in {hours}h {minutes}m"
     return f"Resets in {minutes}m"
+
+
+def get_days_until_reset(resets_at: str) -> str:
+    """Days remaining until reset, ceil-rounded. Empty string if unknown or in the past."""
+    if not resets_at:
+        return ""
+    try:
+        reset_time = datetime.fromisoformat(resets_at)
+    except (ValueError, TypeError):
+        return ""
+
+    total = (reset_time - datetime.now(timezone.utc)).total_seconds()
+    if total <= 0:
+        return ""
+    if total < 86400:
+        return "<1d left"
+
+    days = int(total // 86400)
+    if total % 86400:
+        days += 1
+    return f"{days}d left"
 
 
 def _read_credentials() -> dict | None:
@@ -1034,7 +1055,11 @@ class PeripheralMonitor(QWidget):
 
         self.claude_five_hour_lbl.setText(f"5h: {five_pct:.0f}%")
 
-        right_parts = [f"7d: {seven_pct:.0f}%"]
+        seven_label = f"7d: {seven_pct:.0f}%"
+        days_left = get_days_until_reset(seven_day.get("resets_at", ""))
+        if days_left:
+            seven_label = f"{seven_label} ({days_left})"
+        right_parts = [seven_label]
         for key in ("seven_day_opus", "seven_day_sonnet"):
             bucket = usage_data.get(key)
             if bucket and bucket.get("utilization", 0) > 0:

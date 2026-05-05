@@ -332,6 +332,27 @@ class TestClaudeUsage(unittest.TestCase):
         self.assertEqual(pb.get_time_until_reset("not-a-date"), "Unknown")
         self.assertEqual(pb.get_time_until_reset(None), "Unknown")
 
+    def test_get_days_until_reset_multi_day(self):
+        """Behavioral contract: multi-day futures round up partial days."""
+        from datetime import datetime, timezone, timedelta
+        future = datetime.now(timezone.utc) + timedelta(days=4, hours=5)
+        self.assertEqual(pb.get_days_until_reset(future.isoformat()), "5d left")
+
+    def test_get_days_until_reset_sub_day(self):
+        """Behavioral contract: sub-day futures show '<1d left'."""
+        from datetime import datetime, timezone, timedelta
+        future = datetime.now(timezone.utc) + timedelta(hours=3)
+        self.assertEqual(pb.get_days_until_reset(future.isoformat()), "<1d left")
+
+    def test_get_days_until_reset_past_or_invalid(self):
+        """Behavioral contract: past/invalid/empty inputs return empty string."""
+        from datetime import datetime, timezone, timedelta
+        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        self.assertEqual(pb.get_days_until_reset(past.isoformat()), "")
+        self.assertEqual(pb.get_days_until_reset(""), "")
+        self.assertEqual(pb.get_days_until_reset("not-a-date"), "")
+        self.assertEqual(pb.get_days_until_reset(None), "")
+
     def test_fetch_claude_usage_success(self):
         """Behavioral contract: valid API response is returned as parsed dict."""
         from unittest.mock import patch, mock_open
@@ -453,16 +474,17 @@ class TestClaudeUsage(unittest.TestCase):
         monitor.claude_duration_lbl.setText = MagicMock()
 
         future = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        seven_future = (datetime.now(timezone.utc) + timedelta(days=4, hours=5)).isoformat()
         usage_data = {
             "five_hour": {"utilization": 70.0, "resets_at": future},
-            "seven_day": {"utilization": 25.0, "resets_at": "2026-02-21T00:00:00+00:00"},
+            "seven_day": {"utilization": 25.0, "resets_at": seven_future},
         }
 
         monitor.update_claude_section(usage_data)
 
         monitor.claude_progress.setValue.assert_called_with(70)
         monitor.claude_five_hour_lbl.setText.assert_called_with("5h: 70%")
-        monitor.claude_seven_day_lbl.setText.assert_called_with("7d: 25%")
+        monitor.claude_seven_day_lbl.setText.assert_called_with("7d: 25% (5d left)")
         duration_text = monitor.claude_duration_lbl.setText.call_args[0][0]
         self.assertIn("Resets in", duration_text)
 
