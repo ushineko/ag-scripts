@@ -38,7 +38,7 @@ Solves four recurring pain points:
 
 - KDE Plasma 6 (Wayland)
 - Python 3 with PyQt6
-- VSCode (reads `~/.config/Code/User/globalStorage/state.vscdb`)
+- VSCode (reads `~/.vscode-shared/sharedStorage/state.vscdb` on 1.119+, falling back to `~/.config/Code/User/globalStorage/state.vscdb` on older releases)
 - `code` (VSCode CLI) on `PATH`
 - `qdbus6` (optional — only needed for the per-row Stop / Activate buttons, which use KWin scripting)
 - `tmux` (optional — only needed for session switching)
@@ -149,11 +149,18 @@ Stop does not auto-refresh the list because an unsaved-changes prompt may stall 
 
 ### Workspace source
 
-The launcher opens `~/.config/Code/User/globalStorage/state.vscdb` in SQLite read-only mode (`mode=ro`, so it works even while VSCode is running) and queries:
+The launcher opens VSCode's `state.vscdb` in SQLite read-only mode (`mode=ro`, so it works even while VSCode is running) and queries:
 
 ```sql
 SELECT value FROM ItemTable WHERE key = 'history.recentlyOpenedPathsList';
 ```
+
+It probes two candidate locations in priority order:
+
+1. `~/.vscode-shared/sharedStorage/state.vscdb` — VSCode 1.119+ shared application storage (cross-profile)
+2. `~/.config/Code/User/globalStorage/state.vscdb` — per-profile globalStorage, where the recents key lived prior to 1.119
+
+The first candidate that opens cleanly and contains the key wins. Missing files, missing keys, and SQLite errors all fall through to the next candidate, so the launcher works on 1.119+ and older VSCode releases without configuration.
 
 The value is JSON — each entry is either `{"folderUri": "file://..."}` (a folder) or `{"workspace": {"configPath": "file://..."}}` (a `.code-workspace` file). Non-`file://` URIs (e.g., `vscode-vfs://github/...` remote workspaces) are skipped.
 
@@ -241,6 +248,10 @@ Removes:
 The KDE / GTK icon caches are refreshed afterwards. You are prompted before the config directory at `~/.config/vscode-launcher/` is deleted.
 
 ## Changelog
+
+### v3.2
+
+- Fix: VSCode 1.119 compatibility. The recently-opened workspaces key (`history.recentlyOpenedPathsList`) was migrated from per-profile `~/.config/Code/User/globalStorage/state.vscdb` to a new shared application database at `~/.vscode-shared/sharedStorage/state.vscdb`. The launcher now probes both locations in priority order (shared first, globalStorage fallback) so it works on 1.119+ and on older releases without configuration. Symptom on the broken release: empty session list after upgrading VSCode.
 
 ### v3.1
 

@@ -194,6 +194,74 @@ class TestVSCodeRecentsReader:
         reader = VSCodeRecentsReader(db_path=db_path)
         assert reader.read_recents() == []
 
+    def test_falls_back_when_first_candidate_lacks_key(self, tmp_path):
+        """VSCode 1.119 moved the recents key from per-profile globalStorage
+        to a shared application DB. The reader probes candidates in order
+        and uses the first one that holds the key — so a freshly-migrated
+        layout (shared has key, globalStorage retained but key removed)
+        and a pre-1.119 layout (only globalStorage has key) both work."""
+        first = tmp_path / "first.vscdb"
+        second = tmp_path / "second.vscdb"
+
+        # First DB exists but lacks the recents key (post-migration old DB).
+        conn = sqlite3.connect(first)
+        try:
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Second DB has the recents key.
+        conn = sqlite3.connect(second)
+        try:
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)")
+            conn.execute(
+                "INSERT INTO ItemTable VALUES (?, ?)",
+                (VSCODE_RECENTS_KEY, json.dumps({"entries": [{"folderUri": "file:///home/u/x"}]})),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        reader = VSCodeRecentsReader(db_paths=[first, second])
+        recents = reader.read_recents()
+        assert len(recents) == 1
+        assert recents[0].path == "/home/u/x"
+
+    def test_first_candidate_with_key_wins(self, tmp_path):
+        """When multiple candidates hold the recents key, the first one
+        in priority order is used (shared application storage takes
+        precedence over per-profile globalStorage on VSCode 1.119+)."""
+        first = tmp_path / "shared.vscdb"
+        second = tmp_path / "global.vscdb"
+        for path, payload in [
+            (first, [{"folderUri": "file:///home/u/from-shared"}]),
+            (second, [{"folderUri": "file:///home/u/from-global"}]),
+        ]:
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute(
+                    "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)"
+                )
+                conn.execute(
+                    "INSERT INTO ItemTable VALUES (?, ?)",
+                    (VSCODE_RECENTS_KEY, json.dumps({"entries": payload})),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        reader = VSCodeRecentsReader(db_paths=[first, second])
+        recents = reader.read_recents()
+        assert len(recents) == 1
+        assert recents[0].path == "/home/u/from-shared"
+
+    def test_all_candidates_missing_returns_empty(self, tmp_path):
+        reader = VSCodeRecentsReader(
+            db_paths=[tmp_path / "a.vscdb", tmp_path / "b.vscdb"]
+        )
+        assert reader.read_recents() == []
+
 
 # ---------------------------------------------------------------------------
 # Config

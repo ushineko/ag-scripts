@@ -9,7 +9,7 @@ Status matrix:
 
   | Helper                           | Linux | macOS | Windows |
   | -------------------------------- | ----- | ----- | ------- |
-  | `vscode_state_db_path()`         |  ✓    |  stub |  stub   |
+  | `vscode_state_db_paths()`        |  ✓    |  ✓    |  ✓      |
   | `vscode_ipc_socket_candidates()` |  ✓    |  stub |  stub   |
   | `process_start_time(pid)`        |  ✓    |  —    |  —      |
   | `launcher_config_dir()`          |  ✓    |  ✓    |  stub   |
@@ -37,16 +37,32 @@ IS_WINDOWS = sys.platform == "win32"
 
 
 # ---------------------------------------------------------------------------
-# VSCode globalStorage / state.vscdb
+# VSCode state.vscdb candidates
 # ---------------------------------------------------------------------------
+#
+# VSCode 1.119 split the state DB into two scopes:
+#
+#   - shared application storage at `~/.vscode-shared/sharedStorage/state.vscdb`
+#     (cross-profile, holds `history.recentlyOpenedPathsList` post-migration)
+#   - per-profile globalStorage at `<profile>/globalStorage/state.vscdb`
+#     (where the recents lived prior to 1.119; still the source of truth on
+#     older releases)
+#
+# We probe the shared path first. The reader falls back to the next candidate
+# when the recents key is absent, so a single helper covers both layouts and
+# the upgrade transition between them.
 
 
-def vscode_state_db_path() -> Path | None:
-    """Return VSCode's `state.vscdb` path for this platform, or None when
-    we don't know where to look. Callers should handle None by degrading
-    (the recents list becomes empty)."""
+def vscode_state_db_paths() -> list[Path]:
+    """Return VSCode `state.vscdb` candidates in priority order (shared
+    application storage first, per-profile globalStorage second). Empty
+    list when we don't know where to look."""
+    paths: list[Path] = []
     if IS_LINUX:
-        return (
+        paths.append(
+            Path.home() / ".vscode-shared" / "sharedStorage" / "state.vscdb"
+        )
+        paths.append(
             Path.home()
             / ".config"
             / "Code"
@@ -54,8 +70,12 @@ def vscode_state_db_path() -> Path | None:
             / "globalStorage"
             / "state.vscdb"
         )
+        return paths
     if IS_MACOS:
-        return (
+        paths.append(
+            Path.home() / ".vscode-shared" / "sharedStorage" / "state.vscdb"
+        )
+        paths.append(
             Path.home()
             / "Library"
             / "Application Support"
@@ -64,17 +84,24 @@ def vscode_state_db_path() -> Path | None:
             / "globalStorage"
             / "state.vscdb"
         )
+        return paths
     if IS_WINDOWS:
+        # `~/.vscode-shared` lives under USERPROFILE on Windows, same as the
+        # CLI server cache directory VSCode already uses there.
+        paths.append(
+            Path.home() / ".vscode-shared" / "sharedStorage" / "state.vscdb"
+        )
         appdata = os.environ.get("APPDATA")
         if appdata:
-            return (
+            paths.append(
                 Path(appdata)
                 / "Code"
                 / "User"
                 / "globalStorage"
                 / "state.vscdb"
             )
-    return None
+        return paths
+    return paths
 
 
 # ---------------------------------------------------------------------------

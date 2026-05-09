@@ -34,7 +34,7 @@ from global_shortcut import GlobalShortcut, parse_hotkey
 from platform_support import (
     launcher_config_dir,
     process_start_time,
-    vscode_state_db_path,
+    vscode_state_db_paths,
 )
 from popup import WorkspacePopup
 from single_instance import SingletonGuard
@@ -67,7 +67,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.1"
+__version__ = "3.2"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -110,7 +110,7 @@ def _dlog(msg: str) -> None:
     if _DEBUG:
         print(f"[vscl] {msg}", flush=True)
 
-VSCODE_DB_PATH = vscode_state_db_path()  # None on unknown platforms
+VSCODE_DB_PATHS = vscode_state_db_paths()  # [] on unknown platforms
 VSCODE_RECENTS_KEY = "history.recentlyOpenedPathsList"
 
 
@@ -186,18 +186,49 @@ def label_for_path(path: str, is_workspace_file: bool) -> str:
 class VSCodeRecentsReader:
     """Reads VSCode's recently-opened workspaces from its SQLite state DB.
 
-    The DB may be in use by a running VSCode process; we open it read-only
-    (uri=True, mode=ro) to avoid locking issues.
+    Probes a list of candidate DB paths in priority order — VSCode 1.119
+    moved the recents key from per-profile `globalStorage/state.vscdb` to
+    `~/.vscode-shared/sharedStorage/state.vscdb`, and the launcher needs
+    to handle both layouts (and the transition between them) without a
+    user-visible config change.
+
+    The first candidate that opens cleanly and contains the recents key
+    wins. Missing files, missing keys, and SQLite errors all just skip
+    to the next candidate. The DB may be in use by a running VSCode
+    process; we open read-only (`uri=True, mode=ro`) to avoid locking.
     """
 
-    def __init__(self, db_path: Path | None = VSCODE_DB_PATH) -> None:
-        self.db_path = db_path
+    def __init__(
+        self,
+        db_paths: list[Path] | None = None,
+        db_path: Path | None = None,
+    ) -> None:
+        if db_paths is not None:
+            self.db_paths = list(db_paths)
+        elif db_path is not None:
+            self.db_paths = [db_path]
+        else:
+            self.db_paths = list(VSCODE_DB_PATHS)
 
     def read_recents(self) -> list[Workspace]:
-        if self.db_path is None or not self.db_path.exists():
-            return []
+        for path in self.db_paths:
+            entries = self._read_entries(path)
+            if entries is not None:
+                return [
+                    w
+                    for w in (self._normalize_entry(e) for e in entries)
+                    if w is not None
+                ]
+        return []
+
+    @staticmethod
+    def _read_entries(db_path: Path) -> list | None:
+        """Return the raw `entries` list from one DB, or None if the DB
+        is missing / unreadable / does not contain the recents key."""
+        if not db_path.exists():
+            return None
         try:
-            uri = f"file:{self.db_path}?mode=ro"
+            uri = f"file:{db_path}?mode=ro"
             conn = sqlite3.connect(uri, uri=True, timeout=2.0)
             try:
                 cur = conn.cursor()
@@ -209,15 +240,14 @@ class VSCodeRecentsReader:
             finally:
                 conn.close()
         except sqlite3.Error:
-            return []
+            return None
         if not row or not row[0]:
-            return []
+            return None
         try:
             payload = json.loads(row[0])
         except json.JSONDecodeError:
-            return []
-        entries = payload.get("entries", []) or []
-        return [w for w in (self._normalize_entry(e) for e in entries) if w is not None]
+            return None
+        return payload.get("entries", []) or []
 
     @staticmethod
     def _normalize_entry(entry: dict[str, Any]) -> Workspace | None:
@@ -1101,11 +1131,19 @@ class MainWindow(QMainWindow):
             self.list_widget.setVisible(True)
         else:
             self.list_widget.setVisible(False)
-            db = self.recents_reader.db_path
-            if db is None or not db.exists():
-                where = str(db) if db is not None else "(path unknown for this platform)"
+            candidates = self.recents_reader.db_paths
+            existing = [p for p in candidates if p.exists()]
+            if not candidates:
+                where = "(path unknown for this platform)"
                 self.empty_label.setText(
                     "VSCode state database not found at\n"
+                    f"{where}\n\n"
+                    "Install VSCode and open a workspace to populate this list."
+                )
+            elif not existing:
+                where = "\n".join(str(p) for p in candidates)
+                self.empty_label.setText(
+                    "VSCode state database not found at any of:\n"
                     f"{where}\n\n"
                     "Install VSCode and open a workspace to populate this list."
                 )
