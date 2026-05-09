@@ -3,8 +3,8 @@
     "KPlugin": {
         "Id": "slack-focus-monitor",
         "Name": "Slack Focus Monitor",
-        "Description": "Forwards window-activation events to the slack-presence-toggle tray app over D-Bus.",
-        "Version": "0.1",
+        "Description": "Reports whether Slack is visually reachable (visible on the current desktop, not fully covered) to the slack-presence-toggle tray app over D-Bus.",
+        "Version": "0.2",
         "License": "MIT",
         "EnabledByDefault": true,
         "Authors": [

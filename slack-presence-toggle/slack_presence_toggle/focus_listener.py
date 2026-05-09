@@ -58,5 +58,8 @@ class FocusListener(QObject):
     # Note: the slot signature must match the KWin script's callDBus args.
     @pyqtSlot(str, str)
     def WindowActivated(self, resource_class: str, caption: str) -> None:
-        log.debug("WindowActivated rc=%r caption=%r", resource_class, caption)
+        # INFO-level: this is the only record we have of focus changes, and
+        # we need it to diagnose state-machine drift if the timer ever fires
+        # while Slack is actually on top.
+        log.info("WindowActivated rc=%r caption=%r", resource_class, caption)
         self.window_activated.emit(resource_class, caption)

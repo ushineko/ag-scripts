@@ -100,6 +100,26 @@ def setup_with_observer():
     return _make
 
 
+@pytest.fixture
+def setup_with_pre_apply_hook():
+    """Builds an FSM with a pre_grace_apply_hook installed. Returns the hook
+    call counter so tests can verify the hook fires."""
+    def _make(**overrides):
+        cfg = Config(**overrides)
+        slack = FakeSlack()
+        scheduler = FakeScheduler()
+        clock = FakeClock()
+        hook_calls: list[None] = []
+        def hook():
+            hook_calls.append(None)
+        fsm = FocusStateMachine(
+            slack=slack, scheduler=scheduler, config=cfg, clock=clock,
+            pre_grace_apply_hook=hook,
+        )
+        return fsm, slack, scheduler, clock, hook_calls
+    return _make
+
+
 # ---------------------------------------------------------------------------
 # Initial state
 # ---------------------------------------------------------------------------
@@ -436,6 +456,137 @@ def test_observer_optional_default_no_callback(setup):
     fsm.on_window_activated("firefox")
     scheduler.fire_next()
     # Did not crash; that's the test.
+
+
+# ---------------------------------------------------------------------------
+# Pre-grace-apply hook (sanity check before forcing away)
+# ---------------------------------------------------------------------------
+
+def test_pre_apply_hook_fires_at_grace_expiry_and_defers_apply(setup_with_pre_apply_hook):
+    """When a hook is installed, grace expiry runs the hook and schedules a
+    deferred apply rather than firing the API calls immediately."""
+    fsm, slack, scheduler, _, hook_calls = setup_with_pre_apply_hook()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    assert len(scheduler.scheduled) == 1  # the grace timer
+
+    scheduler.fire_next()  # grace expires -> runs hook + schedules deferred apply
+    assert hook_calls == [None]
+    # No API calls yet — apply is deferred.
+    assert slack.set_presence_calls == []
+    assert slack.set_profile_status_calls == []
+    # Deferred apply is now on the schedule.
+    assert len(scheduler.scheduled) == 1
+
+
+def test_pre_apply_hook_then_slack_focus_within_window_skips_apply(setup_with_pre_apply_hook):
+    """If the hook triggers a Slack focus event during the deferred window,
+    the FSM transitions back to SLACK_FOCUSED and the deferred apply is a
+    no-op — no API calls, no forced state."""
+    fsm, slack, scheduler, _, hook_calls = setup_with_pre_apply_hook()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()  # grace expires -> hook runs, deferred apply scheduled
+
+    # Simulate the hook's effect: a fresh Slack windowActivated arrives
+    # before the deferred apply fires.
+    fsm.on_window_activated("Slack")
+    # Slack focus return cancels the deferred apply via _cancel_grace_timer.
+    assert scheduler.scheduled == []
+    # No API calls — nothing was forced.
+    assert slack.set_presence_calls == []
+    assert slack.set_profile_status_calls == []
+    assert fsm.snapshot.we_forced_away is False
+    assert fsm.snapshot.we_forced_status is False
+
+
+def test_pre_apply_hook_then_non_slack_event_still_applies(setup_with_pre_apply_hook):
+    """If the hook re-emits a non-Slack window (real focus is not Slack),
+    the FSM stays in PENDING_AWAY and the deferred apply forces away as
+    expected."""
+    fsm, slack, scheduler, _, _ = setup_with_pre_apply_hook()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()  # grace expires -> hook runs, deferred scheduled
+
+    # A non-Slack event during the deferred window: state stays PENDING_AWAY.
+    fsm.on_window_activated("firefox")
+
+    scheduler.fire_next()  # deferred apply fires
+    # Forced state is applied.
+    assert slack.set_presence_calls == ["away"]
+    assert len(slack.set_profile_status_calls) == 1
+    assert fsm.snapshot.we_forced_away is True
+    assert fsm.snapshot.we_forced_status is True
+
+
+def test_pre_apply_hook_deferred_apply_runs_unchanged_when_no_intervening_events(setup_with_pre_apply_hook):
+    """No focus events between hook firing and deferred apply: forced
+    state is applied normally."""
+    fsm, slack, scheduler, _, _ = setup_with_pre_apply_hook()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()  # grace expires -> hook + deferred
+    scheduler.fire_next()  # deferred fires
+    assert slack.set_presence_calls == ["away"]
+    assert fsm.snapshot.we_forced_away is True
+
+
+def test_pre_apply_hook_exception_does_not_block_apply(setup):
+    """If the hook raises, the deferred apply still runs."""
+    cfg = Config()
+    slack = FakeSlack()
+    scheduler = FakeScheduler()
+    clock = FakeClock()
+    def bad_hook():
+        raise RuntimeError("kwin script reload failed")
+    fsm = FocusStateMachine(
+        slack=slack, scheduler=scheduler, config=cfg, clock=clock,
+        pre_grace_apply_hook=bad_hook,
+    )
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()  # grace expires -> hook raises, deferred still scheduled
+    assert len(scheduler.scheduled) == 1
+    scheduler.fire_next()  # deferred fires
+    assert slack.set_presence_calls == ["away"]
+
+
+def test_disable_during_deferred_window_cancels_apply(setup_with_pre_apply_hook):
+    """If the user disables the FSM during the deferred window, the
+    deferred apply must not fire."""
+    fsm, slack, scheduler, _, _ = setup_with_pre_apply_hook()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()  # grace expires -> hook + deferred
+
+    fsm.set_enabled(False)
+    # set_enabled(False) cancels the deferred apply via _cancel_grace_timer.
+    assert scheduler.scheduled == []
+    assert slack.set_presence_calls == []  # nothing was forced
+
+
+def test_shutdown_during_deferred_window_cancels_apply(setup_with_pre_apply_hook):
+    """Shutdown must abort an in-flight deferred apply."""
+    fsm, slack, scheduler, _, _ = setup_with_pre_apply_hook()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()  # grace expires -> hook + deferred
+    fsm.shutdown()
+    assert scheduler.scheduled == []
+    assert slack.set_presence_calls == []
+
+
+def test_pre_apply_hook_unset_uses_legacy_immediate_path(setup):
+    """Without a hook installed (default), grace expiry applies forced
+    state immediately — no deferred phase."""
+    fsm, slack, scheduler, _ = setup()
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()
+    # Forced state applied in one step, no follow-up scheduled.
+    assert slack.set_presence_calls == ["away"]
+    assert scheduler.scheduled == []
 
 
 # ---------------------------------------------------------------------------

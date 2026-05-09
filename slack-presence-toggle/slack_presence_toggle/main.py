@@ -109,11 +109,22 @@ class Application(QObject):
             scheduler=self._scheduler,
             config=self._config,
             on_internal_transition=self._on_internal_transition,
+            pre_grace_apply_hook=self._on_pre_grace_apply,
         )
         # Push initial snapshot to tray so menu shows enabled/disabled state.
         self._tray.update_state(
             snapshot=self._fsm.snapshot, presence=None, profile=None
         )
+
+    def _on_pre_grace_apply(self) -> None:
+        """Fired right before the FSM applies grace-expiry forced state.
+        Reloads the KWin script so it re-emits a fresh windowActivated for
+        the current active window. If the FSM had drifted out of sync with
+        reality (a missed focus event, popup glitch, etc.) and Slack is
+        actually on top, the resulting Slack windowActivated will transition
+        the FSM back to SLACK_FOCUSED before the deferred apply runs."""
+        log.info("grace-expiry sanity check: reloading KWin script to re-emit focus")
+        self._reload_kwin_script_for_initial_focus()
 
     # -------------------------------------------------------------- handlers
     def _on_window_activated(self, resource_class: str, caption: str) -> None:

@@ -1,11 +1,18 @@
 # slack-presence-toggle
 
 Tray utility for KDE Plasma 6 / Wayland that auto-toggles Slack presence
-based on whether the Slack desktop window has focus. When focus leaves
-Slack for longer than a configurable grace period, the utility forces
+based on whether Slack is visually reachable — that is, whether at least
+one Slack window is on the current virtual desktop, not minimized, and not
+fully covered by another window. When Slack stops being reachable for
+longer than a configurable grace period, the utility forces
 `presence=away` and sets a custom status (default: 🎯 `Heads down`). When
-focus returns to Slack, presence is restored to `auto` and the status is
-cleared.
+Slack becomes reachable again, presence is restored to `auto` and the
+status is cleared.
+
+This is what users on multi-monitor setups mean by "Slack is on top":
+clicking another window on the adjacent monitor takes keyboard focus but
+leaves Slack visually on top of its own monitor — and the utility correctly
+keeps you marked active.
 
 ## Contents
 
@@ -29,8 +36,8 @@ Slack's built-in idle detection waits ~10 minutes of system inactivity
 before flipping to away. That's too generous for deep-work mode: typing
 in another window keeps the green dot lit, and coworkers reasonably expect
 fast replies. This utility tightens the loop by forcing away as soon as
-focus leaves Slack for the configured grace period (default 30s), and adds
-a custom status text that explains why.
+Slack stops being reachable for the configured grace period (default 30s),
+and adds a custom status text that explains why.
 
 ## Requirements
 
@@ -134,9 +141,11 @@ Right-click for the menu:
 - **Quit** — runs the same clear-forced-state sequence as Disable, then
   exits.
 
-The grace period is the time focus must stay off Slack before the utility
-forces away. Default 30 seconds. Brief alt-tabs to look something up don't
-trigger it; only sustained focus elsewhere does.
+The grace period is the time Slack must stay unreachable (minimized, on
+another virtual desktop, or fully covered by another window) before the
+utility forces away. Default 30 seconds. Briefly clicking through to
+another app on top of Slack to look something up doesn't trigger it; only
+sustained absence does.
 
 ## Configuration
 
@@ -206,7 +215,36 @@ then set `slack_resource_class` in the config.
 auto-clears at `status_safety_buffer_seconds` (default 1h). Presence does
 not auto-clear. Manually toggle in Slack (avatar → "Set yourself as
 active") or just relaunch the utility — it will detect the discrepancy on
-the next focus event and clear it.
+the next reachability event and clear it.
+
+**Auto-presence flipped to "away" while Slack was on top.** As of 0.1.6,
+the KWin script reports visual *reachability* — Slack on the current
+virtual desktop, not minimized, and not fully covered — rather than
+keyboard focus. This fixes the multi-monitor case where activating a
+window on the adjacent monitor takes focus but leaves Slack visually on
+top of its own monitor. Two earlier defenses are also kept: every focus
+event and FSM transition is logged at INFO, and on grace expiry the app
+reloads the KWin script and defers the force-away by 500 ms so any missed
+reachability update can correct itself.
+
+```bash
+journalctl --user -f -u "app-slack\\x2dpresence\\x2dtoggle@*"
+```
+
+The captioned reason is included on every reachability flip — e.g.
+`rc='__not-reachable__' caption='[geom]'` means a window's geometry
+changed and that flipped Slack from visible to covered. A line like
+`grace expiry deferred-apply: focus is SLACK_FOCUSED now, skipping
+force-away` confirms the sanity check fired and prevented a spurious
+switch.
+
+**Side-by-side or partially-overlapping windows aren't tracked correctly.**
+The reachability check treats Slack as covered only if a single
+higher-stacked window's frame fully contains Slack's frame. Two
+non-overlapping windows that collectively tile over Slack would still
+read as reachable; conversely, a window that covers ~95% of Slack reads
+the same as a window that covers 5%. If you hit a case where this matters,
+file an issue.
 
 ## Uninstall
 
@@ -240,15 +278,21 @@ The full design and acceptance criteria are in
 ```text
 ┌─────────────────┐  D-Bus call    ┌──────────────────┐   HTTPS    ┌─────────┐
 │   KWin script   │ ─────────────► │  tray app (Py)   │ ─────────► │ Slack   │
-│ (windowActivated│                │  state machine + │            │ API     │
-│   handler)      │                │  PyQt6 tray UI   │            │         │
+│ (Slack          │                │  state machine + │            │ API     │
+│  reachability)  │                │  PyQt6 tray UI   │            │         │
 └─────────────────┘                └──────────────────┘            └─────────┘
 ```
 
 Components:
 
-- `kwin-script/` — KWin JavaScript script that emits a D-Bus call on every
-  `workspace.windowActivated` event.
+- `kwin-script/` — KWin JavaScript script that emits a D-Bus call whenever
+  Slack's reachability flips. Reachable means at least one Slack window is
+  on the current virtual desktop, not minimized, and not fully covered by
+  any single higher-stacked window. The script subscribes to the workspace
+  signals (`windowActivated`, `currentDesktopChanged`, `windowAdded`,
+  `windowRemoved`) and to per-window `minimizedChanged`,
+  `frameGeometryChanged`, `outputChanged`, and `desktopsChanged` so any
+  state change re-evaluates reachability.
 - `slack_presence_toggle/focus_listener.py` — QtDBus service receiving the
   KWin events.
 - `slack_presence_toggle/state_machine.py` — pure Python focus state

@@ -72,12 +72,22 @@ class FocusStateMachine:
         on_internal_transition: Callable[
             [TransitionResult, "StateSnapshot", str], None
         ] | None = None,
+        pre_grace_apply_hook: Callable[[], None] | None = None,
+        pre_grace_apply_delay_seconds: float = 0.5,
     ) -> None:
         self._slack = slack
         self._scheduler = scheduler
         self._config = config
         self._clock = clock
         self._on_internal_transition = on_internal_transition
+        # Optional hook fired when the grace timer expires, before the
+        # forced-state APIs are called. Lets the orchestrator trigger a
+        # fresh windowActivated emission (e.g. by reloading the KWin
+        # script) so that any missed focus event causes the FSM to
+        # transition out of OTHER_FOCUSED_PENDING_AWAY and the deferred
+        # apply becomes a no-op.
+        self._pre_grace_apply_hook = pre_grace_apply_hook
+        self._pre_grace_apply_delay = pre_grace_apply_delay_seconds
 
         self._enabled = config.enabled
         # Initial state assumes Slack is focused. This way, when the KWin
@@ -91,6 +101,7 @@ class FocusStateMachine:
         self._we_forced_away = False
         self._we_forced_status = False
         self._grace_handle: object | None = None
+        self._deferred_apply_handle: object | None = None
 
     @property
     def snapshot(self) -> StateSnapshot:
@@ -108,9 +119,15 @@ class FocusStateMachine:
         return self._handle_other_focus()
 
     def _handle_slack_focus(self) -> TransitionResult:
-        self._cancel_grace_timer()
         prev_focus = self._focus
+        had_timer = self._grace_handle is not None
+        self._cancel_grace_timer()
         self._focus = FocusState.SLACK_FOCUSED
+        if prev_focus != FocusState.SLACK_FOCUSED:
+            log.info(
+                "transition: %s -> SLACK_FOCUSED (timer_canceled=%s, forced_away=%s, forced_status=%s)",
+                prev_focus.value, had_timer, self._we_forced_away, self._we_forced_status,
+            )
 
         if not self._enabled:
             return TransitionResult()
@@ -131,6 +148,14 @@ class FocusStateMachine:
                 self._grace_handle = self._scheduler.schedule(
                     self._config.grace_seconds, self._on_grace_expired
                 )
+                log.info(
+                    "transition: SLACK_FOCUSED -> OTHER_FOCUSED_PENDING_AWAY (timer=%ss)",
+                    self._config.grace_seconds,
+                )
+            else:
+                log.info(
+                    "transition: SLACK_FOCUSED -> OTHER_FOCUSED_PENDING_AWAY (disabled, no timer)"
+                )
         # Already pending or other_focused: nothing to do.
         return TransitionResult()
 
@@ -139,6 +164,40 @@ class FocusStateMachine:
         # The caller may have changed focus or disabled us between schedule
         # and fire; re-check.
         if self._focus != FocusState.OTHER_FOCUSED_PENDING_AWAY:
+            return
+
+        # When a pre-apply hook is configured, give it a chance to trigger
+        # a fresh windowActivated emission and defer the actual apply for
+        # a short window. If a Slack focus event arrives in that window
+        # (because the FSM had drifted out of sync with the real active
+        # window), the FSM transitions out of OTHER_FOCUSED_PENDING_AWAY
+        # and the deferred apply becomes a no-op.
+        if self._pre_grace_apply_hook is not None:
+            log.info(
+                "grace timer expired; running pre-apply sanity check (defer %ss)",
+                self._pre_grace_apply_delay,
+            )
+            try:
+                self._pre_grace_apply_hook()
+            except Exception:
+                log.exception("pre-grace-apply hook raised; will apply anyway")
+            self._deferred_apply_handle = self._scheduler.schedule(
+                self._pre_grace_apply_delay, self._do_grace_apply
+            )
+            return
+
+        self._do_grace_apply()
+
+    def _do_grace_apply(self) -> None:
+        self._deferred_apply_handle = None
+        # Re-check: a focus event may have arrived during the deferred
+        # window (or, in the no-hook path, between the timer scheduling
+        # and firing).
+        if self._focus != FocusState.OTHER_FOCUSED_PENDING_AWAY:
+            log.info(
+                "grace expiry deferred-apply: focus is %s now, skipping force-away",
+                self._focus.value,
+            )
             return
         prev_snapshot = self.snapshot  # capture before any state mutation
         self._focus = FocusState.OTHER_FOCUSED
@@ -208,9 +267,16 @@ class FocusStateMachine:
         return result
 
     def _cancel_grace_timer(self) -> None:
+        # Cancels both the primary grace timer and any in-flight deferred
+        # apply: transitioning out of OTHER_FOCUSED_PENDING_AWAY must abort
+        # both phases or a stale apply will fire after focus has already
+        # returned to Slack.
         if self._grace_handle is not None:
             self._scheduler.cancel(self._grace_handle)
             self._grace_handle = None
+        if self._deferred_apply_handle is not None:
+            self._scheduler.cancel(self._deferred_apply_handle)
+            self._deferred_apply_handle = None
 
     def set_enabled(self, enabled: bool) -> TransitionResult:
         if enabled == self._enabled:
