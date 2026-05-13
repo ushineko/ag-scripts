@@ -147,6 +147,14 @@ utility forces away. Default 30 seconds. Briefly clicking through to
 another app on top of Slack to look something up doesn't trigger it; only
 sustained absence does.
 
+If you already have a custom status set (manually or via Slack's scheduled
+status feature) when the grace period expires, the utility flips presence
+to `away` but **does not overwrite the existing status**. Statuses you
+care about — "On vacation 🌴", "In a meeting 📅", "Out sick 🤒" — survive
+unchanged, and the utility doesn't try to clear them on focus return
+either. Only the configured `status_text` (default `Heads down 🎯`) is
+owned by the utility.
+
 ## Configuration
 
 `~/.config/slack-presence-toggle/config.toml`. Created on first run with

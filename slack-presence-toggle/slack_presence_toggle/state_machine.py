@@ -216,6 +216,22 @@ class FocusStateMachine:
         if presence_health.ok:
             self._we_forced_away = True
 
+        # Don't clobber a user-set or scheduled custom status. Read the
+        # current status first; if it's non-empty and not our configured
+        # text (e.g., the user has "On vacation" or a scheduled status
+        # that's now active), skip the status set and don't claim
+        # ownership. Presence still flips to away.
+        get_health, current = self._slack.get_profile_status()
+        if get_health.ok and current is not None and current.text and current.text != self._config.status_text:
+            log.info(
+                "user-set status %r is present; applying presence=away only, not overwriting",
+                current.text,
+            )
+            return TransitionResult(
+                presence_call=presence_health,
+                status_set_call=None,
+            )
+
         expiration = int(self._clock()) + self._config.status_safety_buffer_seconds
         status_health = self._slack.set_profile_status(
             self._config.status_text, self._config.status_emoji, expiration

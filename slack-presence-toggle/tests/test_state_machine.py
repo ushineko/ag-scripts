@@ -261,8 +261,9 @@ def test_focus_return_after_grace_clears_both(setup):
     assert fsm.snapshot.we_forced_status
 
     fsm.on_window_activated("Slack")  # focus return
-    # Should: get_profile_status, set_profile_status('','',0), set_presence('auto')
-    assert slack.get_profile_status_calls == 1
+    # Apply path reads profile once (to avoid clobbering a user-set status),
+    # then the clear path reads it again before clearing.
+    assert slack.get_profile_status_calls == 2
     assert slack.set_profile_status_calls == [
         ("Heads down", ":dart:", pytest.approx(slack.set_profile_status_calls[0][2])),
         ("", "", 0),
@@ -407,6 +408,112 @@ def test_apply_when_status_set_fails_does_not_set_we_forced_status(setup):
     scheduler.fire_next()
     assert fsm.snapshot.we_forced_away is True  # presence call independent
     assert fsm.snapshot.we_forced_status is False
+
+
+# ---------------------------------------------------------------------------
+# Existing custom / scheduled status is not overwritten on apply
+# ---------------------------------------------------------------------------
+
+def test_apply_skips_status_set_when_user_status_already_present(setup):
+    """User has a custom status (e.g., 'On vacation') when grace fires.
+    Presence flips to away, but the status is left alone and we don't
+    claim ownership of it."""
+    fsm, slack, scheduler, _ = setup()
+    slack.profile_status = ProfileStatus(text="On vacation", emoji=":palm_tree:", expiration=0)
+
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()
+
+    assert slack.set_presence_calls == ["away"]
+    assert slack.set_profile_status_calls == []  # not overwritten
+    assert slack.get_profile_status_calls == 1
+    snap = fsm.snapshot
+    assert snap.we_forced_away is True
+    assert snap.we_forced_status is False  # we don't own the user's status
+
+
+def test_apply_skips_status_set_for_scheduled_status_currently_active(setup):
+    """A scheduled status that's currently active reads the same as a
+    manually set one via users.profile.get — verify the same skip path."""
+    fsm, slack, scheduler, clock = setup()
+    # Slack-side scheduled status: appears as a non-empty current status with
+    # a future expiration.
+    slack.profile_status = ProfileStatus(
+        text="In a meeting",
+        emoji=":calendar:",
+        expiration=int(clock.now) + 1800,
+    )
+
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()
+
+    assert slack.set_profile_status_calls == []
+    assert fsm.snapshot.we_forced_status is False
+
+
+def test_apply_proceeds_when_existing_status_matches_ours(setup):
+    """If the current status is already our configured text (e.g., leftover
+    from a previous session that crashed), refresh it rather than skip."""
+    fsm, slack, scheduler, clock = setup(
+        status_text="Heads down", status_emoji=":dart:", status_safety_buffer_seconds=3600,
+    )
+    slack.profile_status = ProfileStatus(text="Heads down", emoji=":dart:", expiration=int(clock.now) - 60)
+
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()
+
+    assert len(slack.set_profile_status_calls) == 1
+    text, emoji, expiration = slack.set_profile_status_calls[0]
+    assert text == "Heads down"
+    assert expiration == int(clock.now) + 3600
+    assert fsm.snapshot.we_forced_status is True
+
+
+def test_apply_proceeds_when_existing_status_text_is_empty(setup):
+    """Empty text means no user status — go ahead and set ours."""
+    fsm, slack, scheduler, _ = setup()
+    slack.profile_status = ProfileStatus(text="", emoji="", expiration=0)
+
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()
+
+    assert len(slack.set_profile_status_calls) == 1
+    assert fsm.snapshot.we_forced_status is True
+
+
+def test_apply_proceeds_when_get_profile_fails(setup):
+    """If we can't read the current status (transient error, missing scope),
+    fall back to the old behavior: set our status. Otherwise the feature
+    silently breaks for users without users.profile:read."""
+    fsm, slack, scheduler, _ = setup()
+    slack.get_profile_response = ApiHealth(ok=False, error="missing_scope", needed_scope="users.profile:read")
+
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()
+
+    assert len(slack.set_profile_status_calls) == 1
+    assert fsm.snapshot.we_forced_status is True
+
+
+def test_clear_after_skipped_apply_does_not_touch_user_status(setup):
+    """End-to-end: apply skipped due to user-set status, focus returns to
+    Slack — clear path should leave the user status alone (since we_forced_status
+    is False) and only flip presence back to auto."""
+    fsm, slack, scheduler, _ = setup()
+    slack.profile_status = ProfileStatus(text="On vacation", emoji=":palm_tree:", expiration=0)
+
+    fsm.on_window_activated("Slack")
+    fsm.on_window_activated("firefox")
+    scheduler.fire_next()  # apply: presence away, status untouched
+
+    fsm.on_window_activated("Slack")  # focus return
+    assert slack.set_presence_calls == ["away", "auto"]
+    assert slack.set_profile_status_calls == []  # never touched user status
 
 
 # ---------------------------------------------------------------------------

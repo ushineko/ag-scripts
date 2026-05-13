@@ -114,10 +114,19 @@ Transitions:
 period):
 
 1. `users.setPresence(presence="away")`
-2. `users.profile.set(profile={"status_text": <configured>, "status_emoji":
-   <configured>, "status_expiration": <now + safety_buffer_seconds>})` — the
-   safety buffer (default 3600s / 1h) is how long the status persists if
-   the utility crashes before clearing it. Slack auto-clears at expiration.
+2. `users.profile.get` to check the current status. If the current
+   `status_text` is non-empty and not equal to our configured text, the
+   user has a custom or scheduled status active — skip the status set,
+   leave `we_forced_status` false, and stop here. Presence-only is the
+   correct outcome in that case.
+3. Otherwise: `users.profile.set(profile={"status_text": <configured>,
+   "status_emoji": <configured>, "status_expiration": <now +
+   safety_buffer_seconds>})` — the safety buffer (default 3600s / 1h) is
+   how long the status persists if the utility crashes before clearing
+   it. Slack auto-clears at expiration.
+4. If `users.profile.get` itself fails (transient error, missing scope),
+   fall back to step 3 — preserves the feature for users without
+   `users.profile:read` and matches pre-existing best-effort semantics.
 
 **Clear forced state** (focus returned to Slack):
 
