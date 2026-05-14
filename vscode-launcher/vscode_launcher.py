@@ -67,7 +67,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.2"
+__version__ = "3.3"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -1352,8 +1352,13 @@ class MainWindow(QMainWindow):
         if self._popup.isVisible():
             self._popup.cycle_next()
         else:
-            # Workspace list is kept fresh by the 5 s auto-refresh; no
-            # per-press scan needed.
+            # Force a sync rescan first. The 5 s auto-refresh tick can
+            # lag behind reality (a window closed in the last few seconds,
+            # or — more importantly — a crashed VSCode leaving a stale
+            # IPC socket that the old code mis-classified as "transient
+            # error"). The IPC round-trip is ~3 ms, cheap enough to do
+            # on every hotkey press to keep the popup truthful.
+            self._trigger_background_scan()
             self._popup.show_with_workspaces(self.workspaces)
 
     def _on_hotkey_released(self) -> None:

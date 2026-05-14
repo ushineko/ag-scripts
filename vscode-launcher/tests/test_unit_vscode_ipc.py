@@ -281,3 +281,20 @@ class TestHighLevelHelpers:
         monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
         # get_main_diagnostics should swallow the connection error.
         assert get_main_diagnostics() is None
+
+    def test_list_vscode_windows_stale_socket_returns_empty(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: when VSCode crashes it leaves a real AF_UNIX socket
+        file behind. The probe must classify connect-refused as 'not
+        running' ([]) rather than 'transient IPC failure' (None), or the
+        launcher's auto-refresh sticks on the last known running state."""
+        sock_path = tmp_path / "vscode-dead-main.sock"
+        # Bind to create the file, then close without listen() so connect()
+        # fails with ECONNREFUSED — exactly how a crashed VSCode appears.
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(str(sock_path))
+        s.close()
+        assert sock_path.exists()
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        assert list_vscode_windows() == []

@@ -249,6 +249,11 @@ The KDE / GTK icon caches are refreshed afterwards. You are prompted before the 
 
 ## Changelog
 
+### v3.3
+
+- Fix: running-state detection sticks after VSCode crashes. When VSCode exits abnormally (crash, OOM, SIGKILL) it leaves its IPC socket file on disk; subsequent `connect()` calls return `ECONNREFUSED`. The auto-refresh tick was classifying that as a transient IPC failure and skipping the state update, so the launcher kept showing the dead workspaces as `● running` until the user clicked Refresh. The IPC client now distinguishes a refused-connect (= VSCode not running, return `[]`) from a real transient error (= return `None`).
+- The quick-launcher popup now performs a synchronous rescan on each hotkey press before showing. The IPC round-trip is ~3 ms, cheap enough to do every press, and the popup never shows stale running badges between auto-refresh ticks.
+
 ### v3.2
 
 - Fix: VSCode 1.119 compatibility. The recently-opened workspaces key (`history.recentlyOpenedPathsList`) was migrated from per-profile `~/.config/Code/User/globalStorage/state.vscdb` to a new shared application database at `~/.vscode-shared/sharedStorage/state.vscdb`. The launcher now probes both locations in priority order (shared first, globalStorage fallback) so it works on 1.119+ and on older releases without configuration. Symptom on the broken release: empty session list after upgrading VSCode.

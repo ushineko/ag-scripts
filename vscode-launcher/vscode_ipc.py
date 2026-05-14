@@ -274,6 +274,24 @@ def get_main_diagnostics(
         return None
 
 
+def _socket_listening(sock_path: Path, timeout: float) -> bool:
+    """Quick liveness probe. True if a process is accepting connections on
+    `sock_path`. False if the path is a leftover socket file from a crashed
+    VSCode (connect → ECONNREFUSED) or has been unlinked since discovery
+    (FileNotFoundError). Ambiguous errors (timeout, permission) return True
+    so the caller proceeds with the real call and surfaces them as transient.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(str(sock_path))
+        return True
+    except (ConnectionRefusedError, FileNotFoundError):
+        return False
+    except OSError:
+        return True
+
+
 def list_vscode_windows(
     sock_path: Path | None = None, timeout: float = _DEFAULT_TIMEOUT
 ) -> list[WindowEntry] | None:
@@ -282,11 +300,16 @@ def list_vscode_windows(
     Returns the list of WindowEntry dicts on success, or None on any
     transient IPC failure. A successful call where VSCode has no windows
     open returns []. A call where VSCode isn't running at all also
-    returns []  — the semantic distinction between "can't tell" and
-    "nothing is running" collapses here: no socket → no VSCode → no windows.
+    returns [] — including the case where VSCode crashed and left a stale
+    socket file behind, detected via a quick liveness probe (ECONNREFUSED).
+    The semantic distinction between "can't tell" and "nothing is running"
+    collapses here: no live listener → no VSCode → no windows.
     """
-    if sock_path is None and find_main_socket() is None:
-        # No VSCode running → no open windows. Distinct from an IPC error.
+    if sock_path is None:
+        sock_path = find_main_socket()
+    if sock_path is None:
+        return []
+    if not _socket_listening(sock_path, timeout):
         return []
     diagnostics = get_main_diagnostics(sock_path, timeout=timeout)
     if diagnostics is None:

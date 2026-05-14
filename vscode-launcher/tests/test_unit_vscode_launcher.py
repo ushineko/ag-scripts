@@ -1221,3 +1221,56 @@ class TestMainWindowSmoke:
         )
         assert window.list_widget.rowCount() == 1
         assert window.workspaces[0].is_running is False
+
+    def test_hotkey_press_forces_sync_scan_before_popup(
+        self, qapp, tmp_path, fake_vscode_db
+    ):
+        """Regression: when VSCode crashes between auto-refresh ticks, the
+        cached self.workspaces is stale. Opening the popup must trigger a
+        fresh scan so the user never sees phantom '● running' badges."""
+        from unittest.mock import MagicMock
+
+        from vscode_launcher import MainWindow
+
+        db_path, build = fake_vscode_db
+        build([{"folderUri": "file:///home/u/git/a"}])
+
+        class CountingScanner:
+            def __init__(self):
+                self.calls = 0
+                self.entries: list[dict] = []
+
+            def list_vscode_entries(self):
+                self.calls += 1
+                return list(self.entries)
+
+            def list_vscode_captions(self):
+                return [e["c"] for e in self.entries]
+
+        scanner = CountingScanner()
+        # Initial scan: workspace 'a' is running.
+        scanner.entries = [{"c": "file - a - Visual Studio Code", "p": 1}]
+        window = MainWindow(
+            ConfigManager(tmp_path / "workspaces.json"),
+            Launcher(),
+            VSCodeRecentsReader(db_path=db_path),
+            window_scanner=scanner,
+        )
+        assert window.workspaces[0].is_running is True
+
+        # Simulate VSCode crashing — scanner now returns no windows.
+        scanner.entries = []
+        baseline_calls = scanner.calls
+
+        popup = MagicMock()
+        popup.isVisible.return_value = False
+        window._popup = popup
+        window._popup_commit_timer = None
+
+        window._on_hotkey_pressed()
+
+        assert scanner.calls > baseline_calls
+        popup.show_with_workspaces.assert_called_once()
+        # The list passed to the popup must reflect the post-crash state.
+        passed = popup.show_with_workspaces.call_args[0][0]
+        assert all(not ws.is_running for ws in passed)
