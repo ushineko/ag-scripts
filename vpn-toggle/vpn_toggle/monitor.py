@@ -2,8 +2,8 @@
 Event-driven VPN monitor (MonitorController).
 
 Replaces the earlier MonitorThread(QThread) architecture with a main-thread
-controller driven by QTimer + QProcess/QDnsLookup/QNetworkAccessManager. All
-checks, asserts, and bounce operations run on the Qt event loop; no blocking
+controller driven by QTimer + QProcess/QNetworkAccessManager. All checks,
+asserts, and bounce operations run on the Qt event loop; no blocking
 subprocess / socket / HTTP calls on the main thread. See specs/009 for the
 rationale and acceptance criteria.
 """

@@ -26,7 +26,7 @@ After three SIGSEGV crashes in libpython3.14 in the span of a week — all origi
 ### Event-driven monitor
 
 - **`MonitorThread(QThread)` is gone.** Replaced by `MonitorController(QObject)` running entirely on the main event loop.
-- All subprocess work (`nmcli`, `openvpn3`, `ping`) now goes through `QProcess`. DNS lookups use `QDnsLookup`. Geolocation HTTP uses `QNetworkAccessManager`. None of these block the event loop.
+- All subprocess work (`nmcli`, `openvpn3`, `ping`, `getent`) goes through `QProcess`. Geolocation HTTP uses `QNetworkAccessManager`. None of these block the event loop.
 - Each check cycle is a `VPNCheckSession` state machine: `is_vpn_active_async` → assert chain → either record metrics or trigger an async bounce.
 - Every async op carries a hard timeout (`QTimer.singleShot`) so a hung subprocess or DNS query cannot wedge a session.
 - All five existing signals (`status_changed`, `assert_result`, `log_message`, `vpn_disabled`, `check_completed`) are preserved with identical payloads, so the GUI wiring is unchanged.
@@ -304,6 +304,12 @@ The original bash script is still available as `toggle_vpn.sh` for backward comp
 Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
+
+### v4.3.1
+
+- **DNS assert now matches the system resolver.** `AsyncDNSLookupAssert` previously used Qt's `QDnsLookup`, which queries `/etc/resolv.conf` nameservers directly and bypasses systemd-resolved's per-link routing. On hosts where the VPN's DNS server is reachable but not registered with resolved (e.g. NetworkManager OpenVPN profiles that set routing domains but no `ipv4.dns` and where the server does not push `dhcp-option DNS`), the monitor saw the corp/internal answer while `ping`, `curl`, `git`, and browsers got the public answer — a false-green check
+- The assert now runs `getent hosts <hostname>` via `QProcess`, going through nsswitch / libc on the same path every other tool on the host uses. The check now fails when end-user DNS resolution is misrouted, surfacing the actual problem
+- Failure semantics tightened: AAAA-only responses now report `No IPv4 records` instead of silently mis-parsing; `getent` non-zero exits report `Could not resolve` with the exit code in details
 
 ### v4.3.0
 

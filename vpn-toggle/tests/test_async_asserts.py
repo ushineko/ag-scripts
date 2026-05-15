@@ -45,6 +45,44 @@ def pump_events(timeout_ms: int = 1000, predicate=None):
     return False
 
 
+class _FakeGetentProcess:
+    """Stand-in for QProcess wired to AsyncDNSLookupAssert via `_make_process`.
+
+    Exposes only the surface that AsyncDNSLookupAssert touches: a `finished`
+    signal carrying (exit_code, exit_status), `start()` that schedules the
+    signal, `readAllStandardOutput()`, `errorOccurred`, `state()`, `kill()`.
+    """
+    def __init__(self, parent, exit_code: int, stdout: bytes):
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class _Inner(QObject):
+            finished = pyqtSignal(int, object)
+            errorOccurred = pyqtSignal(object)
+
+        self._inner = _Inner(parent)
+        self.finished = self._inner.finished
+        self.errorOccurred = self._inner.errorOccurred
+        self._exit_code = exit_code
+        self._stdout = stdout
+        self._killed = False
+
+    def start(self, _program, _args):
+        QTimer.singleShot(0, lambda: self.finished.emit(self._exit_code, None))
+
+    def readAllStandardOutput(self):
+        return self._stdout
+
+    def state(self):
+        from PyQt6.QtCore import QProcess
+        return QProcess.ProcessState.NotRunning
+
+    def kill(self):
+        self._killed = True
+
+    def errorString(self):
+        return ""
+
+
 class TestFactory:
 
     def test_dispatch_dns_lookup(self, qapp):
@@ -85,51 +123,13 @@ class TestAsyncDNSLookup:
         assert len(results) == 1
         assert results[0].success is False
 
-    def test_success_when_prefix_matches(self, qapp, monkeypatch):
-        """Inject a fake QDnsLookup whose finished signal fires with one A record."""
-        from PyQt6.QtCore import QObject, pyqtSignal
-
-        class FakeRecord:
-            def value(self):
-                return _FakeAddr()
-
-        class _FakeAddr:
-            def toString(self):
-                return "10.1.2.3"
-
-        class FakeLookup(QObject):
-            finished = pyqtSignal()
-
-            def __init__(self, parent=None):
-                super().__init__(parent)
-                self._err = 0
-
-            def setType(self, *_):
-                pass
-
-            def setName(self, *_):
-                pass
-
-            def lookup(self):
-                QTimer.singleShot(0, self.finished.emit)
-
-            def error(self):
-                # Match QDnsLookup.Error.NoError enum value
-                from PyQt6.QtNetwork import QDnsLookup
-                return QDnsLookup.Error.NoError
-
-            def hostAddressRecords(self):
-                return [FakeRecord()]
-
-            def abort(self):
-                pass
-
-            def errorString(self):
-                return ""
-
+    def test_success_when_prefix_matches(self, qapp):
+        """Inject a fake QProcess whose finished signal fires with getent stdout."""
         assert_obj = AsyncDNSLookupAssert(
             {'hostname': 'example.com', 'expected_prefix': '10.'})
-        assert_obj._make_lookup = lambda hostname: FakeLookup(assert_obj)
+        fake = _FakeGetentProcess(
+            assert_obj, exit_code=0, stdout=b"10.1.2.3  example.com\n")
+        assert_obj._make_process = lambda: fake
 
         results = collect_completion(assert_obj)
         assert_obj.start()
@@ -139,31 +139,43 @@ class TestAsyncDNSLookup:
         assert '10.1.2.3' in results[0].message
         assert results[0].details['ip'] == '10.1.2.3'
 
+    def test_first_ipv4_record_used_when_multiple_returned(self, qapp):
+        """`getent hosts` returns one line per record; the first IPv4 is the verdict."""
+        assert_obj = AsyncDNSLookupAssert(
+            {'hostname': 'multi.example', 'expected_prefix': '100.'})
+        fake = _FakeGetentProcess(
+            assert_obj, exit_code=0,
+            stdout=(b"100.64.1.5  multi.example\n"
+                    b"100.64.1.6  multi.example\n"))
+        assert_obj._make_process = lambda: fake
+
+        results = collect_completion(assert_obj)
+        assert_obj.start()
+        pump_events(predicate=lambda: len(results) > 0)
+        assert results[0].success is True
+        assert results[0].details['ip'] == '100.64.1.5'
+
+    def test_ipv6_only_response_reports_no_ipv4(self, qapp):
+        """AAAA-only hosts should fail since the prefix check is IPv4-shaped."""
+        assert_obj = AsyncDNSLookupAssert(
+            {'hostname': 'v6.example', 'expected_prefix': '10.'})
+        fake = _FakeGetentProcess(
+            assert_obj, exit_code=0,
+            stdout=b"2607:f8b0:4007:806::200e  v6.example\n")
+        assert_obj._make_process = lambda: fake
+
+        results = collect_completion(assert_obj)
+        assert_obj.start()
+        pump_events(predicate=lambda: len(results) > 0)
+        assert results[0].success is False
+        assert 'no ipv4' in results[0].message.lower()
+
     def test_failure_when_prefix_mismatch(self, qapp):
-        from PyQt6.QtCore import QObject, pyqtSignal
-        from PyQt6.QtNetwork import QDnsLookup
-
-        class _Rec:
-            def value(self):
-                class A:
-                    def toString(self_):
-                        return "192.168.1.1"
-                return A()
-
-        class FakeLookup(QObject):
-            finished = pyqtSignal()
-
-            def setType(self, *_): pass
-            def setName(self, *_): pass
-            def lookup(self): QTimer.singleShot(0, self.finished.emit)
-            def error(self): return QDnsLookup.Error.NoError
-            def hostAddressRecords(self): return [_Rec()]
-            def abort(self): pass
-            def errorString(self): return ""
-
         assert_obj = AsyncDNSLookupAssert(
             {'hostname': 'example.com', 'expected_prefix': '10.'})
-        assert_obj._make_lookup = lambda hostname: FakeLookup(assert_obj)
+        fake = _FakeGetentProcess(
+            assert_obj, exit_code=0, stdout=b"192.168.1.1  example.com\n")
+        assert_obj._make_process = lambda: fake
 
         results = collect_completion(assert_obj)
         assert_obj.start()
@@ -172,23 +184,11 @@ class TestAsyncDNSLookup:
         assert 'expected prefix' in results[0].message.lower()
 
     def test_lookup_error_reports_failure(self, qapp):
-        from PyQt6.QtCore import QObject, pyqtSignal
-        from PyQt6.QtNetwork import QDnsLookup
-
-        class FakeLookup(QObject):
-            finished = pyqtSignal()
-
-            def setType(self, *_): pass
-            def setName(self, *_): pass
-            def lookup(self): QTimer.singleShot(0, self.finished.emit)
-            def error(self): return QDnsLookup.Error.ResolverError
-            def hostAddressRecords(self): return []
-            def abort(self): pass
-            def errorString(self): return "nope"
-
+        """Non-zero exit from `getent` (host not found) surfaces as resolution failure."""
         assert_obj = AsyncDNSLookupAssert(
             {'hostname': 'missing.example', 'expected_prefix': '1.'})
-        assert_obj._make_lookup = lambda hostname: FakeLookup(assert_obj)
+        fake = _FakeGetentProcess(assert_obj, exit_code=2, stdout=b"")
+        assert_obj._make_process = lambda: fake
 
         results = collect_completion(assert_obj)
         assert_obj.start()

@@ -339,15 +339,18 @@ def create_assert(assert_config: Dict[str, Any]) -> VPNAssert:
 
 from PyQt6.QtCore import QObject, QProcess, QTimer, QUrl, pyqtSignal
 from PyQt6.QtNetwork import (
-    QDnsLookup,
     QNetworkAccessManager,
     QNetworkReply,
     QNetworkRequest,
 )
 
 DNS_TIMEOUT_MS = 30_000
+DNS_TIMEOUT_S = DNS_TIMEOUT_MS // 1000
 GEOLOCATION_TIMEOUT_MS = 12_000
 PING_TIMEOUT_EXTRA_S = 2
+
+# Matches the leading IPv4 address on a `getent hosts` output line.
+_IPV4_LINE_RE = re.compile(r'^\s*(\d{1,3}(?:\.\d{1,3}){3})\b')
 
 
 class _AsyncAssertBase(QObject):
@@ -390,18 +393,21 @@ class _AsyncAssertBase(QObject):
 
 
 class AsyncDNSLookupAssert(_AsyncAssertBase):
-    """Non-blocking DNS lookup using QDnsLookup."""
+    """Non-blocking DNS lookup that mirrors what `ping`/`curl`/`git` see.
+
+    Uses `getent hosts` via QProcess so the lookup goes through nsswitch /
+    libc — the same path the rest of the system uses. Qt's `QDnsLookup`
+    bypasses systemd-resolved's per-link routing and can return answers no
+    other tool on the host actually receives, masking VPN DNS misrouting.
+    """
 
     def __init__(self, config: Dict[str, Any], parent: Optional[QObject] = None):
         super().__init__(config, parent)
-        self._lookup: Optional[QDnsLookup] = None
+        self._proc: Optional[QProcess] = None
 
     # Overridable for tests.
-    def _make_lookup(self, hostname: str) -> QDnsLookup:
-        lookup = QDnsLookup(self)
-        lookup.setType(QDnsLookup.Type.A)
-        lookup.setName(hostname)
-        return lookup
+    def _make_process(self) -> QProcess:
+        return QProcess(self)
 
     def start(self) -> None:
         if self._done:
@@ -417,48 +423,43 @@ class AsyncDNSLookupAssert(_AsyncAssertBase):
             ))
             return
 
-        self._lookup = self._make_lookup(hostname)
-        self._lookup.finished.connect(self._on_finished)
+        self._proc = self._make_process()
+        self._proc.finished.connect(self._on_finished)
+        self._proc.errorOccurred.connect(self._on_error)
         self._arm_timeout(DNS_TIMEOUT_MS)
-        self._lookup.lookup()
+        self._proc.start('getent', ['hosts', hostname])
 
-    def _on_finished(self) -> None:
+    def _on_finished(self, exit_code: int, _exit_status) -> None:
         if self._done:
             return
         hostname = self.config.get('hostname')
         expected_prefix = self.config.get('expected_prefix')
+        proc = self._proc
+        stdout = bytes(proc.readAllStandardOutput()).decode('utf-8', errors='replace') if proc else ''
 
-        if self._lookup is None:
-            self._finish(AssertResult(
-                success=False,
-                message=f"DNS check FAILED: internal error (no lookup)",
-                details={'hostname': hostname},
-            ))
-            return
-
-        if self._lookup.error() != QDnsLookup.Error.NoError:
-            msg = self._lookup.errorString()
-            message = f"DNS check FAILED: Could not resolve {hostname}: {msg}"
+        if exit_code != 0:
+            message = f"DNS check FAILED: Could not resolve {hostname}"
             logger.error(message)
             self._finish(AssertResult(
                 success=False,
                 message=message,
-                details={'hostname': hostname, 'error': msg},
+                details={'hostname': hostname, 'error': f'getent exit {exit_code}'},
             ))
             return
 
-        records = self._lookup.hostAddressRecords()
-        if not records:
-            message = f"DNS check FAILED: No A records for {hostname}"
+        ipv4_addrs = [m.group(1) for m in (_IPV4_LINE_RE.match(line)
+                                           for line in stdout.splitlines()) if m]
+        if not ipv4_addrs:
+            message = f"DNS check FAILED: No IPv4 records for {hostname}"
             logger.warning(message)
             self._finish(AssertResult(
                 success=False,
                 message=message,
-                details={'hostname': hostname, 'error': 'no records'},
+                details={'hostname': hostname, 'error': 'no IPv4 records'},
             ))
             return
 
-        ip_address = records[0].value().toString()
+        ip_address = ipv4_addrs[0]
         logger.debug(f"DNS lookup for {hostname}: {ip_address}")
 
         if ip_address.startswith(expected_prefix):
@@ -482,12 +483,25 @@ class AsyncDNSLookupAssert(_AsyncAssertBase):
                          'expected_prefix': expected_prefix},
             ))
 
+    def _on_error(self, _err) -> None:
+        if self._done:
+            return
+        hostname = self.config.get('hostname')
+        msg = self._proc.errorString() if self._proc else 'unknown'
+        message = f"DNS check FAILED: getent error: {msg}"
+        logger.error(message)
+        self._finish(AssertResult(
+            success=False,
+            message=message,
+            details={'hostname': hostname, 'error': msg},
+        ))
+
     def _on_timeout(self) -> None:
         if self._done:
             return
         hostname = self.config.get('hostname')
-        if self._lookup:
-            self._lookup.abort()
+        if self._proc and self._proc.state() != QProcess.ProcessState.NotRunning:
+            self._proc.kill()
         message = f"DNS check FAILED: Timed out resolving {hostname}"
         logger.error(message)
         self._finish(AssertResult(
