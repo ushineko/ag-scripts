@@ -1,8 +1,8 @@
 # display-mirror-toggle
 
-Toggle a KDE Plasma 6 / Wayland display mirror relationship between two outputs on or off, disabling/enabling the source output in the same atomic kscreen-doctor call.
+Toggle a KDE Plasma 6 / Wayland display mirror relationship between two outputs on or off, disabling/enabling the source output in the same atomic kscreen-doctor call. Ships with a CLI for hotkey binding and a system-tray app for visual state + configuration.
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 
 ## Table of Contents
 
@@ -10,6 +10,8 @@ Toggle a KDE Plasma 6 / Wayland display mirror relationship between two outputs 
 - [Problem](#problem)
 - [Installation](#installation)
 - [Usage](#usage)
+  - [CLI](#cli)
+  - [Tray application](#tray-application)
 - [Options](#options)
 - [Examples](#examples)
 - [Use Case: OLED Pixel-Clean Workaround](#use-case-oled-pixel-clean-workaround)
@@ -18,12 +20,14 @@ Toggle a KDE Plasma 6 / Wayland display mirror relationship between two outputs 
 
 ## Overview
 
-This is a thin wrapper around `kscreen-doctor` that handles the two gotchas that bit during manual debugging:
+The CLI is a thin wrapper around `kscreen-doctor` that handles the two gotchas that bit during manual debugging:
 
 - The setter verb is `mirror`, not `replicate` or `replication`, despite `kscreen-doctor -o` displaying the field as "replication source".
 - Disabling the source while the replica still points at it fails with a `Position of enabled output ... is negative` error because KDE recomputes the replica's geometry from the now-disabled source. The script always pairs the verbs in one atomic call so KDE validates the final state.
 
-The script also auto-detects current state, so the default (no-arg) invocation is a clean toggle suitable for binding to a hotkey.
+The CLI auto-detects current state, so the default (no-arg) invocation is a clean toggle suitable for binding to a hotkey.
+
+The tray app (added in v1.1) is a PyQt6 system-tray frontend that shells out to the CLI. It shows the live mirror state, exposes Toggle / Enable / Disable / Settings from the context menu, and registers a global hotkey via KDE's KGlobalAccel D-Bus interface (same approach as [vscode-launcher](../vscode-launcher/)).
 
 ## Problem
 
@@ -50,15 +54,64 @@ Easy to get wrong twice in a row. This utility encapsulates the working command 
 ./install.sh
 ```
 
-Creates a symlink at `~/bin/display-mirror-toggle`.
+Installs:
+
+- `~/bin/display-mirror-toggle` — CLI symlink
+- `~/.local/bin/display-mirror-tray` — tray launcher symlink
+- `~/.local/share/applications/display-mirror-toggle.desktop` — application menu entry
+- `~/.config/autostart/display-mirror-toggle.desktop` — autostart entry (tray launches at login)
+
+The tray app needs PyQt6:
+
+```bash
+sudo pacman -S python-pyqt6   # Arch / CachyOS
+```
 
 ## Usage
+
+### CLI
 
 ```bash
 display-mirror-toggle [OPTIONS]
 ```
 
-With no mode flag, toggles between mirror-active and mirror-off states.
+With no mode flag, toggles between mirror-active and mirror-off states. Suitable for binding to a hotkey.
+
+### Tray application
+
+```bash
+display-mirror-tray
+```
+
+The tray icon reflects mirror state (themed icons fall back to generic display icons if the symbolic ones aren't in your theme). Left-click toggles the mirror; right-click opens the context menu:
+
+| Item | Action |
+|------|--------|
+| `Mirror: ON/OFF (...)` | Read-only status label |
+| `Toggle now` | Same as CLI default (toggle) |
+| `Enable mirror` | Same as CLI `--enable`. Disabled when already active. |
+| `Disable mirror` | Same as CLI `--disable`. Disabled when already inactive. |
+| `Settings…` | Edit source / replica connectors and the global hotkey |
+| `About` | Version and current configuration |
+| `Quit` | Exit the tray for this session (relaunch via the app menu or autostart at next login) |
+
+The Settings dialog accepts any Qt key sequence (e.g. `Meta+Alt+M`, `Ctrl+Shift+F12`). Clearing the field removes the binding. Hotkey changes apply live whenever KDE's KGlobalAccel D-Bus service is reachable; otherwise they are saved and applied on next launch.
+
+Config is persisted to `~/.config/display-mirror-toggle/config.json`:
+
+```json
+{
+  "version": "1.1.0",
+  "source": "HDMI-A-1",
+  "replica": "DP-3",
+  "global_hotkey": "Meta+Alt+M",
+  "poll_interval_seconds": 5
+}
+```
+
+The tray polls the engine every `poll_interval_seconds` to keep the icon and tooltip in sync if state changes from outside (e.g. another tool runs `kscreen-doctor`).
+
+Only one tray instance runs at a time — re-running `display-mirror-tray` while one is already active shows a notification balloon instead of starting a duplicate.
 
 ## Options
 
@@ -113,7 +166,9 @@ display-mirror-toggle --enable
 display-mirror-toggle --source HDMI-A-2 --replica DP-1
 ```
 
-**Bind to a KDE custom shortcut:** add `~/bin/display-mirror-toggle` as a custom shortcut command in System Settings → Shortcuts → Custom Shortcuts.
+**Bind via the tray:** open the tray context menu → `Settings…` → record a key sequence. The binding is registered with KGlobalAccel and applies immediately.
+
+**Bind manually (CLI only, no tray):** add `~/bin/display-mirror-toggle` as a custom shortcut command in System Settings → Shortcuts → Custom Shortcuts.
 
 ## Use Case: OLED Pixel-Clean Workaround
 
@@ -127,7 +182,19 @@ When the mirror isn't needed (sitting at the desk, no remote streaming planned),
 ./uninstall.sh
 ```
 
+Removes both binaries' symlinks, the application/autostart `.desktop` entries, and stops any running tray instance. Pass `--purge-config` to also remove `~/.config/display-mirror-toggle/`.
+
 ## Changelog
+
+### v1.1.0
+- Add `display-mirror-tray` system-tray frontend (PyQt6)
+- Tray icon reflects live mirror state; left-click toggles
+- Settings dialog for source/replica connectors and global hotkey
+- Global hotkey registered via KGlobalAccel D-Bus (KDE Plasma 6)
+- Persistent JSON config at `~/.config/display-mirror-toggle/config.json`
+- Single-instance guard via QLocalSocket
+- Installer adds applications menu entry and autostart
+- Uninstaller cleans tray artifacts and optionally purges config
 
 ### v1.0.0
 - Initial release

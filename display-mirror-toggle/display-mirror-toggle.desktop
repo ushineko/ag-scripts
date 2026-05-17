@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Display Mirror Toggle
+GenericName=Display Mirror
+Comment=Toggle a KDE Plasma display mirror from the system tray
+Exec=/usr/bin/python3 /home/nverenin/git/ag-scripts/display-mirror-toggle/display-mirror-tray.py
+Icon=video-display
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;
+Keywords=display;mirror;monitor;kscreen;wayland;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
