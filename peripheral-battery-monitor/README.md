@@ -1,7 +1,7 @@
 # Peripheral Battery Monitor
-Version 1.5.6
+Version 1.6.0
 
-A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, plus optional Claude Code API usage tracking.
+A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
 ![Peripheral Battery Monitor](assets/screenshot.png)
 
@@ -10,6 +10,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Manual Usage](#manual-usage)
+- [Bandwidth Monitoring](#bandwidth-monitoring)
 - [Logging](#logging)
 - [Changelog](#changelog)
 
@@ -22,6 +23,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - **Arctis Headsets**: Uses `headsetcontrol` to fetch battery levels.
 - **AirPods Support**: Advanced BLE scanning to fetch granular battery levels for Left, Right, and Case. Supports disconnected monitoring. Now with fallback logic and Case display!
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
+- **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Auto-Remember**: KWin remembers the window position and screen between sessions.
@@ -53,12 +55,55 @@ python3 peripheral-battery.py
 python3 peripheral-battery.py --debug
 ```
 
+## Bandwidth Monitoring
+
+The bandwidth section sits between the battery grid and the Claude Code section. It is enabled by default but shows no rows until you add at least one interface.
+
+### Configuring interfaces
+
+Right-click the widget → **Bandwidth** → **Add Interface…** and enter the interface name as it appears in `/proc/net/dev` (e.g., `tailscale0`, `eno2`, `wg0`, `virbr0`). The list is persisted to `~/.config/peripheral-battery-monitor.json` under `bandwidth_interfaces`.
+
+Each row shows:
+
+- The interface name (with `→ exit: <hostname>` appended when the interface is a Tailscale interface routing through an exit node).
+- The current down / up rate, refreshed every 2 seconds (e.g., `↓ 1.2 MiB/s  ↑ 50 KiB/s`).
+- The cumulative down / up totals since the last reset (e.g., `Σ ↓ 1.5 GiB  ↑ 200 MiB`).
+
+### Data sources
+
+- **Byte counters**: read directly from `/proc/net/dev` (single open / read / close per 2-second tick, no subprocess).
+- **Tailscale metadata**: when at least one configured interface name starts with `tailscale`, the section calls `tailscale status --json` at most once per minute to retrieve the current exit node hostname and backend state. Failures (missing binary, non-zero exit, parse error) degrade gracefully — the byte counters keep working, only the exit-node label goes blank.
+
+The data layer (`bandwidth_reader.py`) is also runnable as a CLI for debugging:
+
+```bash
+python3 bandwidth_reader.py --json --tailscale-meta tailscale0 eno2
+```
+
+### Cumulative totals
+
+Cumulative totals are computed by summing positive deltas across successive samples and are persisted to settings every ~30 seconds. When a kernel counter goes backwards (interface re-creation, reboot), the section detects the regression and re-anchors the baseline without subtracting from the cumulative — so totals only ever grow until you reset them.
+
+To reset, right-click → **Bandwidth** → **`<iface>`** → **Reset cumulative**. To remove an interface entirely, use **Remove** in the same submenu.
+
+### Hiding the section
+
+Toggle visibility via **Bandwidth** → **Show Bandwidth Section**. When hidden, the polling timer stops, so a hidden section has no runtime cost.
+
 ## Logging
 Logs are automatically saved in JSON format for debugging:
 - **Location**: `~/.local/state/peripheral-battery-monitor/peripheral_battery.log`
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.6.0
+
+- Add configurable bandwidth section between the battery grid and the Claude section. Shows real-time and cumulative rx/tx for an arbitrary list of interfaces.
+- `/proc/net/dev` is the primary source; `tailscale status --json` is consulted only as a metadata enrichment (current exit node hostname, backend state) and is rate-limited to at most one call per minute.
+- Cumulative totals persist across app restarts in `~/.config/peripheral-battery-monitor.json` and can be reset per-interface from the context menu.
+- Counter wrap / interface re-creation is detected and re-anchored without producing negative rates or cumulative regressions.
+- Bandwidth section is hideable via the **Bandwidth → Show Bandwidth Section** menu; when hidden the polling timer stops.
 
 ### v1.5.6
 - Weekly quota label (bottom-right of Claude section) now shows days remaining in the period, e.g. `7d: 25% (5d left)`. Sub-day shows `<1d left`; missing/past timestamps render the original form.

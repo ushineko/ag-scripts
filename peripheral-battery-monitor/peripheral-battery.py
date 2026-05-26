@@ -14,17 +14,18 @@ from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import (
     QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QProgressBar, QPushButton
+    QFrame, QProgressBar, QPushButton, QInputDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
 import battery_reader
+from bandwidth_section import BandwidthSection
 import structlog
 import logging.config
 import logging
 
-__version__ = "1.5.6"
+__version__ = "1.6.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -433,6 +434,9 @@ class PeripheralMonitor(QWidget):
             "font_scale": 1.0,
             "claude_section_enabled": True,
             "claude_activity_interval": 2,  # minutes (1-5)
+            "bandwidth_section_enabled": True,
+            "bandwidth_interfaces": [],
+            "bandwidth_cumulative": {},
         }
         if os.path.exists(CONFIG_PATH):
             try:
@@ -469,7 +473,13 @@ class PeripheralMonitor(QWidget):
         # Container Frame - This is what we style and what the user sees
         self.container = QFrame(self)
         self.container.setObjectName("MainContainer")
-        
+        # Expand horizontally so the battery frame matches the width of any
+        # wider sibling section (bandwidth / Claude) instead of leaving a
+        # transparent gap on the sides when the window grows.
+        self.container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+
         # Layout inside the container - Grid 2x2
         self.grid_layout = QGridLayout(self.container)
         self.grid_layout.setContentsMargins(15, 12, 15, 12)
@@ -489,6 +499,21 @@ class PeripheralMonitor(QWidget):
         self.grid_layout.addLayout(self.airpods_ui['layout'], 1, 1)
 
         main_layout.addWidget(self.container)
+
+        # Bandwidth Section (between battery grid and Claude section).
+        # Always constructed so it can be toggled at runtime; visibility honored below.
+        self.bandwidth_section = BandwidthSection(
+            initial_settings=self.settings,
+            on_settings_changed=self._on_bandwidth_settings_changed,
+            parent=self,
+        )
+        self.bandwidth_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        main_layout.addWidget(self.bandwidth_section)
+        self.bandwidth_section.set_visible(
+            self.settings.get("bandwidth_section_enabled", True)
+        )
 
         # Claude Code Section (conditionally shown)
         self.claude_section_visible = False
@@ -559,6 +584,9 @@ class PeripheralMonitor(QWidget):
         """Create the Claude Code usage stats section."""
         self.claude_frame = QFrame(self)
         self.claude_frame.setObjectName("ClaudeSection")
+        self.claude_frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
 
         claude_layout = QVBoxLayout(self.claude_frame)
         claude_layout.setContentsMargins(15, 8, 15, 10)
@@ -705,6 +733,9 @@ class PeripheralMonitor(QWidget):
             }}
         """)
 
+        if hasattr(self, "bandwidth_section") and self.bandwidth_section is not None:
+            self.bandwidth_section.update_style(alpha, scale)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.windowHandle():
@@ -795,6 +826,35 @@ class PeripheralMonitor(QWidget):
 
         contextMenu.addSeparator()
 
+        # Bandwidth submenu
+        bandwidthMenu = contextMenu.addMenu("Bandwidth")
+        toggleBwAct = QAction("Show Bandwidth Section", self, checkable=True)
+        toggleBwAct.setChecked(self.settings.get("bandwidth_section_enabled", True))
+        toggleBwAct.triggered.connect(self.toggle_bandwidth_section)
+        bandwidthMenu.addAction(toggleBwAct)
+
+        addIfaceAct = QAction("Add Interface…", self)
+        addIfaceAct.triggered.connect(self._prompt_add_bandwidth_interface)
+        bandwidthMenu.addAction(addIfaceAct)
+
+        current_ifaces = self.bandwidth_section.current_interfaces()
+        if current_ifaces:
+            bandwidthMenu.addSeparator()
+            for iface in current_ifaces:
+                ifaceMenu = bandwidthMenu.addMenu(iface)
+                removeAct = QAction("Remove", self)
+                removeAct.triggered.connect(
+                    lambda checked=False, n=iface: self._remove_bandwidth_interface(n)
+                )
+                ifaceMenu.addAction(removeAct)
+                resetAct = QAction("Reset cumulative", self)
+                resetAct.triggered.connect(
+                    lambda checked=False, n=iface: self.bandwidth_section.reset_cumulative(n)
+                )
+                ifaceMenu.addAction(resetAct)
+
+        contextMenu.addSeparator()
+
         refreshAct = QAction("Refresh Now", self)
         refreshAct.triggered.connect(self._manual_refresh)
         contextMenu.addAction(refreshAct)
@@ -822,6 +882,35 @@ class PeripheralMonitor(QWidget):
         self.settings["claude_activity_interval"] = minutes
         self.save_settings()
         self.activity_timer.setInterval(minutes * 60000)
+
+    def toggle_bandwidth_section(self, checked):
+        """Toggle the bandwidth section visibility from the context menu."""
+        self.settings["bandwidth_section_enabled"] = checked
+        self.bandwidth_section.set_visible(checked)
+        self.save_settings()
+        self.adjustSize()
+
+    def _prompt_add_bandwidth_interface(self):
+        """Ask the user for an interface name and add it to the bandwidth section."""
+        name, ok = QInputDialog.getText(
+            self,
+            "Add Interface",
+            "Interface name (e.g., tailscale0, eno2, wg0):",
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+        self.bandwidth_section.add_interface(name)
+
+    def _remove_bandwidth_interface(self, name: str):
+        self.bandwidth_section.remove_interface(name)
+
+    def _on_bandwidth_settings_changed(self, partial: dict):
+        """Persist bandwidth state coming from BandwidthSection."""
+        self.settings.update(partial)
+        self.save_settings()
 
     def toggle_claude_section(self, checked):
         """Toggle Claude Code section visibility."""

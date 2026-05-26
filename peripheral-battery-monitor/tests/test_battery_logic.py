@@ -27,6 +27,11 @@ class MockQWidget:
     def setStyleSheet(self, *args): pass
     def setToolTip(self, *args): pass
     def windowHandle(self): return None
+    def setVisible(self, *args): pass
+    def setParent(self, *args): pass
+    def deleteLater(self): pass
+    def isVisible(self): return True
+    def setSizePolicy(self, *args): pass
 
 class MockQFrame(MockQWidget):
     def setObjectName(self, name): pass
@@ -54,6 +59,13 @@ class MockQLabel(MockQWidget):
     def setPixmap(self, pixmap): pass
     def setText(self, text): pass
     def hide(self): pass
+    def setWordWrap(self, wrap): pass
+
+
+class MockQInputDialog:
+    @staticmethod
+    def getText(*args, **kwargs):
+        return ("", False)
 
 class MockQAction:
     def __init__(self, *args, **kwargs): pass
@@ -86,11 +98,19 @@ mock_qt_widgets.QMenu = MagicMock
 mock_qt_widgets.QAction = MockQAction
 mock_qt_widgets.QActionGroup = MagicMock
 mock_qt_widgets.QProgressBar = MockQProgressBar
+mock_qt_widgets.QInputDialog = MockQInputDialog
+# QPushButton is left as the auto-MagicMock attribute on mock_qt_widgets so
+# its instances accept arbitrary method calls (matches the pre-bandwidth pattern).
 
 sys.modules['PyQt6'] = MagicMock()
 sys.modules['PyQt6.QtWidgets'] = mock_qt_widgets
 sys.modules['PyQt6.QtCore'] = MagicMock()
 sys.modules['PyQt6.QtGui'] = MagicMock()
+
+# If bandwidth_section was already imported by another test file (which imports
+# real PyQt6), drop its cached reference so peripheral-battery.py re-imports it
+# under the mocked Qt namespace below.
+sys.modules.pop('bandwidth_section', None)
 
 # 3. Import BatteryInfo (real class)
 import battery_reader
