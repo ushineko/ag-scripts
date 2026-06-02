@@ -29,6 +29,7 @@ keeps you marked active.
 - [Known limitations](#known-limitations)
 - [Architecture](#architecture)
 - [Development](#development)
+- [Changelog](#changelog)
 
 ## Why
 
@@ -217,7 +218,10 @@ journalctl --user -f | grep slack-focus-monitor
 **Slack window class is not "Slack" on my system.** Some Slack distributions
 (Flatpak, Snap, dev builds) use different `WM_CLASS` values. Inspect the
 actual class with the prototype listener (`prototypes/focus_listener.py`),
-then set `slack_resource_class` in the config.
+then set `slack_resource_class` in the config. Case differences are handled
+automatically — the official client has reported its class as both `Slack`
+(older builds) and `slack` (4.49+), and both match without configuration (see
+0.1.8 in the changelog).
 
 **Stuck appearing as away after the utility crashed.** The custom status
 auto-clears at `status_safety_buffer_seconds` (default 1h). Presence does
@@ -343,3 +347,13 @@ runs at a time (second instance fails to register and exits cleanly).
 utility. Useful for debugging if the production code stops working —
 prototypes A and B isolate the focus-detection and Slack-API layers
 respectively.
+
+## Changelog
+
+### 0.1.8
+
+- Fixed Slack window no longer being detected after the official client
+  changed its `WM_CLASS` from `Slack` to lowercase `slack` (4.49+). Window
+  matching in the KWin script and the state machine is now case-insensitive,
+  so both spellings match without configuration. Reinstall the KWin script
+  (`kwin-script/install.sh`) after upgrading.

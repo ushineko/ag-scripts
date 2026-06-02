@@ -113,7 +113,10 @@ class FocusStateMachine:
         )
 
     def on_window_activated(self, resource_class: str) -> TransitionResult:
-        is_slack = (resource_class == self._config.slack_resource_class)
+        # Case-insensitive: the KWin script emits the configured sentinel,
+        # but the official client has used both "Slack" and "slack" as its
+        # WM_CLASS across versions, so tolerate case drift on either side.
+        is_slack = (resource_class.lower() == self._config.slack_resource_class.lower())
         if is_slack:
             return self._handle_slack_focus()
         return self._handle_other_focus()

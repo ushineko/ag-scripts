@@ -19,11 +19,16 @@
 //
 // SLACK_CLASS is hardcoded; if your Slack distribution (Flatpak, Snap,
 // dev build) uses a different resourceClass, edit it here AND in the
-// tray app's slack_resource_class config.
+// tray app's slack_resource_class config. Window matching is
+// case-insensitive: the official client has reported its WM_CLASS as both
+// "Slack" (older builds) and "slack" (4.49+), and we tolerate either. The
+// constant below is still the sentinel emitted to the tray app on the
+// reachable path, so it must stay equal to slack_resource_class.
 //
 // Verified on Plasma 6 / Wayland.
 
 var SLACK_CLASS = "Slack";
+var SLACK_CLASS_LC = SLACK_CLASS.toLowerCase();
 var BUS_NAME = "io.github.ushineko.SlackPresenceToggle";
 var OBJ_PATH = "/FocusMonitor";
 var IFACE    = "io.github.ushineko.SlackPresenceToggle.FocusMonitor";
@@ -71,7 +76,7 @@ function isSlackReachable() {
     for (var i = 0; i < stack.length; i++) {
         var w = stack[i];
         if (!w || !w.resourceClass) continue;
-        if (w.resourceClass.toString() !== SLACK_CLASS) continue;
+        if (w.resourceClass.toString().toLowerCase() !== SLACK_CLASS_LC) continue;
         if (!isVisibleNormalWindow(w)) continue;
         slackEntries.push({ w: w, idx: i, geom: w.frameGeometry });
     }
