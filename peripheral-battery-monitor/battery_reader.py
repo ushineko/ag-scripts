@@ -79,6 +79,18 @@ def _close_cached_receiver():
             pass
         _CACHED_RECEIVER = None
 
+def _name_is_blank(info: Optional["BatteryInfo"]) -> bool:
+    """True if we got battery data but the device name failed to resolve.
+
+    Solaar lazily resolves and caches dev.name on the device object. If the
+    receiver isn't fully enumerated yet (common at desktop startup just after
+    reboot), the first read can latch a blank name that never recovers until
+    a fresh device object is built. Detecting this lets us invalidate the
+    cache and re-resolve on the next poll.
+    """
+    return bool(info) and not (info.device_name or "").strip()
+
+
 def get_mouse_battery() -> Optional[BatteryInfo]:
     """
     Attempts to retrieve battery information for the first found Logitech mouse.
@@ -89,7 +101,14 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
     if _CACHED_MOUSE:
         try:
              log.debug("using_cached_mouse")
-             return _extract_battery(_CACHED_MOUSE)
+             info = _extract_battery(_CACHED_MOUSE)
+             if _name_is_blank(info):
+                 # Stale object latched a blank name; drop it so the next
+                 # poll rebuilds a fresh device and re-resolves the name.
+                 log.info("cached_mouse_blank_name_invalidating")
+                 _CACHED_MOUSE = None
+                 _close_cached_receiver()
+             return info
         except Exception as e:
              log.warning("cached_mouse_failed_rescanning", error=str(e))
              _CACHED_MOUSE = None
@@ -125,14 +144,23 @@ def get_mouse_battery() -> Optional[BatteryInfo]:
                                 _CACHED_MOUSE = paired
                                 _CACHED_RECEIVER = rec
                                 log.info("new_mouse_cached", device=paired.name)
-                                return _extract_battery(paired)
+                                info = _extract_battery(paired)
+                                if _name_is_blank(info):
+                                    log.info("new_mouse_blank_name_not_caching")
+                                    _CACHED_MOUSE = None
+                                    _close_cached_receiver()
+                                return info
                         # No mouse found on this receiver, close it
                         rec.close()
 
                 if candidate and candidate.kind == 'mouse':
                     _CACHED_MOUSE = candidate
                     log.info("new_mouse_cached", device=candidate.name)
-                    return _extract_battery(candidate)
+                    info = _extract_battery(candidate)
+                    if _name_is_blank(info):
+                        log.info("new_mouse_blank_name_not_caching")
+                        _CACHED_MOUSE = None
+                    return info
 
             except Exception:
                 continue
@@ -163,7 +191,7 @@ def _extract_battery(dev) -> Optional[BatteryInfo]:
                 level=int(bat.level),
                 status=str(bat.status),
                 voltage=bat.voltage,
-                device_name=dev.name
+                device_name=(dev.name or "").strip()
             )
     except Exception as e:
         log.debug("battery_extraction_failed", error=str(e))

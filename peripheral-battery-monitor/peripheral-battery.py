@@ -25,7 +25,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -1307,8 +1307,10 @@ class PeripheralMonitor(QWidget):
                     color = "#ff9800" if not is_offline else "#ef6c00"
                 val_text = f'<span style="color: {color};">{level}%</span>'
             
-            # Use device name if available, otherwise fallback
-            disp_name = info.device_name if info.device_name else fallback_name
+            # Use device name if available, otherwise fallback. Treat
+            # blank/whitespace-only names as missing so a partial read at
+            # startup never renders an empty title.
+            disp_name = (info.device_name or "").strip() or fallback_name
             # Truncate if too long?
             if len(disp_name) > 20: 
                 disp_name = disp_name[:18] + ".."

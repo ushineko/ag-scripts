@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.6.0
+Version 1.6.1
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -96,6 +96,10 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.6.1
+
+- Fix blank mouse title after a reboot. At desktop startup the Logitech receiver may not be fully enumerated, so solaar can return an empty `dev.name` and latch it on the cached device object — the title stayed blank until the monitor was restarted. The cached device is now evicted when its name resolves blank, so the next poll rebuilds a fresh object and re-resolves the name. Device names are stripped, and a blank/whitespace name falls back to the default label instead of rendering an empty title.
 
 ### v1.6.0
 

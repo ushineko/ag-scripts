@@ -204,6 +204,94 @@ class TestBatteryLogic(unittest.TestCase):
         self.assertIn("C:50%", call_args)
         self.assertIn("#4caf50", call_args)
 
+    def test_blank_device_name_uses_fallback(self):
+        """Behavioral contract: a whitespace-only device name renders the fallback label,
+        never an empty title (guards against the startup-race blank title)."""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+
+        lbl_name = MockQLabel()
+        lbl_name.setText = MagicMock()
+        lbl_val = MockQLabel()
+        lbl_val.setText = MagicMock()
+        lbl_stat = MockQLabel()
+        lbl_stat.setText = MagicMock()
+        lbl_icon = MockQLabel()
+
+        info = BatteryInfo(level=85, status="Discharging", voltage=None, device_name="   ")
+        monitor._update_label_block(lbl_name, lbl_val, lbl_stat, lbl_icon, info, None, "Mouse")
+
+        lbl_name.setText.assert_called_with("Mouse")
+
+
+class _FakeBattery:
+    def __init__(self, level, status, voltage=None):
+        self.level = level
+        self.status = status
+        self.voltage = voltage
+
+
+class _FakeMouse:
+    """Minimal stand-in for a solaar device object."""
+    def __init__(self, name, online=True, battery=None):
+        self.name = name
+        self.online = online
+        self.kind = 'mouse'
+        self._battery = battery if battery is not None else _FakeBattery(85, "Discharging")
+
+    def ping(self):
+        pass
+
+    def battery(self):
+        return self._battery
+
+
+class TestMouseBlankName(unittest.TestCase):
+    """Startup race: solaar can latch a blank dev.name until a fresh object is built."""
+
+    def setUp(self):
+        battery_reader._CACHED_MOUSE = None
+        battery_reader._CACHED_RECEIVER = None
+
+    def tearDown(self):
+        battery_reader._CACHED_MOUSE = None
+        battery_reader._CACHED_RECEIVER = None
+
+    def test_extract_battery_strips_whitespace_name(self):
+        """Behavioral contract: a padded name is normalized to a clean string."""
+        dev = _FakeMouse(name="  G502X PLUS  ")
+        info = battery_reader._extract_battery(dev)
+        self.assertIsNotNone(info)
+        self.assertEqual(info.device_name, "G502X PLUS")
+        self.assertEqual(info.level, 85)
+
+    def test_extract_battery_blank_name_becomes_empty(self):
+        """Behavioral contract: a whitespace-only name normalizes to empty (UI will fall back)."""
+        dev = _FakeMouse(name="   ")
+        info = battery_reader._extract_battery(dev)
+        self.assertIsNotNone(info)
+        self.assertEqual(info.device_name, "")
+
+    def test_cached_mouse_blank_name_invalidates_cache(self):
+        """Behavioral contract: a cached device that returns a blank name is dropped so
+        the next poll rebuilds a fresh object instead of latching the blank name forever."""
+        battery_reader._CACHED_MOUSE = _FakeMouse(name="")
+        info = battery_reader.get_mouse_battery()
+        # We still return this poll's battery data...
+        self.assertIsNotNone(info)
+        self.assertEqual(info.level, 85)
+        # ...but the stale object is evicted.
+        self.assertIsNone(battery_reader._CACHED_MOUSE)
+
+    def test_cached_mouse_good_name_keeps_cache(self):
+        """Behavioral contract: a cached device with a valid name is retained."""
+        good = _FakeMouse(name="G502X PLUS")
+        battery_reader._CACHED_MOUSE = good
+        info = battery_reader.get_mouse_battery()
+        self.assertEqual(info.device_name, "G502X PLUS")
+        self.assertIs(battery_reader._CACHED_MOUSE, good)
+
+
 class TestKeyboardBatteryPriority(unittest.TestCase):
     """Test that Bluetooth battery is prioritized over Wired status"""
 
