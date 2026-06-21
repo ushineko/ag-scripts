@@ -66,6 +66,7 @@ line so repeated cycles don't accumulate blanks in `~/.zshrc`.
 - [x] App icon is a real `.icns` generated from the SVG — 1024px `ic12` icon, valid per `sips`
 - [x] `install.sh` copies the `.app` into `/Applications` and points the LaunchAgent at it — verified live (pid running from the bundle binary)
 - [x] The app is discoverable in Spotlight / Finder — `mdfind` returns `/Applications/vscode-launcher.app`
+- [x] Relaunching from Spotlight/Finder surfaces the main window (v3.5.1) — macOS has no D-Bus to signal the running instance, so the app shows its window on activation; verified the handler fires on `open -a` against a hidden running daemon
 - [x] `uninstall.sh` removes the `.app` and stops the bundle process — verified live; `/Applications` entry and process gone
 - [x] Repeated install/uninstall leaves `~/.zshrc` byte-identical to pristine — verified via round-trip diff
 - [x] Build artifacts (`build/`, `dist/`, `.icns`) are gitignored; the `.spec` is committed

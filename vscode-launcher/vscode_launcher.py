@@ -68,7 +68,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.5"
+__version__ = "3.5.1"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -1638,6 +1638,36 @@ def main() -> int:
             file=sys.stderr,
         )
     guard.export(window, window._show_main_window)
+
+    if IS_MACOS:
+        # macOS has no D-Bus session bus, so the Linux "signal the running
+        # daemon to surface its window" path (above) can't fire — and
+        # LaunchServices turns a Spotlight/Finder relaunch of the
+        # already-running app into an *activation* of this process, not a new
+        # one. Without handling that, relaunching a hidden menu-bar agent does
+        # nothing visible. So: show the main window whenever the app becomes
+        # active after startup. A short settle delay before arming suppresses
+        # the activation that login autostart (`--tray`) may emit, keeping the
+        # daemon hidden at login while still opening on a real user relaunch.
+        _macos_activation = {"armed": False}
+
+        def _on_app_state(state: Qt.ApplicationState) -> None:
+            if state != Qt.ApplicationState.ApplicationActive:
+                return
+            if not _macos_activation.get("armed"):
+                return
+            # Only surface when hidden, so we don't re-show (and fight a
+            # menu-bar click that's trying to interact with an already-open
+            # window).
+            if window.isVisible() and not window.isMinimized():
+                return
+            _dlog("macOS app activated -> showing main window")
+            window._show_main_window()
+
+        app.applicationStateChanged.connect(_on_app_state)
+        QTimer.singleShot(
+            1500, lambda: _macos_activation.__setitem__("armed", True)
+        )
 
     if not autostart_mode:
         window._show_main_window()

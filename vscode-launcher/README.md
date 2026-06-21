@@ -305,6 +305,10 @@ On both platforms you are prompted before the config directory at `~/.config/vsc
 
 ## Changelog
 
+### v3.5.1
+
+- Fix (macOS): relaunching the app from Spotlight/Finder when the menu-bar agent was already running did nothing. macOS has no D-Bus to signal the running instance (the Linux mechanism), and LaunchServices delivers a relaunch as an *activation* rather than a new process. The app now surfaces its main window on activation (after a startup settle delay so login autostart stays hidden), so opening it from Spotlight reliably shows the window even if the menu-bar icon is hidden behind the notch.
+
 ### v3.5
 
 - macOS `.app` bundle (spec 014). vscode-launcher now installs as a native `/Applications/vscode-launcher.app` — discoverable in Finder and Spotlight — instead of a bare CLI symlink. Built with PyInstaller following the clockwork-orange pattern:
