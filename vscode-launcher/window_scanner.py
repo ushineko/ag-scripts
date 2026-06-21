@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -71,14 +72,22 @@ def _build_action_script(label: str, action: str) -> str:
     ) % (label_literal, action_js, ACTION_LOG_PREFIX)
 
 
+# VSCode separates the title segments (`<editor> <sep> <project>`) with a
+# dash flanked by spaces. The glyph varies by platform / version: Linux and
+# Windows use a hyphen-minus (" - "), macOS renders an em-dash (" — "); an
+# en-dash (" – ") shows up too. Split on any of them so running-state matching
+# works cross-platform.
+_CAPTION_SEPARATORS = re.compile(r" [-–—] ")
+
+
 def caption_matches_label(caption: str, label: str) -> bool:
-    """Return True if `label` appears as a whole ` - `-separated token in a
+    """Return True if `label` appears as a whole separator-delimited token in a
     VSCode window caption. Token-split instead of substring so that e.g.
     `aiq-ralph` doesn't spuriously match an `aiq-ralphbox` window's caption.
     """
     if not label or not caption:
         return False
-    return label in caption.split(" - ")
+    return label in _CAPTION_SEPARATORS.split(caption)
 
 
 def running_labels(captions: Iterable[str], labels: Iterable[str]) -> set[str]:

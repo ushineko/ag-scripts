@@ -305,6 +305,11 @@ On both platforms you are prompted before the config directory at `~/.config/vsc
 
 ## Changelog
 
+### v3.5.2
+
+- Fix (macOS): running VSCode windows weren't detected (every workspace showed `Start`, never `● running`). The IPC scan works on macOS, but the caption matcher only split window titles on a hyphen (`" - "`), while macOS VSCode renders the separator as an em-dash (`" — "`). The matcher now splits on hyphen, en-dash, and em-dash, so running-state detection works cross-platform.
+- Fix: the Workspace name/path column was cut off. The default window was 700px wide, but the five fixed columns total 570px, collapsing the stretchy Workspace column to ~130px. The default window is now 1180px with a 900px minimum, leaving room for the name/path.
+
 ### v3.5.1
 
 - Fix (macOS): relaunching the app from Spotlight/Finder when the menu-bar agent was already running did nothing. macOS has no D-Bus to signal the running instance (the Linux mechanism), and LaunchServices delivers a relaunch as an *activation* rather than a new process. The app now surfaces its main window on activation (after a startup settle delay so login autostart stays hidden), so opening it from Spotlight reliably shows the window even if the menu-bar icon is hidden behind the notch.

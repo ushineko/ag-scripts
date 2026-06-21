@@ -68,7 +68,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.5.1"
+__version__ = "3.5.2"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -89,7 +89,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "version": CONFIG_VERSION,
     "tmux_mappings": {},
     "hidden_paths": [],
-    "window_geometry": {"x": 100, "y": 100, "w": 700, "h": 500},
+    # Wide enough that the stretchy Workspace column has room next to the
+    # five fixed columns (check 40 + status 90 + launched 100 + tmux 160 +
+    # actions 180 = 570px); a 700px default collapsed it to ~130px and
+    # truncated the name/path.
+    "window_geometry": {"x": 100, "y": 100, "w": 1180, "h": 600},
     "global_hotkey": DEFAULT_HOTKEY,
     "popup_commit_delay_ms": DEFAULT_POPUP_COMMIT_DELAY_MS,
 }
@@ -839,9 +843,12 @@ class MainWindow(QMainWindow):
         self.setGeometry(
             int(geom.get("x", 100)),
             int(geom.get("y", 100)),
-            int(geom.get("w", 700)),
-            int(geom.get("h", 500)),
+            int(geom.get("w", 1180)),
+            int(geom.get("h", 600)),
         )
+        # Keep the window wide enough that the Workspace column stays readable
+        # next to the 570px of fixed columns — below this it truncates.
+        self.setMinimumWidth(900)
 
         self.workspaces: list[Workspace] = []
         # Track whether tray-mode bring-up succeeded — main() reads this to

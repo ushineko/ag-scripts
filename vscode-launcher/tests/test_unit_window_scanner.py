@@ -58,6 +58,22 @@ class TestCaptionMatchesLabel:
         assert not caption_matches_label("", "ag-scripts")
         assert not caption_matches_label("ag-scripts - Visual Studio Code", "")
 
+    def test_macos_em_dash_separator(self):
+        # macOS VSCode renders the title separator as an em-dash, not a
+        # hyphen. Running-state detection must still match.
+        caption = "Continue macOS support f… — ag-scripts (Workspace)"
+        assert caption_matches_label(caption, "ag-scripts (Workspace)")
+        assert not caption_matches_label(caption, "ag-scripts")
+
+    def test_en_dash_separator(self):
+        assert caption_matches_label("file.py – myproj", "myproj")
+
+    def test_em_dash_prefix_not_matched(self):
+        # Token-split must still guard against prefix collisions with em-dash.
+        caption = "edit — aiq-ralphbox (Workspace)"
+        assert not caption_matches_label(caption, "aiq-ralph")
+        assert caption_matches_label(caption, "aiq-ralphbox (Workspace)")
+
     def test_label_appearing_in_filename_not_matched(self):
         caption = "ag-scripts-notes.txt - other-project - Visual Studio Code"
         assert not caption_matches_label(caption, "ag-scripts")
