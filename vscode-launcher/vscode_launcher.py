@@ -71,7 +71,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.5.6"
+__version__ = "3.5.7"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -419,8 +419,31 @@ class TmuxClient:
 # ---------------------------------------------------------------------------
 
 
-def build_code_command(workspace_path: str) -> list[str]:
-    return ["code", "--new-window", workspace_path]
+def resolve_code() -> str | None:
+    """Absolute path to the VSCode `code` CLI, or None if not found.
+
+    Checks `$PATH` first, then common install locations. The fallback matters
+    on macOS: the LaunchAgent that runs the tray daemon inherits launchd's
+    minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), which excludes
+    `/usr/local/bin` and `/opt/homebrew/bin` where `code` is symlinked — so a
+    bare `code` would silently fail to launch / activate windows from the
+    daemon even though it works from a shell.
+    """
+    found = shutil.which("code")
+    if found:
+        return found
+    for candidate in (
+        "/usr/local/bin/code",
+        "/opt/homebrew/bin/code",
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+    ):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def build_code_command(workspace_path: str, code: str = "code") -> list[str]:
+    return [code, "--new-window", workspace_path]
 
 
 class Launcher:
@@ -428,9 +451,10 @@ class Launcher:
         self.gather_cmd = gather_cmd
 
     def launch_workspace(self, workspace: Workspace) -> subprocess.Popen[bytes] | None:
-        if not shutil.which("code"):
+        code = resolve_code()
+        if not code:
             return None
-        cmd = build_code_command(workspace.path)
+        cmd = build_code_command(workspace.path, code)
         return subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -454,11 +478,12 @@ class Launcher:
 
         Returns False if the `code` CLI is missing.
         """
-        if not shutil.which("code"):
+        code = resolve_code()
+        if not code:
             return False
         try:
             subprocess.Popen(
-                ["code", workspace.path],
+                [code, workspace.path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
@@ -483,7 +508,7 @@ class Launcher:
         `open` can raise it. Walks up from the resolved symlink target until a
         `.app` directory is found (handles VSCode, Insiders, VSCodium —
         whatever `code` points to). None if not resolvable."""
-        code = shutil.which("code")
+        code = resolve_code()
         if not code:
             return None
         path = os.path.realpath(code)

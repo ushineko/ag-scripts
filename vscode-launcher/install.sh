@@ -137,6 +137,14 @@ if [[ "$IS_MACOS" -eq 1 ]]; then
         <string>$APP_BIN</string>
         <string>--tray</string>
     </array>
+    <!-- launchd's default PATH omits /usr/local/bin and /opt/homebrew/bin,
+         where the VSCode `code` CLI is symlinked. Without this, the daemon
+         can't launch or activate workspaces. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

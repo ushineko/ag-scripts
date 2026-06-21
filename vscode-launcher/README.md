@@ -306,6 +306,10 @@ On both platforms you are prompted before the config directory at `~/.config/vsc
 
 ## Changelog
 
+### v3.5.7
+
+- Fix (macOS): the menu-bar daemon couldn't launch **or** activate workspaces — the actual root cause behind "Activate does nothing" and silent launch failures. The LaunchAgent inherits launchd's minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which excludes `/usr/local/bin` where `code` is symlinked, so `code` resolved to nothing from the daemon (running-state detection still worked because it uses IPC, not `code`). Two fixes: `resolve_code()` now finds `code` by absolute path (PATH, then `/usr/local/bin`, `/opt/homebrew/bin`, the VSCode `.app`), and the generated LaunchAgent sets a `PATH` that includes those dirs.
+
 ### v3.5.6
 
 - Fix (macOS): activating a running workspace focused the right window inside VSCode but didn't bring VSCode to the foreground. The launcher runs as a background agent, and macOS won't let a background app raise another app, so `code <path>` couldn't pull VSCode forward. `focus_workspace` now also runs `open <VSCode.app>` (resolved from the `code` CLI symlink), which activates via LaunchServices from any context.

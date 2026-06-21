@@ -455,7 +455,7 @@ class TestBuildCodeCommand:
 class TestLauncher:
     def test_launch_workspace_no_code_binary(self):
         launcher = Launcher()
-        with patch("vscode_launcher.shutil.which", return_value=None):
+        with patch("vscode_launcher.resolve_code", return_value=None):
             result = launcher.launch_workspace(
                 Workspace(label="x", path="/tmp", tmux_session="s")
             )
@@ -464,13 +464,13 @@ class TestLauncher:
     def test_launch_workspace_spawns_subprocess(self):
         launcher = Launcher()
         ws = Workspace(label="x", path="/tmp/project", tmux_session="sess")
-        with patch("vscode_launcher.shutil.which", return_value="/usr/bin/code"), patch(
-            "vscode_launcher.subprocess.Popen"
-        ) as popen:
+        with patch(
+            "vscode_launcher.resolve_code", return_value="/usr/bin/code"
+        ), patch("vscode_launcher.subprocess.Popen") as popen:
             launcher.launch_workspace(ws)
         popen.assert_called_once()
         call_args = popen.call_args
-        assert call_args.args[0] == ["code", "--new-window", "/tmp/project"]
+        assert call_args.args[0] == ["/usr/bin/code", "--new-window", "/tmp/project"]
         assert call_args.kwargs["start_new_session"] is True
 
     def test_run_gather_missing_binary_returns_false(self):
