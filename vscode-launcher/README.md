@@ -306,6 +306,10 @@ On both platforms you are prompted before the config directory at `~/.config/vsc
 
 ## Changelog
 
+### v3.5.6
+
+- Fix (macOS): activating a running workspace focused the right window inside VSCode but didn't bring VSCode to the foreground. The launcher runs as a background agent, and macOS won't let a background app raise another app, so `code <path>` couldn't pull VSCode forward. `focus_workspace` now also runs `open <VSCode.app>` (resolved from the `code` CLI symlink), which activates via LaunchServices from any context.
+
 ### v3.5.5
 
 - Fix (macOS): invoking the popup hotkey also dragged the launcher's own window to the front. The "show window on app activation" handler (added for Spotlight relaunch) was firing when the popup grabbed focus. It's now suppressed while the popup is up / just after a hotkey press.

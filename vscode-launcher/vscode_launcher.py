@@ -71,7 +71,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.5.5"
+__version__ = "3.5.6"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -439,13 +439,20 @@ class Launcher:
         )
 
     def focus_workspace(self, workspace: Workspace) -> bool:
-        """Surface the already-open VSCode window for this workspace.
+        """Surface the already-open VSCode window for this workspace (macOS).
 
-        `code <path>` (note: NOT `--new-window`) tells the running VSCode to
-        focus the window already holding that folder / workspace file and
-        brings the app forward. This is the cross-platform stand-in for the
-        KWin "Activate" action, which is KDE-only — used on macOS where KWin
-        scripting isn't available. Returns False if the `code` CLI is missing.
+        Stand-in for the KDE-only KWin "Activate" action. Two steps:
+
+        1. `code <path>` (NOT `--new-window`) tells VSCode to focus the window
+           already holding that exact folder / workspace file. Matching the
+           open path means it focuses rather than opening a duplicate.
+        2. `open <VSCode.app>` raises VSCode to the foreground. Step 1 alone
+           isn't enough: the launcher runs as a background LSUIElement agent,
+           and macOS won't let a background app pull another app forward — so
+           `code` focuses the window *inside* VSCode but VSCode stays behind.
+           `open` activates via LaunchServices, which works from any context.
+
+        Returns False if the `code` CLI is missing.
         """
         if not shutil.which("code"):
             return False
@@ -456,9 +463,35 @@ class Launcher:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            return True
         except OSError:
             return False
+        app = self._vscode_app_path()
+        if app:
+            try:
+                subprocess.Popen(
+                    ["open", app],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                pass
+        return True
+
+    @staticmethod
+    def _vscode_app_path() -> str | None:
+        """Resolve the VSCode `.app` bundle from the `code` CLI symlink, so
+        `open` can raise it. Walks up from the resolved symlink target until a
+        `.app` directory is found (handles VSCode, Insiders, VSCodium —
+        whatever `code` points to). None if not resolvable."""
+        code = shutil.which("code")
+        if not code:
+            return None
+        path = os.path.realpath(code)
+        while path and path != "/":
+            if path.endswith(".app"):
+                return path
+            path = os.path.dirname(path)
+        return None
 
     def run_gather(self) -> bool:
         if not shutil.which(self.gather_cmd):
