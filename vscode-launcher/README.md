@@ -1,6 +1,6 @@
 # vscode-launcher
 
-Bulk-launch VSCode workspaces directly from VSCode's own **Recent** list, with automatic window placement and tmux session switching. Targets CachyOS / KDE Plasma 6 (Wayland).
+Bulk-launch VSCode workspaces directly from VSCode's own **Recent** list, with automatic window placement and tmux session switching. Primary target is CachyOS / KDE Plasma 6 (Wayland); macOS is supported as a roaming platform (CLI + menu bar, see [Platform support](#platform-support)).
 
 Solves four recurring pain points:
 
@@ -12,6 +12,7 @@ Solves four recurring pain points:
 ## Table of Contents
 
 - [Features](#features)
+- [Platform support](#platform-support)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -34,15 +35,31 @@ Solves four recurring pain points:
 - Installs a small zsh hook into `~/.zshrc` so the VSCode integrated terminal attaches to (or switches to) the correct pre-existing tmux session automatically.
 - Never creates, kills, or renames tmux sessions. The shared system tmux server is left alone.
 
+## Platform support
+
+Linux/KDE is the primary platform and gets the full feature set. macOS is supported as a roaming platform for when a Linux desktop isn't available — the core PyQt6 tray/menu-bar UI, recent-project discovery, project launching, the quick-launcher popup, and the tmux hook all work. Platform-specific paths and APIs are centralized in `platform_support.py`.
+
+| Capability | Linux/KDE | macOS |
+| ---------- | --------- | ----- |
+| Tray / menu-bar icon + menu | ✓ | ✓ (monochrome template icon, adapts to light/dark) |
+| Recent-project discovery | `~/.config/Code/...` (+ `~/.vscode-shared` on 1.119+) | `~/Library/Application Support/Code/...` (+ `~/.vscode-shared`) |
+| Launch / open project | ✓ | ✓ (`code` CLI) |
+| Quick-launcher popup + global hotkey | ✓ (KGlobalAccel) | ✓ popup; global hotkey via KGlobalAccel is KDE-only |
+| Running-state detection (IPC socket) | `$XDG_RUNTIME_DIR/vscode-*-main.sock` | `~/Library/Application Support/Code/*-main.sock` |
+| Launched column (process start time) | `/proc` | `psutil` (optional; shows `—` if absent) |
+| Autostart | XDG autostart `.desktop` | LaunchAgent plist |
+| Per-row Stop / Activate, auto window placement | ✓ (KWin) | not available (KDE/KWin-specific) |
+
 ## Requirements
 
-- KDE Plasma 6 (Wayland)
+- KDE Plasma 6 (Wayland) — primary platform; or macOS (roaming platform, see [Platform support](#platform-support))
 - Python 3 with PyQt6
-- VSCode (reads `~/.vscode-shared/sharedStorage/state.vscdb` on 1.119+, falling back to `~/.config/Code/User/globalStorage/state.vscdb` on older releases)
-- `code` (VSCode CLI) on `PATH`
-- `qdbus6` (optional — only needed for the per-row Stop / Activate buttons, which use KWin scripting)
+- VSCode. Reads `~/.vscode-shared/sharedStorage/state.vscdb` on 1.119+, falling back to per-profile `globalStorage/state.vscdb` (`~/.config/Code/User/...` on Linux, `~/Library/Application Support/Code/User/...` on macOS) on older releases
+- `code` (VSCode CLI) on `PATH`. On macOS, install it via VSCode's *Shell Command: Install 'code' command in PATH* — the installer warns if the `code` symlink has been hijacked by another editor
+- `qdbus6` (Linux only, optional — only needed for the per-row Stop / Activate buttons, which use KWin scripting)
+- `psutil` (macOS only, optional — powers the Launched column's per-window start time; the column shows `—` without it)
 - `tmux` (optional — only needed for session switching)
-- `vscode-gather` (optional — only needed for auto-placement / maximize)
+- `vscode-gather` (Linux only, optional — only needed for auto-placement / maximize)
 - zsh (the shell hook targets zsh; bash support could be added later)
 
 ## Installation
@@ -51,7 +68,9 @@ Solves four recurring pain points:
 ./install.sh
 ```
 
-This:
+`install.sh` detects the platform (`$OSTYPE`) and installs accordingly.
+
+**On Linux/KDE**, this:
 
 1. Symlinks `vscode_launcher.py` to `~/.local/bin/vscode-launcher`
 2. Symlinks `tmux_lookup.py` to `~/.local/bin/vscl-tmux-lookup` (used by the zsh hook)
@@ -60,7 +79,16 @@ This:
 5. Installs an XDG autostart entry at `~/.config/autostart/vscode-launcher.desktop` with `Exec=vscode-launcher --tray`. The tray daemon will start automatically on next login.
 6. Appends the tmux shell hook into `~/.zshrc` (idempotent, bounded by markers)
 
-Open a new zsh session (or `exec zsh`) for the hook to take effect. To start the tray daemon now without logging out: `vscode-launcher --tray &`.
+**On macOS**, this:
+
+1. Symlinks both scripts into `/usr/local/bin` (`vscode-launcher` and `vscl-tmux-lookup`)
+2. Verifies the `code` CLI resolves to *Visual Studio Code.app* and warns if it has been hijacked by another editor (e.g. Cursor)
+3. Installs a LaunchAgent at `~/Library/LaunchAgents/com.vscode-launcher.agent.plist` (`--tray`) and loads it with `launchctl bootstrap`, so the menu-bar daemon starts now and on each login
+4. Appends the same tmux shell hook into `~/.zshrc`
+
+No `.desktop`/icon-cache steps run on macOS; the menu bar uses a bundled monochrome template icon.
+
+Open a new zsh session (or `exec zsh`) for the hook to take effect. To start the tray/menu-bar daemon now without logging out: `vscode-launcher --tray &`.
 
 ## Usage
 
@@ -237,7 +265,9 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 ./uninstall.sh
 ```
 
-Removes:
+`uninstall.sh` mirrors the platform split and first stops any running instance (`pkill -f vscode_launcher.py`).
+
+**On Linux/KDE**, it removes:
 
 - Both `~/.local/bin` symlinks (`vscode-launcher` and `vscl-tmux-lookup`)
 - The `.desktop` entry in `~/.local/share/applications/`
@@ -245,9 +275,27 @@ Removes:
 - The SVG icon in `~/.local/share/icons/hicolor/scalable/apps/`
 - The zsh hook block from `~/.zshrc` (a backup is written to `~/.zshrc.vscode-launcher.bak`)
 
-The KDE / GTK icon caches are refreshed afterwards. You are prompted before the config directory at `~/.config/vscode-launcher/` is deleted.
+The KDE / GTK icon caches are refreshed afterwards.
+
+**On macOS**, it removes:
+
+- Both `/usr/local/bin` symlinks
+- The LaunchAgent at `~/Library/LaunchAgents/com.vscode-launcher.agent.plist` (unloaded first with `launchctl bootout`)
+- The zsh hook block from `~/.zshrc` (same backup)
+
+On both platforms you are prompted before the config directory at `~/.config/vscode-launcher/` is deleted.
 
 ## Changelog
+
+### v3.4
+
+- macOS support (roaming platform). The launcher now starts, discovers recent projects, opens them, and shows a menu-bar icon on macOS. Platform-specific paths and APIs live in `platform_support.py`:
+  - Recent-project discovery reads `~/Library/Application Support/Code/User/globalStorage/state.vscdb` (with the same `~/.vscode-shared` shared-storage fallback as Linux).
+  - Running-state IPC socket discovery finds `~/Library/Application Support/Code/*-main.sock` (the main socket is named e.g. `1.12-main.sock`; the prefix tracks the IPC protocol version, not the VSCode release).
+  - The Launched column uses `psutil` for per-window process start time (optional dependency; the column shows `—` when `psutil` is absent).
+  - The menu bar uses a bundled monochrome **template** icon (`vscode-launcher-template.svg`) marked via `QIcon.setIsMask`, so it adapts to light/dark mode and the open-menu accent tint.
+- `install.sh` / `uninstall.sh` branch on `$OSTYPE`. The macOS branch symlinks into `/usr/local/bin`, verifies the `code` CLI points at *Visual Studio Code.app* (warns on hijack by other editors), and installs/removes a `~/Library/LaunchAgents/com.vscode-launcher.agent.plist` LaunchAgent for autostart.
+- Existing Linux functionality is unchanged. The IPC socket tests now pin the platform branch so the full suite passes on both Linux and macOS.
 
 ### v3.3
 

@@ -32,6 +32,7 @@ from PyQt6.QtGui import QAction, QIcon, QKeySequence
 
 from global_shortcut import GlobalShortcut, parse_hotkey
 from platform_support import (
+    IS_MACOS,
     launcher_config_dir,
     process_start_time,
     vscode_state_db_paths,
@@ -67,7 +68,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.3"
+__version__ = "3.4"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -1552,11 +1553,26 @@ class MainWindow(QMainWindow):
 def _resolve_app_icon() -> QIcon:
     """Prefer the installed theme icon; fall back to the bundled SVG next to
     this file so the app shows the right icon even when run from the source
-    checkout before install.sh has copied it into hicolor."""
+    checkout before install.sh has copied it into hicolor.
+
+    On macOS the menu-bar wants a monochrome *template* image so it can
+    recolor for light/dark mode and the open-menu accent tint. We ship a
+    dedicated `vscode-launcher-template.svg` for that and mark the QIcon as
+    a mask (QIcon.setIsMask) so Qt's cocoa backend treats it as a template.
+    The full-color icon is kept for every other platform / surface.
+    """
+    here = Path(__file__).resolve().parent
+    if IS_MACOS:
+        template = here / "vscode-launcher-template.svg"
+        if template.is_file():
+            icon = QIcon(str(template))
+            icon.setIsMask(True)
+            return icon
+
     themed = QIcon.fromTheme("vscode-launcher")
     if not themed.isNull():
         return themed
-    bundled = Path(__file__).resolve().parent / "vscode-launcher.svg"
+    bundled = here / "vscode-launcher.svg"
     if bundled.is_file():
         return QIcon(str(bundled))
     return QIcon()

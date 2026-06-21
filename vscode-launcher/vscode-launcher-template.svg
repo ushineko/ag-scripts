@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS menu-bar template variant of vscode-launcher.svg.
+
+  Template images are monochrome: pure-black shapes on a transparent
+  background. The alpha channel is used as a mask and macOS recolors the
+  whole glyph to match the menu bar (dark in light mode, light in dark
+  mode, and the accent tint when the menu is open). Color cannot survive
+  this, so the amber background and green running-dots of the full icon
+  are dropped here — only the three-row silhouette remains.
+
+  Paired with QIcon.setIsMask(True) on Darwin in vscode_launcher.py.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Row 1 (running) -->
+  <rect x="16" y="32" width="72" height="14" rx="5" ry="5" fill="#000000"/>
+  <circle cx="102" cy="39" r="7" fill="#000000"/>
+
+  <!-- Row 2 (running) -->
+  <rect x="16" y="58" width="72" height="14" rx="5" ry="5" fill="#000000"/>
+  <circle cx="102" cy="65" r="7" fill="#000000"/>
+
+  <!-- Row 3 (not running) — lighter weight to preserve the running/idle
+       distinction the full-color icon shows via opacity. -->
+  <rect x="16" y="84" width="72" height="14" rx="5" ry="5" fill="#000000" fill-opacity="0.4"/>
+</svg>

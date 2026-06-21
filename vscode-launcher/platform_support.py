@@ -10,14 +10,19 @@ Status matrix:
   | Helper                           | Linux | macOS | Windows |
   | -------------------------------- | ----- | ----- | ------- |
   | `vscode_state_db_paths()`        |  ✓    |  ✓    |  ✓      |
-  | `vscode_ipc_socket_candidates()` |  ✓    |  stub |  stub   |
-  | `process_start_time(pid)`        |  ✓    |  —    |  —      |
+  | `vscode_ipc_socket_candidates()` |  ✓    |  ✓    |  stub   |
+  | `process_start_time(pid)`        |  ✓    |  ✓*   |  —      |
   | `launcher_config_dir()`          |  ✓    |  ✓    |  stub   |
 
 "Stub" means the helper returns `None` / `[]` on the non-implemented
 platform so callers degrade gracefully (e.g., "no VSCode socket found"
 looks the same as "VSCode not running"). Porting is additive: drop the
 implementation into the matching branch, delete the TODO.
+
+`✓*` (macOS `process_start_time`) means implemented but dependency-gated:
+it uses `psutil`, an optional dependency. When `psutil` is absent the
+helper returns `None` exactly like an unported platform, so the Launched
+column degrades to an em-dash rather than crashing.
 
 KWin action plumbing (Close / Activate) is intentionally NOT abstracted
 here — it's KDE-specific and already feature-gates on qdbus6/journalctl
@@ -135,10 +140,26 @@ def vscode_ipc_socket_candidates() -> list[Path]:
             return candidates
 
     if IS_MACOS:
-        # TODO(macos): VSCode's main socket lives at
-        # `$TMPDIR/vscode-ipc-*.sock`. Same AF_UNIX wire protocol; only
-        # the discovery path changes.
-        return []
+        # Empirically verified (2026-06-21, VS Code 1.125.1, macOS 26.5):
+        # the main IPC socket lives at
+        #   ~/Library/Application Support/Code/<version>-main.sock
+        # e.g. `1.12-main.sock`. The version prefix tracks the IPC protocol
+        # version, not the VS Code release. Same AF_UNIX wire protocol as Linux.
+        vscode_data = (
+            Path.home() / "Library" / "Application Support" / "Code"
+        )
+        if not vscode_data.is_dir():
+            return []
+        try:
+            candidates = list(vscode_data.glob("*-main.sock"))
+        except OSError:
+            return []
+        try:
+            return sorted(
+                candidates, key=lambda p: p.stat().st_mtime, reverse=True
+            )
+        except OSError:
+            return candidates
 
     if IS_WINDOWS:
         # TODO(windows): VSCode uses named pipes at
@@ -165,11 +186,34 @@ def process_start_time(pid: int) -> float | None:
     """
     if IS_LINUX:
         return _linux_process_start_time(pid)
-    # macOS / Windows: no bundled dep. `psutil.Process(pid).create_time()`
-    # is the cleanest path on both, but adding the dep is a separate
-    # decision. Return None so the Launched column just shows em-dash
-    # for pre-existing windows on those platforms until we add support.
+    if IS_MACOS:
+        return _psutil_process_start_time(pid)
+    # Windows: no implementation yet. `psutil.Process(pid).create_time()`
+    # would work here too once the rest of the Windows port lands. Return
+    # None so the Launched column just shows em-dash for pre-existing
+    # windows until we add support.
     return None
+
+
+def _psutil_process_start_time(pid: int) -> float | None:
+    """macOS process start time via psutil (optional dependency).
+
+    `psutil.Process(pid).create_time()` returns the Unix timestamp the
+    process started, matching the semantics of the Linux /proc reader.
+    Returns None on any failure — including `psutil` not being installed —
+    so callers degrade to the em-dash placeholder rather than crashing.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return psutil.Process(pid).create_time()
+    except Exception:
+        # NoSuchProcess / AccessDenied / ZombieProcess all subclass
+        # psutil.Error; a bare except also covers a bad pid or a race
+        # where the process exits between enumeration and this call.
+        return None
 
 
 def _linux_process_start_time(pid: int) -> float | None:

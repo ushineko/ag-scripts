@@ -7,13 +7,18 @@ responses to the client.
 
 from __future__ import annotations
 
+import os
+import shutil
 import socket
 import struct
+import tempfile
 import threading
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+import platform_support as ps
 from vscode_ipc import (
     VSCodeIPCError,
     _call_channel,
@@ -106,27 +111,47 @@ class TestVSBufferSerialize:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def linux_runtime_dir(monkeypatch):
+    """Exercise the Linux socket-discovery branch on any host.
+
+    Socket discovery in `platform_support` branches on the IS_LINUX /
+    IS_MACOS module constants: Linux scans `$XDG_RUNTIME_DIR`, macOS scans
+    `~/Library/Application Support/Code`. These tests target the Linux
+    XDG_RUNTIME_DIR behavior, so we pin the constants to the Linux branch
+    and point XDG_RUNTIME_DIR at a fresh dir. (macOS discovery has its own
+    coverage in test_unit_platform_support.py.)
+
+    The dir is created under `/tmp` rather than pytest's `tmp_path` because
+    macOS caps AF_UNIX socket paths at ~104 bytes and the default macOS
+    temp root (`/var/folders/...`) already blows that budget — the
+    socket-binding test below would fail with "AF_UNIX path too long".
+    """
+    monkeypatch.setattr(ps, "IS_LINUX", True)
+    monkeypatch.setattr(ps, "IS_MACOS", False)
+    monkeypatch.setattr(ps, "IS_WINDOWS", False)
+    d = tempfile.mkdtemp(prefix="vscl-ipc-", dir="/tmp")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", d)
+    yield Path(d)
+    shutil.rmtree(d, ignore_errors=True)
+
+
 class TestFindMainSocket:
-    def test_returns_none_when_runtime_dir_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    def test_returns_none_when_runtime_dir_empty(self, linux_runtime_dir):
         assert find_main_socket() is None
 
-    def test_picks_most_recent_of_multiple(self, tmp_path, monkeypatch):
+    def test_picks_most_recent_of_multiple(self, linux_runtime_dir):
         # Two candidate sockets; file mtimes set manually.
-        old = tmp_path / "vscode-aaa-main.sock"
-        new = tmp_path / "vscode-bbb-main.sock"
+        old = linux_runtime_dir / "vscode-aaa-main.sock"
+        new = linux_runtime_dir / "vscode-bbb-main.sock"
         old.touch()
         new.touch()
-        import os
-
         os.utime(old, (1_000, 1_000))
         os.utime(new, (2_000, 2_000))
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
         assert find_main_socket() == new
 
-    def test_ignores_non_main_sockets(self, tmp_path, monkeypatch):
-        (tmp_path / "vscode-git-abc.sock").touch()
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    def test_ignores_non_main_sockets(self, linux_runtime_dir):
+        (linux_runtime_dir / "vscode-git-abc.sock").touch()
         assert find_main_socket() is None
 
 
@@ -263,38 +288,34 @@ class TestCallChannel:
 
 
 class TestHighLevelHelpers:
-    def test_no_socket_returns_empty_list_not_none(self, tmp_path, monkeypatch):
+    def test_no_socket_returns_empty_list_not_none(self, linux_runtime_dir):
         """When VSCode isn't running, list_vscode_windows distinguishes
         'nothing running' ([]) from 'transient IPC failure' (None)."""
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
         assert list_vscode_windows() == []
 
-    def test_get_main_diagnostics_none_when_no_socket(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    def test_get_main_diagnostics_none_when_no_socket(self, linux_runtime_dir):
         assert get_main_diagnostics() is None
 
-    def test_connect_failure_returns_none(self, tmp_path, monkeypatch):
+    def test_connect_failure_returns_none(self, linux_runtime_dir):
         """Socket exists (from a dead VSCode) but connection refused."""
         # Create a file that looks like a socket but isn't listening.
-        fake_sock = tmp_path / "vscode-dead-main.sock"
+        fake_sock = linux_runtime_dir / "vscode-dead-main.sock"
         fake_sock.touch()
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
         # get_main_diagnostics should swallow the connection error.
         assert get_main_diagnostics() is None
 
     def test_list_vscode_windows_stale_socket_returns_empty(
-        self, tmp_path, monkeypatch
+        self, linux_runtime_dir
     ):
         """Regression: when VSCode crashes it leaves a real AF_UNIX socket
         file behind. The probe must classify connect-refused as 'not
         running' ([]) rather than 'transient IPC failure' (None), or the
         launcher's auto-refresh sticks on the last known running state."""
-        sock_path = tmp_path / "vscode-dead-main.sock"
+        sock_path = linux_runtime_dir / "vscode-dead-main.sock"
         # Bind to create the file, then close without listen() so connect()
         # fails with ECONNREFUSED — exactly how a crashed VSCode appears.
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.bind(str(sock_path))
         s.close()
         assert sock_path.exists()
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
         assert list_vscode_windows() == []
