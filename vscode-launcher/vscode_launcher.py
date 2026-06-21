@@ -37,6 +37,9 @@ from platform_support import (
     process_start_time,
     vscode_state_db_paths,
 )
+
+if IS_MACOS:
+    from macos_global_shortcut import MacGlobalShortcut
 from popup import WorkspacePopup
 from single_instance import SingletonGuard
 from window_scanner import (
@@ -68,13 +71,18 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.5.2"
+__version__ = "3.5.3"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
 CONFIG_VERSION = 2
 
-DEFAULT_HOTKEY = "Shift+Tab"
+# Shift+Tab works as a KGlobalAccel grab on KDE, but macOS reserves it (and
+# bare-modifier global hotkeys are a poor fit there), so macOS defaults to
+# Cmd+Shift+Space (Meta == Command in Qt portable text).
+DEFAULT_HOTKEY_LINUX = "Shift+Tab"
+DEFAULT_HOTKEY_MACOS = "Meta+Shift+Space"
+DEFAULT_HOTKEY = DEFAULT_HOTKEY_MACOS if IS_MACOS else DEFAULT_HOTKEY_LINUX
 # Tap-to-cycle popup: each `pressed` event from KGlobalAccel either shows the
 # popup (if hidden) or cycles to the next entry (if visible). Each `released`
 # event restarts a single-shot timer; if the timer fires without another
@@ -836,6 +844,11 @@ class MainWindow(QMainWindow):
         self.tmux_mappings: dict[str, str] = dict(raw.get("tmux_mappings", {}) or {})
         self.hidden_paths: set[str] = set(raw.get("hidden_paths", []) or [])
         self.global_hotkey: str = str(raw.get("global_hotkey") or DEFAULT_HOTKEY)
+        # Migrate a config carried over from Linux: the Linux default hotkey
+        # isn't a good global hotkey on macOS, so substitute the macOS default
+        # (the user can still override it in Settings).
+        if IS_MACOS and self.global_hotkey == DEFAULT_HOTKEY_LINUX:
+            self.global_hotkey = DEFAULT_HOTKEY_MACOS
         self.popup_commit_delay_ms: int = int(
             raw.get("popup_commit_delay_ms") or DEFAULT_POPUP_COMMIT_DELAY_MS
         )
@@ -1286,8 +1299,11 @@ class MainWindow(QMainWindow):
         self._tray.setContextMenu(menu)
         self._tray.show()
 
-        # Global shortcut — KGlobalAccel via D-Bus.
-        self._global_shortcut = GlobalShortcut(
+        # Global shortcut — KGlobalAccel (KDE) on Linux, Carbon
+        # RegisterEventHotKey on macOS. Both expose the same pressed/released
+        # + is_available/set_binding surface.
+        shortcut_backend = MacGlobalShortcut if IS_MACOS else GlobalShortcut
+        self._global_shortcut = shortcut_backend(
             SHORTCUT_COMPONENT,
             SHORTCUT_ACTION,
             SHORTCUT_COMPONENT_FRIENDLY,
@@ -1295,7 +1311,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         if not self._global_shortcut.is_available():
-            _dlog("KGlobalAccel unavailable; popup hotkey disabled")
+            _dlog("global hotkey backend unavailable; popup hotkey disabled")
             return False
 
         self._global_shortcut.pressed.connect(self._on_hotkey_pressed)

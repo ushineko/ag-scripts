@@ -45,7 +45,7 @@ Linux/KDE is the primary platform and gets the full feature set. macOS is suppor
 | Tray / menu-bar icon + menu | ✓ | ✓ (monochrome template icon, adapts to light/dark) |
 | Recent-project discovery | `~/.config/Code/...` (+ `~/.vscode-shared` on 1.119+) | `~/Library/Application Support/Code/...` (+ `~/.vscode-shared`) |
 | Launch / open project | ✓ | ✓ (`code` CLI) |
-| Quick-launcher popup + global hotkey | ✓ (KGlobalAccel) | ✓ popup; global hotkey via KGlobalAccel is KDE-only |
+| Quick-launcher popup + global hotkey | ✓ (KGlobalAccel) | ✓ (Carbon `RegisterEventHotKey`; default `⌘⇧Space`) |
 | Running-state detection (IPC socket) | `$XDG_RUNTIME_DIR/vscode-*-main.sock` | `~/Library/Application Support/Code/*-main.sock` |
 | Launched column (process start time) | `/proc` | `psutil` (optional; shows `—` if absent) |
 | Autostart | XDG autostart `.desktop` | LaunchAgent plist |
@@ -304,6 +304,10 @@ The KDE / GTK icon caches are refreshed afterwards.
 On both platforms you are prompted before the config directory at `~/.config/vscode-launcher/` is deleted.
 
 ## Changelog
+
+### v3.5.3
+
+- macOS global popup hotkey. The hotkey was KGlobalAccel-only (KDE); macOS now has a native backend using Carbon `RegisterEventHotKey` via `ctypes` (`macos_global_shortcut.py`), with the same press/release interface. It needs no Accessibility permission. The macOS default is `⌘⇧Space` (the Linux default `Shift+Tab` is reserved by macOS); a config carried over from Linux is migrated to the macOS default automatically. Rebindable in Settings.
 
 ### v3.5.2
 

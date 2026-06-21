@@ -18,7 +18,7 @@ datas = [
     ("vscode-launcher.svg", "."),
     ("vscode-launcher-template.svg", "."),
 ]
-hiddenimports = ["PyQt6.QtDBus", "PyQt6.QtSvg"]
+hiddenimports = ["PyQt6.QtDBus", "PyQt6.QtSvg", "macos_global_shortcut"]
 
 a = Analysis(
     ["vscode_launcher.py"],
