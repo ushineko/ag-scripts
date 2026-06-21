@@ -71,7 +71,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.5.4"
+__version__ = "3.5.5"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -437,6 +437,28 @@ class Launcher:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+
+    def focus_workspace(self, workspace: Workspace) -> bool:
+        """Surface the already-open VSCode window for this workspace.
+
+        `code <path>` (note: NOT `--new-window`) tells the running VSCode to
+        focus the window already holding that folder / workspace file and
+        brings the app forward. This is the cross-platform stand-in for the
+        KWin "Activate" action, which is KDE-only — used on macOS where KWin
+        scripting isn't available. Returns False if the `code` CLI is missing.
+        """
+        if not shutil.which("code"):
+            return False
+        try:
+            subprocess.Popen(
+                ["code", workspace.path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True
+        except OSError:
+            return False
 
     def run_gather(self) -> bool:
         if not shutil.which(self.gather_cmd):
@@ -860,6 +882,10 @@ class MainWindow(QMainWindow):
         self._global_shortcut: GlobalShortcut | None = None
         self._popup: WorkspacePopup | None = None
         self._popup_commit_timer: QTimer | None = None
+        # monotonic deadline before which the macOS "show window on app
+        # activation" handler is suppressed — set when we invoke the popup so
+        # the popup grabbing focus doesn't also drag the main window forward.
+        self._suppress_activation_until: float = 0.0
 
         raw = self.config_manager.load()
         self.tmux_mappings: dict[str, str] = dict(raw.get("tmux_mappings", {}) or {})
@@ -1281,11 +1307,24 @@ class MainWindow(QMainWindow):
 
     def _on_activate_requested(self, path: str) -> None:
         ws = self._find_workspace_by_path(path)
-        if ws is None or self.window_scanner is None:
+        if ws is None:
             return
         self._push_mru(path)
-        self.window_scanner.perform_window_action(ws.label, ACTION_ACTIVATE)
+        self._activate_workspace_window(ws)
         self._reorder_for_activation()
+
+    def _activate_workspace_window(self, workspace: Workspace) -> None:
+        """Raise the existing VSCode window for `workspace`.
+
+        macOS: ask VSCode to focus it via the `code` CLI (KWin is KDE-only).
+        Linux/KDE: drive the KWin "Activate" script over D-Bus.
+        """
+        if IS_MACOS:
+            self.launcher.focus_workspace(workspace)
+        elif self.window_scanner is not None:
+            self.window_scanner.perform_window_action(
+                workspace.label, ACTION_ACTIVATE
+            )
 
     def _find_workspace_by_path(self, path: str) -> Workspace | None:
         for w in self.workspaces:
@@ -1392,6 +1431,9 @@ class MainWindow(QMainWindow):
         entry. Cancels the pending commit so the user can keep cycling."""
         if self._popup is None:
             return
+        # The popup grabbing focus makes the app "active"; suppress the macOS
+        # activation handler briefly so the main window doesn't ride along.
+        self._suppress_activation_until = time.monotonic() + 2.0
         if self._popup_commit_timer is not None:
             self._popup_commit_timer.stop()
         if self._popup.isVisible():
@@ -1438,10 +1480,8 @@ class MainWindow(QMainWindow):
         running, otherwise launch a new one. Used by the popup; could
         be wired to other callers in the future."""
         self._push_mru(workspace.path)
-        if workspace.is_running and self.window_scanner is not None:
-            self.window_scanner.perform_window_action(
-                workspace.label, ACTION_ACTIVATE
-            )
+        if workspace.is_running:
+            self._activate_workspace_window(workspace)
             # Re-sort so the new MRU order is visible on the next popup show.
             self._reorder_for_activation()
         else:
@@ -1699,6 +1739,13 @@ def main() -> int:
             if state != Qt.ApplicationState.ApplicationActive:
                 return
             if not _macos_activation.get("armed"):
+                return
+            # Don't ride the activation that the popup/hotkey itself caused —
+            # invoking the quick-launcher shouldn't also drag the main window
+            # forward.
+            if time.monotonic() < window._suppress_activation_until:
+                return
+            if window._popup is not None and window._popup.isVisible():
                 return
             # Only surface when hidden, so we don't re-show (and fight a
             # menu-bar click that's trying to interact with an already-open

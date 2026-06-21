@@ -939,10 +939,14 @@ class TestMainWindowSmoke:
         assert calls == [("a", ACTION_CLOSE)]
 
     def test_activate_handler_invokes_scanner_with_activate_action(
-        self, qapp, tmp_path, fake_vscode_db
+        self, qapp, tmp_path, fake_vscode_db, monkeypatch
     ):
+        import vscode_launcher as vl
         from vscode_launcher import MainWindow
         from window_scanner import ACTION_ACTIVATE
+
+        # Linux/KDE path: activation drives the KWin scanner action.
+        monkeypatch.setattr(vl, "IS_MACOS", False)
 
         db_path, build = fake_vscode_db
         build([{"folderUri": "file:///home/u/git/a"}])
@@ -965,6 +969,45 @@ class TestMainWindowSmoke:
         )
         window._on_activate_requested("/home/u/git/a")
         assert calls == [("a", ACTION_ACTIVATE)]
+
+    def test_activate_handler_macos_focuses_via_code(
+        self, qapp, tmp_path, fake_vscode_db, monkeypatch
+    ):
+        import vscode_launcher as vl
+        from vscode_launcher import MainWindow
+
+        # macOS path: activation focuses the existing window via the `code`
+        # CLI (Launcher.focus_workspace), NOT the KDE-only KWin scanner.
+        monkeypatch.setattr(vl, "IS_MACOS", True)
+
+        db_path, build = fake_vscode_db
+        build([{"folderUri": "file:///home/u/git/a"}])
+
+        focused = []
+        scanner_calls = []
+
+        class RecordingLauncher(Launcher):
+            def focus_workspace(self, workspace):
+                focused.append(workspace.path)
+                return True
+
+        class RecordingScanner:
+            def list_vscode_captions(self):
+                return ["file - a - Visual Studio Code"]
+
+            def perform_window_action(self, label, action):
+                scanner_calls.append((label, action))
+                return True
+
+        window = MainWindow(
+            ConfigManager(tmp_path / "workspaces.json"),
+            RecordingLauncher(),
+            VSCodeRecentsReader(db_path=db_path),
+            window_scanner=RecordingScanner(),
+        )
+        window._on_activate_requested("/home/u/git/a")
+        assert focused == ["/home/u/git/a"]
+        assert scanner_calls == []
 
     def test_auto_refresh_resorts_on_state_change(
         self, qapp, tmp_path, fake_vscode_db

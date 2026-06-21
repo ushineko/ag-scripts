@@ -49,7 +49,8 @@ Linux/KDE is the primary platform and gets the full feature set. macOS is suppor
 | Running-state detection (IPC socket) | `$XDG_RUNTIME_DIR/vscode-*-main.sock` | `~/Library/Application Support/Code/*-main.sock` |
 | Launched column (process start time) | `/proc` | `psutil` (optional; shows `—` if absent) |
 | Autostart | XDG autostart `.desktop` | LaunchAgent plist |
-| Per-row Stop / Activate, auto window placement | ✓ (KWin) | not available (KDE/KWin-specific) |
+| Activate (raise an open window) | ✓ (KWin) | ✓ (via `code <path>`) |
+| Per-row Stop, auto window placement | ✓ (KWin) | not available (KDE/KWin-specific) |
 
 ## Requirements
 
@@ -304,6 +305,11 @@ The KDE / GTK icon caches are refreshed afterwards.
 On both platforms you are prompted before the config directory at `~/.config/vscode-launcher/` is deleted.
 
 ## Changelog
+
+### v3.5.5
+
+- Fix (macOS): invoking the popup hotkey also dragged the launcher's own window to the front. The "show window on app activation" handler (added for Spotlight relaunch) was firing when the popup grabbed focus. It's now suppressed while the popup is up / just after a hotkey press.
+- Fix (macOS): activating a running workspace (popup commit or the row "Activate" button) did nothing — it used KWin scripting, which is KDE-only. macOS now focuses the existing VSCode window via the `code` CLI (`code <path>`, matching the exact folder/workspace path so it focuses rather than opening a duplicate).
 
 ### v3.5.4
 
