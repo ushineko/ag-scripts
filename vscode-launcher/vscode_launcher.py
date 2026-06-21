@@ -68,7 +68,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.4"
+__version__ = "3.5"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -1550,6 +1550,20 @@ class MainWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 
 
+def _resource_dir() -> Path:
+    """Directory holding bundled resources (the SVG icons).
+
+    Under a PyInstaller `--onedir` build the data files are unpacked next to
+    the frozen executable and `sys._MEIPASS` points at them; `__file__`
+    would point inside the zipped archive instead. When running from the
+    source checkout, resources sit next to this module.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(__file__).resolve().parent
+
+
 def _resolve_app_icon() -> QIcon:
     """Prefer the installed theme icon; fall back to the bundled SVG next to
     this file so the app shows the right icon even when run from the source
@@ -1561,7 +1575,7 @@ def _resolve_app_icon() -> QIcon:
     a mask (QIcon.setIsMask) so Qt's cocoa backend treats it as a template.
     The full-color icon is kept for every other platform / surface.
     """
-    here = Path(__file__).resolve().parent
+    here = _resource_dir()
     if IS_MACOS:
         template = here / "vscode-launcher-template.svg"
         if template.is_file():

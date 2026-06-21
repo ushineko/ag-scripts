@@ -215,7 +215,9 @@ is a small change but prevents a crash if the Launched column code runs on macOS
 
 - Cross-platform running-state detection (covered by spec 010)
 - Windows support
-- `.app` bundle packaging for macOS
+- ~~`.app` bundle packaging for macOS~~ — **superseded by spec 014.** This
+  line contradicted 013's own "follow clockwork-orange's pattern" direction
+  (clockwork-orange ships a PyInstaller `.app`); spec 014 adds the `.app`.
 - Homebrew formula
 
 ## Risk / Open Questions

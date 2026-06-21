@@ -15,6 +15,9 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     INSTALL_DIR="/usr/local/bin"
     LAUNCH_AGENT_LABEL="com.vscode-launcher.agent"
     LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
+    # The app may live in either Applications dir (install.sh picks whichever
+    # is writable); remove from both.
+    APP_LOCATIONS=("/Applications/vscode-launcher.app" "$HOME/Applications/vscode-launcher.app")
 else
     IS_MACOS=0
     INSTALL_DIR="$HOME/.local/bin"
@@ -33,7 +36,8 @@ echo "Uninstalling VSCode Launcher..."
 # so matching only the script name would miss the resident daemon.
 # (On macOS the LaunchAgent is also stopped below via `launchctl bootout`.)
 if pkill -f vscode_launcher.py 2>/dev/null \
-    || pkill -f "$INSTALL_DIR/$APP_NAME" 2>/dev/null; then
+    || pkill -f "$INSTALL_DIR/$APP_NAME" 2>/dev/null \
+    || pkill -f "vscode-launcher.app/Contents/MacOS" 2>/dev/null; then
     echo "  Stopped running instances"
 fi
 
@@ -55,6 +59,13 @@ if [[ "$IS_MACOS" -eq 1 ]]; then
         rm -f "$LAUNCH_AGENT_PLIST"
         echo "  Removed LaunchAgent: $LAUNCH_AGENT_PLIST"
     fi
+    # --- macOS: remove the .app bundle from wherever it was installed ---
+    for app in "${APP_LOCATIONS[@]}"; do
+        if [ -d "$app" ]; then
+            rm -rf "$app"
+            echo "  Removed app bundle: $app"
+        fi
+    done
 else
     # --- Linux: remove .desktop entries + icon, refresh caches ---
     if [ -f "$DESKTOP_DIR/$APP_NAME.desktop" ]; then
@@ -81,11 +92,15 @@ fi
 # --- Remove zsh hook block (inclusive, shared) ---
 if [ -f "$ZSHRC" ] && grep -Fq "$BEGIN_MARKER" "$ZSHRC"; then
     cp "$ZSHRC" "$ZSHRC.vscode-launcher.bak"
+    # install.sh writes the block followed by one blank separator line; eat
+    # that single trailing blank after the END marker so repeated
+    # install/uninstall cycles don't accumulate blank lines.
     awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
-        BEGIN { skipping = 0 }
+        BEGIN { skipping = 0; just_ended = 0 }
         {
             if ($0 == begin) { skipping = 1; next }
-            if (skipping && $0 == end) { skipping = 0; next }
+            if (skipping && $0 == end) { skipping = 0; just_ended = 1; next }
+            if (just_ended) { just_ended = 0; if ($0 == "") next }
             if (!skipping) print
         }
     ' "$ZSHRC.vscode-launcher.bak" > "$ZSHRC"

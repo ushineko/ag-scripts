@@ -15,6 +15,7 @@ Solves four recurring pain points:
 - [Platform support](#platform-support)
 - [Requirements](#requirements)
 - [Installation](#installation)
+  - [Building the macOS app](#building-the-macos-app)
 - [Usage](#usage)
 - [How It Works](#how-it-works)
 - [Configuration](#configuration)
@@ -58,6 +59,7 @@ Linux/KDE is the primary platform and gets the full feature set. macOS is suppor
 - `code` (VSCode CLI) on `PATH`. On macOS, install it via VSCode's *Shell Command: Install 'code' command in PATH* — the installer warns if the `code` symlink has been hijacked by another editor
 - `qdbus6` (Linux only, optional — only needed for the per-row Stop / Activate buttons, which use KWin scripting)
 - `psutil` (macOS only, optional — powers the Launched column's per-window start time; the column shows `—` without it)
+- `pyinstaller` (macOS only, build-time — needed to build the `.app` bundle; not a runtime dependency)
 - `tmux` (optional — only needed for session switching)
 - `vscode-gather` (Linux only, optional — only needed for auto-placement / maximize)
 - zsh (the shell hook targets zsh; bash support could be added later)
@@ -79,16 +81,31 @@ Linux/KDE is the primary platform and gets the full feature set. macOS is suppor
 5. Installs an XDG autostart entry at `~/.config/autostart/vscode-launcher.desktop` with `Exec=vscode-launcher --tray`. The tray daemon will start automatically on next login.
 6. Appends the tmux shell hook into `~/.zshrc` (idempotent, bounded by markers)
 
-**On macOS**, this:
+**On macOS**, vscode-launcher installs as a native `.app` bundle (built with
+PyInstaller, following the clockwork-orange pattern). `install.sh`:
 
-1. Symlinks both scripts into `/usr/local/bin` (`vscode-launcher` and `vscl-tmux-lookup`)
-2. Verifies the `code` CLI resolves to *Visual Studio Code.app* and warns if it has been hijacked by another editor (e.g. Cursor)
-3. Installs a LaunchAgent at `~/Library/LaunchAgents/com.vscode-launcher.agent.plist` (`--tray`) and loads it with `launchctl bootstrap`, so the menu-bar daemon starts now and on each login
-4. Appends the same tmux shell hook into `~/.zshrc`
+1. Builds `dist/vscode-launcher.app` on demand if it isn't already built (see [Building the macOS app](#building-the-macos-app))
+2. Copies it to `/Applications/vscode-launcher.app` (falls back to `~/Applications` if `/Applications` isn't writable) — discoverable in Finder and Spotlight
+3. Symlinks `vscode-launcher` (→ the installed app binary) and `vscl-tmux-lookup` into `/usr/local/bin`
+4. Verifies the `code` CLI resolves to *Visual Studio Code.app* and warns if it has been hijacked by another editor (e.g. Cursor)
+5. Installs a LaunchAgent at `~/Library/LaunchAgents/com.vscode-launcher.agent.plist` pointing at the app binary and loads it with `launchctl bootstrap`, so the menu-bar app starts now and on each login
+6. Appends the same tmux shell hook into `~/.zshrc`
 
-No `.desktop`/icon-cache steps run on macOS; the menu bar uses a bundled monochrome template icon.
+The `.app` is a **menu-bar agent** (`LSUIElement`) — it lives in the macOS menu bar with no Dock icon, but still appears in `/Applications` and Spotlight so you can launch it like any app. The menu bar uses a monochrome template icon; the Finder/Spotlight icon is the full-color `.icns`.
 
-Open a new zsh session (or `exec zsh`) for the hook to take effect. To start the tray/menu-bar daemon now without logging out: `vscode-launcher --tray &`.
+Open a new zsh session (or `exec zsh`) for the hook to take effect. To start it now without logging out: `open -a vscode-launcher`.
+
+### Building the macOS app
+
+`install.sh` builds the app automatically, but you can build it standalone:
+
+```bash
+pip3 install --user pyinstaller     # build-time dependency
+./scripts/build_macos.sh            # → dist/vscode-launcher.app
+open dist/vscode-launcher.app       # test before installing
+```
+
+The build requires a framework build of Python (the system `/usr/bin/python3` qualifies). `scripts/build_macos.sh` regenerates the `.icns` from `vscode-launcher.svg`, then runs PyInstaller against `vscode-launcher.spec`. Build outputs (`build/`, `dist/`, the generated `.icns`) are gitignored; the `.spec` is committed.
 
 ## Usage
 
@@ -265,7 +282,7 @@ If you used v1.0 (manual workspace list), the first run of v1.1 automatically:
 ./uninstall.sh
 ```
 
-`uninstall.sh` mirrors the platform split and first stops any running instance (`pkill -f vscode_launcher.py`).
+`uninstall.sh` mirrors the platform split and first stops any running instance (matching the script, the installed symlink, and the macOS `.app` binary).
 
 **On Linux/KDE**, it removes:
 
@@ -279,6 +296,7 @@ The KDE / GTK icon caches are refreshed afterwards.
 
 **On macOS**, it removes:
 
+- The `.app` bundle from `/Applications` (and `~/Applications`)
 - Both `/usr/local/bin` symlinks
 - The LaunchAgent at `~/Library/LaunchAgents/com.vscode-launcher.agent.plist` (unloaded first with `launchctl bootout`)
 - The zsh hook block from `~/.zshrc` (same backup)
@@ -286,6 +304,15 @@ The KDE / GTK icon caches are refreshed afterwards.
 On both platforms you are prompted before the config directory at `~/.config/vscode-launcher/` is deleted.
 
 ## Changelog
+
+### v3.5
+
+- macOS `.app` bundle (spec 014). vscode-launcher now installs as a native `/Applications/vscode-launcher.app` — discoverable in Finder and Spotlight — instead of a bare CLI symlink. Built with PyInstaller following the clockwork-orange pattern:
+  - `vscode-launcher.spec` produces a **menu-bar agent** (`LSUIElement` — menu bar only, no Dock icon), with a color `.icns` generated from the SVG by `scripts/create_icns.py`.
+  - `scripts/build_macos.sh` builds `dist/vscode-launcher.app` (requires `pip3 install --user pyinstaller`, build-time only).
+  - `install.sh` builds the app on demand, copies it to `/Applications` (or `~/Applications`), points the LaunchAgent at the bundle binary, and symlinks `vscode-launcher` to it. `uninstall.sh` removes the `.app`.
+  - Resource loading is frozen-aware (`sys._MEIPASS`) so the bundled SVG icons resolve inside the `.app`.
+  - Fixed: the zsh-hook uninstall now consumes its trailing blank line, so repeated install/uninstall cycles no longer accumulate blank lines in `~/.zshrc`.
 
 ### v3.4
 

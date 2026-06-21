@@ -23,6 +23,16 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
     LAUNCH_AGENT_LABEL="com.vscode-launcher.agent"
     LAUNCH_AGENT_PLIST="$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_LABEL.plist"
+    APP_BUNDLE="$SCRIPT_DIR/dist/vscode-launcher.app"
+    # Prefer /Applications (Spotlight + Finder visible); fall back to
+    # ~/Applications when /Applications isn't writable without admin.
+    if [ -w /Applications ] || [ ! -e /Applications ]; then
+        APPLICATIONS_DIR="/Applications"
+    else
+        APPLICATIONS_DIR="$HOME/Applications"
+    fi
+    INSTALLED_APP="$APPLICATIONS_DIR/vscode-launcher.app"
+    APP_BIN="$INSTALLED_APP/Contents/MacOS/vscode-launcher"
 else
     IS_MACOS=0
     INSTALL_DIR="$HOME/.local/bin"
@@ -85,18 +95,35 @@ if [[ "$IS_MACOS" -eq 0 ]]; then
     fi
 fi
 
-# --- Make scripts executable + symlink (shared) ---
+# --- tmux-lookup PATH helper (shared) ---
+# The zsh hook calls `vscl-tmux-lookup` as a subprocess; it stays a symlink to
+# the source script on both platforms (it is not part of the macOS .app).
 mkdir -p "$INSTALL_DIR"
 chmod +x "$MAIN_SCRIPT" "$LOOKUP_SCRIPT"
-
-ln -sf "$MAIN_SCRIPT" "$INSTALL_DIR/$APP_NAME"
-echo "  Symlink: $INSTALL_DIR/$APP_NAME -> $MAIN_SCRIPT"
-
 ln -sf "$LOOKUP_SCRIPT" "$INSTALL_DIR/$LOOKUP_NAME"
 echo "  Symlink: $INSTALL_DIR/$LOOKUP_NAME -> $LOOKUP_SCRIPT"
 
 if [[ "$IS_MACOS" -eq 1 ]]; then
-    # --- macOS: LaunchAgent for the tray daemon ---
+    # --- macOS: install the .app bundle into /Applications ---
+    # Build it on demand if it hasn't been built yet.
+    if [ ! -d "$APP_BUNDLE" ]; then
+        echo "  No built app found; building it (scripts/build_macos.sh)..."
+        "$SCRIPT_DIR/scripts/build_macos.sh"
+    fi
+    if [ ! -d "$APP_BUNDLE" ]; then
+        echo "Error: build did not produce $APP_BUNDLE." >&2
+        exit 1
+    fi
+    mkdir -p "$APPLICATIONS_DIR"
+    rm -rf "$INSTALLED_APP"
+    cp -R "$APP_BUNDLE" "$INSTALLED_APP"
+    echo "  App: $INSTALLED_APP"
+
+    # CLI convenience: `vscode-launcher` on PATH runs the installed app binary.
+    ln -sf "$APP_BIN" "$INSTALL_DIR/$APP_NAME"
+    echo "  Symlink: $INSTALL_DIR/$APP_NAME -> $APP_BIN"
+
+    # --- LaunchAgent (autostart the menu-bar agent) ---
     mkdir -p "$LAUNCH_AGENT_DIR"
     cat > "$LAUNCH_AGENT_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -107,7 +134,7 @@ if [[ "$IS_MACOS" -eq 1 ]]; then
     <string>$LAUNCH_AGENT_LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$INSTALL_DIR/$APP_NAME</string>
+        <string>$APP_BIN</string>
         <string>--tray</string>
     </array>
     <key>RunAtLoad</key>
@@ -126,12 +153,16 @@ EOF
     GUI_TARGET="gui/$(id -u)"
     launchctl bootout "$GUI_TARGET/$LAUNCH_AGENT_LABEL" 2>/dev/null || true
     if launchctl bootstrap "$GUI_TARGET" "$LAUNCH_AGENT_PLIST" 2>/dev/null; then
-        echo "  Loaded LaunchAgent (tray daemon will start now and on each login)."
+        echo "  Loaded LaunchAgent (menu-bar app starts now and on each login)."
     else
         echo "  (Could not auto-load the LaunchAgent. It will start on next login,"
-        echo "   or start the daemon now with: $APP_NAME --tray &)"
+        echo "   or start it now with: open -a vscode-launcher)"
     fi
 else
+    # --- Linux: symlink the source script as the launcher binary ---
+    ln -sf "$MAIN_SCRIPT" "$INSTALL_DIR/$APP_NAME"
+    echo "  Symlink: $INSTALL_DIR/$APP_NAME -> $MAIN_SCRIPT"
+
     # --- Linux: hicolor icon + .desktop menu entry + autostart entry ---
     mkdir -p "$DESKTOP_DIR" "$AUTOSTART_DIR" "$ICON_DIR"
 
