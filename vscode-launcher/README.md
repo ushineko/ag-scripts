@@ -305,6 +305,10 @@ On both platforms you are prompted before the config directory at `~/.config/vsc
 
 ## Changelog
 
+### v3.5.4
+
+- The Settings hotkey field now accepts Tab-based combos (e.g. `Ctrl+Shift+Tab`). The standard `QKeySequenceEdit` swallows Tab for focus traversal; a small `HotkeyEdit` subclass captures Tab/Backtab so an Alt-Tab-style combo can be bound from the UI. Note: a global Tab combo like `Ctrl+Shift+Tab` overrides that key everywhere (VSCode/browser tab cycling included) while the launcher is running.
+
 ### v3.5.3
 
 - macOS global popup hotkey. The hotkey was KGlobalAccel-only (KDE); macOS now has a native backend using Carbon `RegisterEventHotKey` via `ctypes` (`macos_global_shortcut.py`), with the same press/release interface. It needs no Accessibility permission. The macOS default is `⌘⇧Space` (the Linux default `Shift+Tab` is reserved by macOS); a config carried over from Linux is migrated to the macOS default automatically. Rebindable in Settings.

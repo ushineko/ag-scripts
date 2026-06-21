@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 
 from global_shortcut import GlobalShortcut, parse_hotkey
@@ -71,7 +71,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__version__ = "3.5.3"
+__version__ = "3.5.4"
 
 CONFIG_DIR = launcher_config_dir()
 CONFIG_FILE = CONFIG_DIR / "workspaces.json"
@@ -526,6 +526,27 @@ class TmuxSessionDialog(QDialog):
         return self.combo.currentText().strip()
 
 
+class HotkeyEdit(QKeySequenceEdit):
+    """QKeySequenceEdit that can also capture Tab / Backtab.
+
+    The base widget swallows Tab and Backtab for focus traversal, so a combo
+    like Ctrl+Shift+Tab can never be typed into it. We intercept those key
+    presses at the event() level and feed them to the normal key-recording
+    path, so Tab-based hotkeys can be bound from the UI (the macOS Carbon
+    backend accepts them, and an Alt-Tab-style popup is a natural fit for a
+    Tab combo).
+    """
+
+    def event(self, e: QEvent) -> bool:
+        if e.type() == QEvent.Type.KeyPress and e.key() in (
+            Qt.Key.Key_Tab,
+            Qt.Key.Key_Backtab,
+        ):
+            self.keyPressEvent(e)  # record it instead of changing focus
+            return True
+        return super().event(e)
+
+
 class SettingsDialog(QDialog):
     """Modal dialog for tunable launcher settings: popup hotkey and the
     tap-to-cycle commit delay. Both apply live in tray-resident mode."""
@@ -544,13 +565,13 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         layout.addWidget(QLabel("Global popup hotkey:"))
-        self._key_edit = QKeySequenceEdit(QKeySequence(current_hotkey))
+        self._key_edit = HotkeyEdit(QKeySequence(current_hotkey))
         layout.addWidget(self._key_edit)
 
         if rebind_live:
             hint_text = (
-                "Applies immediately. Use Meta (Super), Ctrl, Alt, Shift "
-                "with one non-modifier key."
+                "Applies immediately. Use Meta (Super/⌘), Ctrl, Alt, Shift "
+                "with one non-modifier key (Tab is allowed, e.g. Ctrl+Shift+Tab)."
             )
         else:
             hint_text = (
