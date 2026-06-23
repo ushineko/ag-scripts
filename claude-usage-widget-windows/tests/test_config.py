@@ -53,7 +53,7 @@ class TestGetSetSetting:
     def test_get_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with mock.patch("src.config.get_config_dir", return_value=Path(tmpdir)):
-                assert get_setting("update_interval_seconds") == 30
+                assert get_setting("update_interval_seconds") == 60
 
     def test_set_and_get(self):
         with tempfile.TemporaryDirectory() as tmpdir:

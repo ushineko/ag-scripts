@@ -131,6 +131,15 @@ def run_gui() -> None:
     position = config.get("widget_position")
     font_size = config.get("font_size", 9)
 
+    # Adaptive polling. The usage endpoint rate-limits (HTTP 429); each fetch is
+    # a fresh QProcess with no shared state, so the backoff lives here in the
+    # long-lived GUI: on 429 we lengthen the poll interval (exponential, capped),
+    # and reset to the base cadence on the next success.
+    base_interval_ms = max(5, config.get("update_interval_seconds", 60)) * 1000
+    MAX_INTERVAL_MS = 30 * 60 * 1000
+    MAX_BACKOFF_LEVEL = 6
+    backoff_level = 0
+
     # Create widget and tray
     def on_toggle_widget():
         if widget.isVisible():
@@ -140,7 +149,11 @@ def run_gui() -> None:
             widget.raise_()
 
     def on_refresh():
+        nonlocal backoff_level
         reset_oauth_backoff()
+        if backoff_level:
+            backoff_level = 0
+            timer.setInterval(base_interval_ms)
         trigger_update()
 
     def on_exit():
@@ -166,13 +179,33 @@ def run_gui() -> None:
         # result_ready fires once, after the child QProcess has finished, so it
         # is safe to release the fetcher here (deleteLater defers actual
         # destruction to the event loop). No QThread teardown race.
-        nonlocal fetcher, last_data
+        nonlocal fetcher, last_data, backoff_level
         last_data = data
         widget.update_usage(data)
         tray.update_usage(data)
         if fetcher is not None:
             fetcher.deleteLater()
             fetcher = None
+
+        # Adjust the poll cadence based on the result.
+        err = data.get("error") if isinstance(data, dict) else "fetch_failed"
+        if err == "rate_limited":
+            backoff_level = min(backoff_level + 1, MAX_BACKOFF_LEVEL)
+            retry_ms = (data.get("retry_after") or 0) * 1000
+            next_ms = min(max(base_interval_ms * (2 ** backoff_level), retry_ms), MAX_INTERVAL_MS)
+            if timer.interval() != next_ms:
+                timer.setInterval(next_ms)
+            log.warning("poll_backoff", level=backoff_level, next_interval_s=next_ms // 1000)
+        elif err is None:
+            # Genuine success — return to the base cadence.
+            if backoff_level:
+                backoff_level = 0
+                timer.setInterval(base_interval_ms)
+                log.info("poll_backoff_reset")
+        else:
+            # api_error / offline / fetch_failed: keep last data and the current
+            # cadence; don't reset backoff (avoids hammering through a 429 window).
+            log.debug("poll_soft_error", error=err)
 
     def trigger_update():
         nonlocal fetcher
@@ -183,11 +216,10 @@ def run_gui() -> None:
         fetcher.result_ready.connect(on_data_ready)
         fetcher.start()
 
-    # Timer for periodic updates
-    interval_ms = config.get("update_interval_seconds", 30) * 1000
+    # Timer for periodic updates (interval adapts via on_data_ready backoff)
     timer = QTimer()
     timer.timeout.connect(trigger_update)
-    timer.start(interval_ms)
+    timer.start(base_interval_ms)
 
     # Initial fetch
     trigger_update()

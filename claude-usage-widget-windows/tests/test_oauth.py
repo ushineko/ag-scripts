@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import time
+import urllib.error
 from datetime import datetime, timezone, timedelta
 from unittest import mock
 
@@ -246,6 +247,52 @@ class TestFetchClaudeUsage:
         with mock.patch("src.oauth._read_credentials", return_value=creds):
             result = fetch_claude_usage()
             assert result == {"error": "auth_backoff"}
+
+    def _valid_creds(self):
+        # expiresAt far in the future so the usage GET is reached (no refresh)
+        future_ms = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp() * 1000)
+        return {"claudeAiOauth": {"accessToken": "tok", "refreshToken": "ref", "expiresAt": future_ms}}
+
+    def test_429_returns_rate_limited_with_retry_after(self):
+        err = urllib.error.HTTPError(
+            url="x", code=429, msg="Too Many Requests",
+            hdrs={"Retry-After": "120"}, fp=None,
+        )
+        with mock.patch("src.oauth._read_credentials", return_value=self._valid_creds()), \
+                mock.patch("src.oauth.urllib.request.urlopen", side_effect=err):
+            result = fetch_claude_usage()
+        assert result == {"error": "rate_limited", "retry_after": 120}
+
+    def test_429_without_retry_after_header(self):
+        err = urllib.error.HTTPError(url="x", code=429, msg="rl", hdrs={}, fp=None)
+        with mock.patch("src.oauth._read_credentials", return_value=self._valid_creds()), \
+                mock.patch("src.oauth.urllib.request.urlopen", side_effect=err):
+            result = fetch_claude_usage()
+        assert result == {"error": "rate_limited", "retry_after": None}
+
+    def test_other_http_error_still_api_error(self):
+        err = urllib.error.HTTPError(url="x", code=500, msg="boom", hdrs={}, fp=None)
+        with mock.patch("src.oauth._read_credentials", return_value=self._valid_creds()), \
+                mock.patch("src.oauth.urllib.request.urlopen", side_effect=err):
+            result = fetch_claude_usage()
+        assert result == {"error": "api_error"}
+
+
+class TestParseRetryAfter:
+
+    def _err(self, headers):
+        return urllib.error.HTTPError(url="x", code=429, msg="rl", hdrs=headers, fp=None)
+
+    def test_integer_seconds(self):
+        assert oauth_module._parse_retry_after(self._err({"Retry-After": "90"})) == 90
+
+    def test_missing_header(self):
+        assert oauth_module._parse_retry_after(self._err({})) is None
+
+    def test_http_date_falls_back_to_none(self):
+        assert oauth_module._parse_retry_after(
+            self._err({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"})
+        ) is None
 
 
 class TestIsClaudeInstalled:

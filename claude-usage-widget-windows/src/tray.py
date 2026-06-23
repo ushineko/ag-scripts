@@ -60,6 +60,10 @@ class SystemTray:
         self._on_refresh = on_refresh
         self._on_exit = on_exit
 
+        # Last successful reading — kept so a transient error doesn't blank the
+        # tray icon to gray "no data" (mirrors the widget / peripheral-battery).
+        self._last_good: dict | None = None
+
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(QIcon(create_tray_icon_pixmap(COLOR_GRAY)))
         self._tray.setToolTip("Claude Usage Widget")
@@ -109,12 +113,26 @@ class SystemTray:
             self._on_exit()
 
     def update_usage(self, data: dict | None) -> None:
-        """Update tray icon and tooltip from usage data."""
-        if data is None or data.get("error"):
-            self._tray.setIcon(QIcon(create_tray_icon_pixmap(COLOR_GRAY)))
-            self._tray.setToolTip("Claude Usage Widget — no data")
+        """Update tray icon and tooltip, preserving the last good reading.
+
+        On a transient error the last good reading keeps the colored icon
+        (tooltip marked stale); only with no cached reading do we show gray
+        "no data".
+        """
+        if data is not None and not data.get("error"):
+            self._last_good = data
+            self._render(data, stale=False)
             return
 
+        if self._last_good is not None:
+            self._render(self._last_good, stale=True)
+            return
+
+        self._tray.setIcon(QIcon(create_tray_icon_pixmap(COLOR_GRAY)))
+        self._tray.setToolTip("Claude Usage Widget — no data")
+
+    def _render(self, data: dict, stale: bool) -> None:
+        """Render a usage reading to the tray icon + tooltip."""
         five_hour = data.get("five_hour", {})
         seven_day = data.get("seven_day", {})
 
@@ -122,10 +140,11 @@ class SystemTray:
         util_7d = seven_day.get("utilization")
 
         color = usage_color(util_5h)
-        pixmap = create_tray_icon_pixmap(color, util_5h)
-        self._tray.setIcon(QIcon(pixmap))
+        self._tray.setIcon(QIcon(create_tray_icon_pixmap(color, util_5h)))
 
         tooltip = f"Claude: 5h {format_percentage(util_5h)} | 7d {format_percentage(util_7d)}"
+        if stale:
+            tooltip += " (stale)"
         self._tray.setToolTip(tooltip)
 
     def hide(self) -> None:

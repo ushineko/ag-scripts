@@ -114,7 +114,7 @@ Settings are stored in `config.json` under the platform config directory (macOS:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `update_interval_seconds` | 30 | How often to poll the API |
+| `update_interval_seconds` | 60 | Base poll interval; auto-backs off on API rate limits (HTTP 429) |
 | `opacity` | 0.95 | Widget transparency (0.0-1.0) |
 | `widget_position` | null | Saved `[x, y]` position (auto bottom-right if null) |
 | `font_size` | 9 | Base label font size in px (right-click → Font Size; title renders +2) |
@@ -142,6 +142,13 @@ pytest tests/
 ```
 
 ## Changelog
+
+### v3.0.2 (2026-06-23)
+
+- macOS: widget now follows across Spaces and shows over fullscreen apps (sets NSWindow `collectionBehavior` = canJoinAllSpaces | fullScreenAuxiliary)
+- Handle API rate limiting (HTTP 429) gracefully: the poll interval backs off exponentially — honoring the server's `Retry-After` — then resets on the next success
+- Preserve last-known-good readings: on any transient error the widget keeps showing the last reading with a `(reason · age)` staleness note, and the tray keeps its colored icon (tooltip marked "stale") instead of going gray — only a cold start with no cached reading shows an error/"no data" state
+- Raised the default poll interval from 30s to 60s to reduce rate-limit pressure
 
 ### v3.0.1 (2026-06-23)
 

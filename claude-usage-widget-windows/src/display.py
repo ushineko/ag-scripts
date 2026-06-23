@@ -36,6 +36,7 @@ def error_message(error_code: str) -> str:
     messages = {
         "auth_expired": "Auth expired \u2014 run `claude login`",
         "auth_backoff": "(stale \u2014 retrying...)",
+        "rate_limited": "(rate limited \u2014 backing off)",
         "api_error": "(API error)",
         "offline": "(offline)",
         "invalid_response": "(invalid API response)",

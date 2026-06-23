@@ -14,7 +14,7 @@ from .platform_support import IS_MACOS
 log = structlog.get_logger(__name__)
 
 DEFAULTS = {
-    "update_interval_seconds": 30,
+    "update_interval_seconds": 60,
     "opacity": 0.95,
     "widget_position": None,  # None = auto-position bottom-right
     "font_size": 9,  # base label font size in px; title renders +2

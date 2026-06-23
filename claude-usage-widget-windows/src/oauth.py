@@ -327,6 +327,10 @@ def fetch_claude_usage() -> dict | None:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
+        if e.code == 429:
+            retry_after = _parse_retry_after(e)
+            log.warning("claude_usage_rate_limited", status=429, retry_after=retry_after)
+            return {"error": "rate_limited", "retry_after": retry_after}
         log.warning("claude_usage_api_error", status=e.code)
         return {"error": "api_error"}
     except (urllib.error.URLError, TimeoutError) as e:
@@ -335,3 +339,22 @@ def fetch_claude_usage() -> dict | None:
     except json.JSONDecodeError:
         log.warning("claude_usage_invalid_json")
         return {"error": "invalid_response"}
+
+
+def _parse_retry_after(e: urllib.error.HTTPError) -> int | None:
+    """Return the Retry-After header as integer seconds, or None.
+
+    Only the delta-seconds form is parsed; the HTTP-date form falls back to
+    None (the caller applies its own backoff in that case).
+    """
+    try:
+        value = e.headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if not value:
+        return None
+    try:
+        seconds = int(value.strip())
+    except (ValueError, AttributeError):
+        return None
+    return seconds if seconds >= 0 else None

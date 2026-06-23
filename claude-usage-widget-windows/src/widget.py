@@ -8,7 +8,9 @@ Layout mirrors the Claude section in peripheral-battery-monitor:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QPoint, QSize
+import time
+
+from PySide6.QtCore import Qt, QPoint, QSize, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -87,6 +89,14 @@ class FloatingWidget(QWidget):
         self._font_size = font_size
         self._macos_level_applied = False
 
+        # Last successful usage response. On a transient error (rate limit,
+        # offline, API error) we keep rendering this, marked stale, instead of
+        # blanking the widget — mirrors peripheral-battery-monitor's behavior.
+        self._last_good: dict | None = None
+        self._last_good_time: float = 0.0
+        self._showing_cached = False
+        self._current_error: str | None = None
+
         # Qt.Tool keeps the widget off the taskbar and, on macOS, makes it an
         # NSPanel that floats above normal windows. On macOS that panel also
         # hides whenever the (background menu-bar agent) app loses focus, which
@@ -104,6 +114,13 @@ class FloatingWidget(QWidget):
 
         self._build_ui()
         self._apply_font_size()
+
+        # While showing cached data, refresh the "(Nm ago)" staleness text so it
+        # keeps counting up even between (backed-off) polls.
+        self._staleness_timer = QTimer(self)
+        self._staleness_timer.setInterval(60_000)
+        self._staleness_timer.timeout.connect(self._tick_staleness)
+        self._staleness_timer.start()
 
         if position:
             self.move(position[0], position[1])
@@ -223,20 +240,39 @@ class FloatingWidget(QWidget):
         """)
 
     def update_usage(self, data: dict | None) -> None:
-        """Update the widget display with new usage data."""
+        """Update the display, preserving the last good reading on transient errors.
+
+        On success the reading is cached and rendered. On any error (or a failed
+        fetch), the last good reading is re-rendered and marked stale rather than
+        blanked; only when there is no cached reading do we show the error state.
+        Mirrors peripheral-battery-monitor's last-known-good behavior.
+        """
+        if data is not None and not data.get("error"):
+            self._last_good = data
+            self._last_good_time = time.monotonic()
+            self._showing_cached = False
+            self._current_error = None
+            self._render_usage(data)
+            self._status_label.setVisible(False)
+            return
+
+        error = (data or {}).get("error")
+        if self._last_good is not None:
+            self._showing_cached = True
+            self._current_error = error
+            self._render_usage(self._last_good)
+            self._apply_stale_indicator(error)
+            return
+
+        # No cached reading yet \u2014 show the error / not-logged-in state.
+        self._showing_cached = False
         if data is None:
             self._show_error("Not logged in \u2014 run `claude login`")
-            return
+        else:
+            self._show_error(self._error_message(error))
 
-        error = data.get("error")
-        if error:
-            error_msg = self._error_message(error)
-            if error in ("auth_backoff", "offline", "api_error"):
-                self._show_stale(error_msg)
-            else:
-                self._show_error(error_msg)
-            return
-
+    def _render_usage(self, data: dict) -> None:
+        """Render a usage payload to the widgets (no error handling)."""
         five_hour = data.get("five_hour", {})
         seven_day = data.get("seven_day", {})
 
@@ -244,13 +280,9 @@ class FloatingWidget(QWidget):
         util_7d = seven_day.get("utilization")
         resets_at = five_hour.get("resets_at", "")
 
-        # Progress bar
-        pct_value = min(100, int(util_5h or 0))
-        color = usage_color(util_5h)
-        self._progress_bar.setValue(pct_value)
-        self._set_bar_color(color)
+        self._progress_bar.setValue(min(100, int(util_5h or 0)))
+        self._set_bar_color(usage_color(util_5h))
 
-        # Stats labels
         self._five_hour_label.setText(f"5h: {format_percentage(util_5h)}")
 
         # Build 7d text with model breakdowns if available
@@ -262,27 +294,49 @@ class FloatingWidget(QWidget):
                 right_parts.append(f"{label}: {bucket['utilization']:.0f}%")
         self._seven_day_label.setText(" | ".join(right_parts))
 
-        # Countdown
         if resets_at:
             from .oauth import get_time_until_reset
             self._countdown_label.setText(f"Resets in {get_time_until_reset(resets_at)}")
         else:
             self._countdown_label.setText("")
 
-        self._status_label.setVisible(False)
+    def _staleness_suffix(self) -> str:
+        """Human-readable age of the cached reading, e.g. '3m ago'."""
+        if self._last_good_time <= 0:
+            return ""
+        minutes = int((time.monotonic() - self._last_good_time) // 60)
+        if minutes < 1:
+            return "just now"
+        if minutes < 60:
+            return f"{minutes}m ago"
+        return f"{minutes // 60}h{minutes % 60}m ago"
+
+    def _apply_stale_indicator(self, error: str | None) -> None:
+        """Show a '(reason \u00b7 age)' line under the cached reading."""
+        reason = {
+            "rate_limited": "rate limited",
+            "offline": "offline",
+            "api_error": "API error",
+            "auth_backoff": "auth retry",
+            "auth_expired": "auth expired",
+        }.get(error, "stale")
+        age = self._staleness_suffix()
+        self._status_label.setText(f"({reason} \u00b7 {age})" if age else f"({reason})")
+        self._status_label.setVisible(True)
+
+    def _tick_staleness(self) -> None:
+        """Keep the staleness age / reset countdown fresh while showing cache."""
+        if self._showing_cached and self._last_good is not None:
+            self._render_usage(self._last_good)
+            self._apply_stale_indicator(self._current_error)
 
     def _show_error(self, message: str) -> None:
-        """Display an error/status message, reset bar to empty."""
+        """Display an error/status message, reset bar to empty (no cached data)."""
         self._five_hour_label.setText("5h: --")
         self._progress_bar.setValue(0)
         self._set_bar_color(COLOR_GRAY)
         self._countdown_label.setText("")
         self._seven_day_label.setText("7d: --")
-        self._status_label.setText(message)
-        self._status_label.setVisible(True)
-
-    def _show_stale(self, message: str) -> None:
-        """Show stale data indicator while keeping last-known values."""
         self._status_label.setText(message)
         self._status_label.setVisible(True)
 
@@ -413,6 +467,14 @@ class FloatingWidget(QWidget):
             # NSFloatingWindowLevel = 3 (above normal windows).
             msg(window, b"setLevel:", ctypes.c_long(3),
                 argtypes=(ctypes.c_long,), restype=None)
+            # Make the widget follow across Spaces and show over fullscreen apps:
+            #   NSWindowCollectionBehaviorCanJoinAllSpaces    (1 << 0)
+            #   NSWindowCollectionBehaviorFullScreenAuxiliary (1 << 8)
+            # Without this the panel only appears on the Space it was created on
+            # and is hidden under fullscreen apps.
+            behavior = (1 << 0) | (1 << 8)
+            msg(window, b"setCollectionBehavior:", ctypes.c_ulong(behavior),
+                argtypes=(ctypes.c_ulong,), restype=None)
             return True
         except Exception:
             return False
