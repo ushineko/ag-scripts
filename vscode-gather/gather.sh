@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # vscode-gather: Move all VS Code windows to the primary monitor and maximize them.
-# Uses KWin scripting via D-Bus — works on KDE Plasma 6 / Wayland.
+# Linux: KWin scripting via D-Bus (KDE Plasma 6 / Wayland)
+# macOS: AppleScript via osascript
 
 set -euo pipefail
 
-VERSION="1.0"
+VERSION="2.0"
 SCRIPT_NAME="vscode-gather"
+PLATFORM="$(uname -s)"
 DEBUG=false
 DRY_RUN=false
 TARGET_CLASS="code"
+TARGET_PROCESS="Code"
 TARGET_OUTPUT=""
 
 usage() {
@@ -18,9 +21,14 @@ vscode-gather v${VERSION} — gather VS Code windows to one monitor
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
-  -o, --output NAME   Target output name (e.g. DP-3). Default: primary monitor.
+  -o, --output NAME   Target output name. Default: primary monitor.
+                       Linux: e.g. DP-3, HDMI-1
+                       macOS: display name from --list-outputs (e.g. "Color LCD")
   -c, --class CLASS   Window class to match (default: code)
-  -n, --dry-run       Print the KWin script without running it
+                       Linux: KWin resourceClass
+                       macOS: also sets process name (default: Code)
+  -l, --list-outputs  List available displays and exit
+  -n, --dry-run       Print the generated script without running it
   -d, --debug         Enable debug output
   -h, --help          Show this help
   -v, --version       Show version
@@ -30,12 +38,13 @@ EOF
 log() { echo "[gather] $*"; }
 debug() { $DEBUG && echo "[gather:debug] $*" || true; }
 
-detect_primary_output() {
-    # kscreen-doctor lists outputs with "priority N" — priority 1 is primary.
-    # Parse: "Output: N <name> <uuid>" followed by "priority N"
+# ---------------------------------------------------------------------------
+# Display detection
+# ---------------------------------------------------------------------------
+
+detect_primary_output_linux() {
     local output_name=""
     while IFS= read -r line; do
-        # Strip ANSI escape codes
         line=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
         if [[ "$line" =~ ^Output:\ +[0-9]+\ +([A-Za-z0-9_-]+) ]]; then
             output_name="${BASH_REMATCH[1]}"
@@ -46,9 +55,57 @@ detect_primary_output() {
             output_name=""
         fi
     done < <(kscreen-doctor --outputs 2>/dev/null)
-
     return 1
 }
+
+detect_primary_output_macos() {
+    osascript -l JavaScript -e '
+ObjC.import("AppKit");
+var main = $.NSScreen.mainScreen;
+if (main) {
+    ObjC.unwrap(main.localizedName);
+} else {
+    null;
+}
+' 2>/dev/null || return 1
+}
+
+detect_primary_output() {
+    case "$PLATFORM" in
+        Linux)  detect_primary_output_linux ;;
+        Darwin) detect_primary_output_macos ;;
+        *)      log "ERROR: Unsupported platform: $PLATFORM"; return 1 ;;
+    esac
+}
+
+list_outputs() {
+    case "$PLATFORM" in
+        Linux)
+            log "Available outputs (via kscreen-doctor):"
+            kscreen-doctor --outputs 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
+                | grep -E "^Output:|priority" | sed 's/^/  /'
+            ;;
+        Darwin)
+            log "Available displays (via NSScreen):"
+            osascript -l JavaScript -e '
+ObjC.import("AppKit");
+var screens = $.NSScreen.screens;
+var mainName = ObjC.unwrap($.NSScreen.mainScreen.localizedName);
+for (var i = 0; i < screens.count; i++) {
+    var s = screens.objectAtIndex(i);
+    var name = ObjC.unwrap(s.localizedName);
+    var f = s.frame;
+    var tag = (name === mainName) ? " (PRIMARY)" : "";
+    "  " + (i + 1) + ". " + name + tag + " — " + f.size.width + "x" + f.size.height;
+}
+' 2>/dev/null
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Linux (KDE Plasma 6 / Wayland) — KWin scripting via D-Bus
+# ---------------------------------------------------------------------------
 
 generate_kwin_script() {
     local target_output="$1"
@@ -79,10 +136,7 @@ generate_kwin_script() {
 
         var wasOnTarget = (w.output && w.output.name === "${target_output}");
 
-        // Move to target output (w.output is read-only in KDE 6)
         workspace.sendClientToScreen(w, targetOutput);
-
-        // Maximize (setMaximize(horizontal, vertical))
         w.setMaximize(true, true);
 
         moved++;
@@ -116,26 +170,154 @@ run_kwin_script() {
     qdbus6 org.kde.KWin "/Scripting/Script${script_id}" org.kde.kwin.Script.run
     debug "Script executed"
 
-    # Brief pause to let the script complete
     sleep 0.3
 
-    # Read results from journal
     if $DEBUG; then
         journalctl --user -u plasma-kwin_wayland --since "3 seconds ago" --no-pager 2>/dev/null \
             | grep "$SCRIPT_NAME" || true
     fi
 
-    # Unload
     qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "$SCRIPT_NAME" >/dev/null 2>&1 || true
 
     rm -f "$tmpfile"
 }
 
-# --- Parse args ---
+gather_linux() {
+    local target_output="$1"
+    local target_class="$2"
+
+    local script
+    script=$(generate_kwin_script "$target_output" "$target_class")
+
+    if $DRY_RUN; then
+        echo "$script"
+        exit 0
+    fi
+
+    run_kwin_script "$script"
+}
+
+# ---------------------------------------------------------------------------
+# macOS — AppleScript via osascript
+# ---------------------------------------------------------------------------
+
+get_display_bounds() {
+    local target_name="$1"
+    osascript -l JavaScript -e "
+ObjC.import('AppKit');
+var screens = $.NSScreen.screens;
+var target = null;
+for (var i = 0; i < screens.count; i++) {
+    var s = screens.objectAtIndex(i);
+    var name = ObjC.unwrap(s.localizedName);
+    if (name === '${target_name}') { target = s; break; }
+}
+if (!target) target = $.NSScreen.mainScreen;
+var v = target.visibleFrame;
+var full = target.frame;
+// NSScreen coordinates are flipped (origin at bottom-left).
+// Convert to top-left origin for AppleScript.
+var menuBarHeight = full.size.height - v.size.height - v.origin.y + full.origin.y;
+var topLeftX = v.origin.x;
+var topLeftY = full.origin.y + menuBarHeight;
+JSON.stringify({x: topLeftX, y: topLeftY, w: v.size.width, h: v.size.height});
+" 2>/dev/null
+}
+
+generate_applescript() {
+    local target_process="$1"
+    local bounds_json="$2"
+
+    local dx dy dw dh
+    dx=$(echo "$bounds_json" | python3 -c "import json,sys; print(int(json.load(sys.stdin)['x']))")
+    dy=$(echo "$bounds_json" | python3 -c "import json,sys; print(int(json.load(sys.stdin)['y']))")
+    dw=$(echo "$bounds_json" | python3 -c "import json,sys; print(int(json.load(sys.stdin)['w']))")
+    dh=$(echo "$bounds_json" | python3 -c "import json,sys; print(int(json.load(sys.stdin)['h']))")
+
+    cat <<ASEOF
+tell application "System Events"
+    set targetProc to first process whose name is "${target_process}"
+    set windowCount to count of windows of targetProc
+    if windowCount = 0 then
+        return "0"
+    end if
+    set moved to 0
+    repeat with w in (windows of targetProc)
+        set position of w to {${dx}, ${dy}}
+        set size of w to {${dw}, ${dh}}
+        set moved to moved + 1
+    end repeat
+    return moved as text
+end tell
+ASEOF
+}
+
+gather_macos() {
+    local target_output="$1"
+    local target_process="$2"
+
+    debug "Target process: $target_process"
+    debug "Target display: $target_output"
+
+    # Display bounds come from NSScreen (no Accessibility needed), so a dry-run
+    # can print the script without the Accessibility grant.
+    local bounds_json
+    bounds_json=$(get_display_bounds "$target_output")
+    debug "Display bounds: $bounds_json"
+
+    local script
+    script=$(generate_applescript "$target_process" "$bounds_json")
+
+    if $DRY_RUN; then
+        echo "$script"
+        exit 0
+    fi
+
+    # Actual window manipulation requires Accessibility access.
+    if ! osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' >/dev/null 2>&1; then
+        log "ERROR: Accessibility access denied."
+        log "Grant access in System Settings → Privacy & Security → Accessibility"
+        log "Add your terminal app ($(basename "$(ps -p $PPID -o comm= 2>/dev/null || echo Terminal)"))"
+        exit 1
+    fi
+
+    local moved
+    moved=$(osascript -e "$script" 2>&1) || {
+        log "ERROR: AppleScript execution failed"
+        debug "$moved"
+        exit 1
+    }
+
+    log "Processed $moved window(s)"
+
+    if $DEBUG; then
+        debug "Post-gather window state:"
+        osascript -e "
+tell application \"System Events\"
+    set targetProc to first process whose name is \"${target_process}\"
+    set results to \"\"
+    repeat with w in (windows of targetProc)
+        set {x, y} to position of w
+        set {pw, ph} to size of w
+        set results to results & \"  \" & (name of w) & \": (\" & x & \",\" & y & \") \" & pw & \"x\" & ph & linefeed
+    end repeat
+    return results
+end tell
+" 2>/dev/null || true
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+LIST_OUTPUTS=false
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -o|--output)  TARGET_OUTPUT="$2"; shift 2 ;;
         -c|--class)   TARGET_CLASS="$2"; shift 2 ;;
+        -l|--list-outputs) LIST_OUTPUTS=true; shift ;;
         -n|--dry-run) DRY_RUN=true; shift ;;
         -d|--debug)   DEBUG=true; shift ;;
         -h|--help)    usage; exit 0 ;;
@@ -143,6 +325,18 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
+
+if $LIST_OUTPUTS; then
+    list_outputs
+    exit 0
+fi
+
+# Map --class to macOS process name
+if [[ "$PLATFORM" == "Darwin" ]] && [[ "$TARGET_CLASS" == "code" ]]; then
+    TARGET_PROCESS="Code"
+elif [[ "$PLATFORM" == "Darwin" ]]; then
+    TARGET_PROCESS="$TARGET_CLASS"
+fi
 
 # --- Resolve target output ---
 if [[ -z "$TARGET_OUTPUT" ]]; then
@@ -154,13 +348,11 @@ if [[ -z "$TARGET_OUTPUT" ]]; then
 fi
 log "Target output: $TARGET_OUTPUT"
 
-# --- Generate and run ---
-script=$(generate_kwin_script "$TARGET_OUTPUT" "$TARGET_CLASS")
+# --- Gather ---
+case "$PLATFORM" in
+    Linux)  gather_linux "$TARGET_OUTPUT" "$TARGET_CLASS" ;;
+    Darwin) gather_macos "$TARGET_OUTPUT" "$TARGET_PROCESS" ;;
+    *)      log "ERROR: Unsupported platform: $PLATFORM"; exit 1 ;;
+esac
 
-if $DRY_RUN; then
-    echo "$script"
-    exit 0
-fi
-
-run_kwin_script "$script"
 log "Done."
