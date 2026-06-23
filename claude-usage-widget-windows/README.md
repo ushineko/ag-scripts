@@ -97,6 +97,7 @@ python -m src.main --no-gui --debug  # With verbose logging
 |--------|-------------|
 | `--debug` | Enable verbose debug logging |
 | `--no-gui` | Fetch usage from API and print to console |
+| `--fetch-json` | Fetch usage and print it as JSON to stdout, then exit (used internally by the GUI's QProcess fetcher; logs go to stderr) |
 | `--log-file PATH` | Write logs to file |
 
 ### Status Colors
@@ -122,7 +123,8 @@ Settings are stored in `config.json` under the platform config directory (macOS:
 
 ```
 src/
-  main.py              # Entry point, QTimer, worker thread, single-instance
+  main.py              # Entry point, QTimer, single-instance, --fetch-json child path
+  fetcher.py           # QProcess-based async usage fetch (event loop, no threads)
   oauth.py             # OAuth credentials, token refresh, usage API, backoff
   widget.py            # PySide6 floating widget (frameless, translucent)
   tray.py              # QSystemTrayIcon with context menu
@@ -130,7 +132,7 @@ src/
   logging_config.py    # structlog setup
 ```
 
-Data flow: A single `QTimer` triggers a worker `QThread` that calls the Anthropic OAuth usage API. The result is delivered via Qt signal to both the widget and tray icon — no duplicate API calls.
+Data flow: A single `QTimer` triggers an asynchronous fetch on the Qt event loop. The fetch runs in a short-lived child process (`UsageFetcher` spawns the app's own binary with `--fetch-json` via `QProcess`), which prints the usage JSON to stdout; the parent parses it on `QProcess.finished` and delivers it via Qt signal to both the widget and tray icon — no duplicate API calls and no worker threads. (Earlier versions used a `QThread`; destroying it before it fully terminated made Qt `abort()` the process, so the design moved to QProcess, matching the pattern used elsewhere in this repo.)
 
 ## Development
 
@@ -140,6 +142,12 @@ pytest tests/
 ```
 
 ## Changelog
+
+### v3.0.1 (2026-06-23)
+
+- Fixed a crash (SIGABRT) after a few update cycles: the usage fetch ran in a `QThread` that Qt `abort()`ed when destroyed before it fully terminated
+- Replaced the `QThread` worker with an event-loop `QProcess` fetcher (`src/fetcher.py`), matching the async pattern used elsewhere in the repo (vscode-launcher, vpn-toggle) — no worker threads
+- Added an internal `--fetch-json` mode (JSON to stdout, logs to stderr) used by the QProcess fetcher
 
 ### v3.0.0 (2026-06-23)
 

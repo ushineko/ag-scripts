@@ -1,3 +1,3 @@
 """Claude Usage Widget — cross-platform (Windows and macOS)."""
 
-__version__ = "3.0.0"
+__version__ = "3.0.1"

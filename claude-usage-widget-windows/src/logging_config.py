@@ -27,13 +27,21 @@ def get_log_dir() -> Path:
     return Path.home() / ".claude-usage-widget" / "logs"
 
 
-def setup_logging(debug: bool = False, log_file: Path | None = None) -> None:
-    """Configure structlog for the application."""
+def setup_logging(debug: bool = False, log_file: Path | None = None, stream=None) -> None:
+    """Configure structlog for the application.
+
+    ``stream`` selects where console logs go (default stdout). The ``--fetch-json``
+    child process routes logs to stderr so that stdout carries only the JSON
+    payload the parent QProcess parses.
+    """
+    if stream is None:
+        stream = sys.stdout
+
     log_level = logging.DEBUG if debug else logging.INFO
 
     handlers: list[logging.Handler] = []
 
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler(stream)
     console_handler.setLevel(log_level)
     handlers.append(console_handler)
 
@@ -57,10 +65,10 @@ def setup_logging(debug: bool = False, log_file: Path | None = None) -> None:
             structlog.processors.StackInfoRenderer(),
             structlog.dev.set_exc_info,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.dev.ConsoleRenderer(colors=sys.stdout.isatty()),
+            structlog.dev.ConsoleRenderer(colors=stream.isatty()),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.PrintLoggerFactory(file=stream),
         cache_logger_on_first_use=True,
     )
