@@ -4,6 +4,8 @@ Color thresholds, formatting functions, and error message mapping used by
 both the widget and tray modules, and testable without PySide6 installed.
 """
 
+from __future__ import annotations
+
 # Color hex values
 COLOR_GREEN = "#4caf50"
 COLOR_YELLOW = "#ff9800"

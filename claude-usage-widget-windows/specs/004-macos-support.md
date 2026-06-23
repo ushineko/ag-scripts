@@ -128,21 +128,31 @@ All new platform branches route through these constants — no scattered `sys.pl
 
 ## Acceptance Criteria
 
-- [ ] `src/platform_support.py` exists exposing `IS_WINDOWS`/`IS_MACOS`/`IS_LINUX`; new branches use it (R1)
-- [ ] `get_config_dir()` returns `~/Library/Application Support/claude-usage-widget` on macOS; Windows/generic unchanged (R2)
-- [ ] `get_log_dir()` returns `~/Library/Logs/claude-usage-widget` on macOS; Windows/generic unchanged (R2)
-- [ ] OAuth credential path resolves to `~/.claude/.credentials.json` on macOS (verified, no change) (R2)
-- [ ] PyInstaller spec produces `Claude Usage Widget.app` with `LSUIElement=True` and a bundle identifier (R3)
-- [ ] A `.icns` bundle icon is generated and referenced by the spec (R4)
-- [ ] `scripts/build_macos.sh` validates framework Python and builds `dist/Claude Usage Widget.app` (R5)
-- [ ] `install.sh` builds + installs the `.app` to /Applications (or ~/Applications) on macOS (R6)
-- [ ] LaunchAgent plist is written to `~/Library/LaunchAgents/` and loaded via `launchctl`; widget starts at login (R7)
-- [ ] `uninstall.sh` removes the LaunchAgent, the `.app`, and (after prompt) config + logs; idempotent (R8)
-- [ ] Single-instance `QLockFile` lock works on macOS (second launch is a no-op) (R9)
-- [ ] README updated: macOS install/uninstall sections + support matrix; root README updated (R10)
-- [ ] Version bumped consistently in `src/__init__.py` and README (maintainer-approved number) (R10)
-- [ ] Unit tests cover the macOS path branches and pass; existing tests still pass (R11)
-- [ ] Validation report created in `validation-reports/` and committed alongside the changes
+- [x] `src/platform_support.py` exists exposing `IS_WINDOWS`/`IS_MACOS`/`IS_LINUX`; new branches use it (R1)
+- [x] `get_config_dir()` returns `~/Library/Application Support/claude-usage-widget` on macOS; Windows/generic unchanged (R2)
+- [x] `get_log_dir()` returns `~/Library/Logs/claude-usage-widget` on macOS; Windows/generic unchanged (R2)
+- [x] OAuth credentials resolve correctly on macOS (R2) — **deviation:** the spec assumed `~/.claude/.credentials.json` "needs no change", but Claude Code on macOS stores credentials in the **login Keychain** (`Claude Code-credentials`). `src/oauth.py` now reads/writes the Keychain via the `security` CLI on macOS and keeps the file path on Windows/Linux.
+- [x] PyInstaller spec produces `Claude Usage Widget.app` with `LSUIElement=True` and a bundle identifier (R3)
+- [x] A `.icns` bundle icon is generated and referenced by the spec (R4)
+- [x] `scripts/build_macos.sh` validates framework Python and builds `dist/Claude Usage Widget.app` (R5)
+- [x] `install.sh` builds + installs the `.app` to /Applications (or ~/Applications) on macOS (R6)
+- [x] LaunchAgent plist is written to `~/Library/LaunchAgents/` and loaded via `launchctl`; widget starts at login (R7)
+- [x] `uninstall.sh` removes the LaunchAgent, the `.app`, and (after prompt) config + logs; idempotent (R8)
+- [x] Single-instance `QLockFile` lock works on macOS (`src/main.py` uses `QStandardPaths.TempLocation`; second launch logs `another_instance_running` and exits) (R9)
+- [x] README updated: macOS install/uninstall sections + support matrix; root README updated (R10)
+- [x] Version bumped consistently in `src/__init__.py` and README (3.0.0, maintainer-approved) (R10)
+- [x] Unit tests cover the macOS path branches and pass; existing tests still pass (R11)
+- [x] Validation report created in `validation-reports/` and committed alongside the changes
+
+## Post-implementation deviations (discovered during macOS bring-up)
+
+The spec assumed the widget's core was already macOS-ready. Debugging the built `.app` surfaced three issues fixed beyond the original requirements:
+
+1. **Credentials are in the Keychain, not a file** (see amended R2 criterion above).
+2. **PEP 604 crash on framework Python 3.9.** The macOS framework Python is 3.9.6; evaluated `X | None` annotations raised `TypeError` at import, so the `.app` crashed before drawing anything. Fixed by adding `from __future__ import annotations` to the `src/` modules.
+3. **Widget didn't stay on top.** The `Qt.Tool` NSPanel hides when the background agent app loses focus. Fixed natively (ctypes → Obj-C runtime) by setting `hidesOnDeactivate = NO` and a floating window level in `FloatingWidget.showEvent`, gated on the `cocoa` QPA platform.
+
+Also added a user-requested **selectable font size** (right-click → Font Size, persisted to config).
 
 ## Technical Notes
 
@@ -172,4 +182,4 @@ All new platform branches route through these constants — no scattered `sys.pl
   - `clockwork-orange/scripts/build_macos.sh` (framework-build validation)
   - `clockwork-orange/Clockwork Orange.spec` (`BUNDLE()` target + `.icns`)
 
-## Status: INCOMPLETE
+## Status: COMPLETE

@@ -1,5 +1,7 @@
 """System tray icon using QSystemTrayIcon."""
 
+from __future__ import annotations
+
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon

@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone, timedelta
@@ -11,6 +12,9 @@ import pytest
 
 from src.oauth import (
     _read_credentials,
+    _read_credentials_file,
+    _read_credentials_keychain,
+    _save_credentials_keychain,
     _apply_backoff,
     _check_creds_mtime,
     fetch_claude_usage,
@@ -18,6 +22,7 @@ from src.oauth import (
     is_claude_installed,
     reset_oauth_backoff,
     CLAUDE_CREDENTIALS_PATH,
+    KEYCHAIN_SERVICE,
     _BACKOFF_TRANSIENT_BASE,
     _BACKOFF_TRANSIENT_CAP,
     _BACKOFF_PERMANENT_BASE,
@@ -36,11 +41,11 @@ def reset_backoff_state():
     oauth_module._oauth_creds_mtime = 0.0
 
 
-class TestReadCredentials:
+class TestReadCredentialsFile:
 
     def test_returns_none_when_file_missing(self):
         with mock.patch("src.oauth.CLAUDE_CREDENTIALS_PATH", "/nonexistent/path"):
-            assert _read_credentials() is None
+            assert _read_credentials_file() is None
 
     def test_returns_none_on_invalid_json(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -48,7 +53,7 @@ class TestReadCredentials:
             with open(path, "w") as f:
                 f.write("not json")
             with mock.patch("src.oauth.CLAUDE_CREDENTIALS_PATH", path):
-                assert _read_credentials() is None
+                assert _read_credentials_file() is None
 
     def test_reads_valid_credentials(self):
         creds = {"claudeAiOauth": {"accessToken": "tok", "refreshToken": "ref", "expiresAt": 0}}
@@ -57,8 +62,77 @@ class TestReadCredentials:
             with open(path, "w") as f:
                 json.dump(creds, f)
             with mock.patch("src.oauth.CLAUDE_CREDENTIALS_PATH", path):
-                result = _read_credentials()
+                result = _read_credentials_file()
                 assert result["claudeAiOauth"]["accessToken"] == "tok"
+
+
+class TestReadCredentialsKeychain:
+
+    def _completed(self, returncode=0, stdout=""):
+        return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout)
+
+    def test_reads_valid_credentials(self):
+        creds = {"claudeAiOauth": {"accessToken": "tok"}}
+        blob = json.dumps(creds)
+        with mock.patch("src.oauth.subprocess.run",
+                        return_value=self._completed(0, blob + "\n")) as run:
+            result = _read_credentials_keychain()
+            assert result["claudeAiOauth"]["accessToken"] == "tok"
+            # Reads via the `security` CLI for the expected service.
+            args = run.call_args[0][0]
+            assert args[0] == "security"
+            assert KEYCHAIN_SERVICE in args
+
+    def test_returns_none_when_item_missing(self):
+        # `security` exits non-zero when the item is absent.
+        with mock.patch("src.oauth.subprocess.run",
+                        return_value=self._completed(44, "")):
+            assert _read_credentials_keychain() is None
+
+    def test_returns_none_on_invalid_json(self):
+        with mock.patch("src.oauth.subprocess.run",
+                        return_value=self._completed(0, "not json")):
+            assert _read_credentials_keychain() is None
+
+    def test_returns_none_when_security_missing(self):
+        with mock.patch("src.oauth.subprocess.run", side_effect=FileNotFoundError):
+            assert _read_credentials_keychain() is None
+
+
+class TestReadCredentialsDispatch:
+
+    def test_macos_uses_keychain(self):
+        with mock.patch("src.oauth.IS_MACOS", True), \
+             mock.patch("src.oauth._read_credentials_keychain", return_value={"k": 1}) as kc, \
+             mock.patch("src.oauth._read_credentials_file") as fl:
+            assert _read_credentials() == {"k": 1}
+            kc.assert_called_once()
+            fl.assert_not_called()
+
+    def test_non_macos_uses_file(self):
+        with mock.patch("src.oauth.IS_MACOS", False), \
+             mock.patch("src.oauth._read_credentials_file", return_value={"k": 2}) as fl, \
+             mock.patch("src.oauth._read_credentials_keychain") as kc:
+            assert _read_credentials() == {"k": 2}
+            fl.assert_called_once()
+            kc.assert_not_called()
+
+
+class TestSaveCredentialsKeychain:
+
+    def test_writes_via_security_update(self):
+        creds = {"claudeAiOauth": {"accessToken": "new"}}
+        with mock.patch("src.oauth.subprocess.run") as run:
+            _save_credentials_keychain(creds)
+            args = run.call_args[0][0]
+            assert args[:2] == ["security", "add-generic-password"]
+            assert "-U" in args  # update-in-place
+            assert KEYCHAIN_SERVICE in args
+            assert json.dumps(creds) in args
+
+    def test_swallows_security_errors(self):
+        with mock.patch("src.oauth.subprocess.run", side_effect=OSError):
+            _save_credentials_keychain({"x": 1})  # must not raise
 
 
 class TestBackoff:
@@ -110,7 +184,10 @@ class TestCredsFileWatch:
             f.flush()
             path = f.name
 
-        with mock.patch("src.oauth.CLAUDE_CREDENTIALS_PATH", path):
+        # Force the file-based path (the test machine may be macOS, where the
+        # default code path reads the Keychain instead).
+        with mock.patch("src.oauth.CLAUDE_CREDENTIALS_PATH", path), \
+             mock.patch("src.oauth.IS_MACOS", False):
             # Set initial mtime
             oauth_module._oauth_creds_mtime = os.stat(path).st_mtime - 1
             _apply_backoff(is_permanent=False)

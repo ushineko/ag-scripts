@@ -1,0 +1,9 @@
+# Build artifacts (PyInstaller)
+build/
+dist/
+
+# Generated icon (produced by scripts/create_icns.py during build)
+*.icns
+
+# Test cache
+.pytest_cache/

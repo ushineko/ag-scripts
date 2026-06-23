@@ -1,15 +1,21 @@
 """OAuth credential management and Claude usage API client.
 
-Reads OAuth tokens from ~/.claude/.credentials.json, auto-refreshes expired
-access tokens, and fetches usage data from the Anthropic API. Implements
-exponential backoff on refresh failures.
+Reads OAuth tokens from the platform credential store (macOS login Keychain;
+~/.claude/.credentials.json on Windows/Linux), auto-refreshes expired access
+tokens, and fetches usage data from the Anthropic API. Implements exponential
+backoff on refresh failures.
 
 Ported from peripheral-battery-monitor with Windows path adjustments.
 """
 
+from __future__ import annotations
+
+import getpass
 import json
 import os
+import re
 import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -17,10 +23,18 @@ from datetime import datetime, timezone
 
 import structlog
 
+from .platform_support import IS_MACOS
+
 CLAUDE_CREDENTIALS_PATH = os.path.join(
     os.environ.get("USERPROFILE", os.path.expanduser("~")),
     ".claude", ".credentials.json",
 )
+
+# On macOS, Claude Code stores OAuth credentials in the login Keychain as a
+# generic password (service name below, account = the macOS username) rather
+# than in ~/.claude/.credentials.json. We read/write the Keychain via the
+# `security` CLI on macOS and fall back to the file path elsewhere.
+KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -72,13 +86,40 @@ def get_time_until_reset(resets_at: str) -> str:
     return f"{minutes}m"
 
 
-def _read_credentials() -> dict | None:
-    """Read and return the Claude OAuth credentials, or None if unavailable."""
+def _read_credentials_file() -> dict | None:
+    """Read Claude OAuth credentials from ~/.claude/.credentials.json."""
     try:
         with open(CLAUDE_CREDENTIALS_PATH, "r") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, PermissionError):
         return None
+
+
+def _read_credentials_keychain() -> dict | None:
+    """Read Claude OAuth credentials from the macOS login Keychain."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    raw = result.stdout.strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+def _read_credentials() -> dict | None:
+    """Read and return the Claude OAuth credentials, or None if unavailable."""
+    if IS_MACOS:
+        return _read_credentials_keychain()
+    return _read_credentials_file()
 
 
 def _refresh_oauth_token(refresh_token: str) -> tuple[dict | None, bool]:
@@ -121,8 +162,8 @@ def _refresh_oauth_token(refresh_token: str) -> tuple[dict | None, bool]:
         return None, False
 
 
-def _save_credentials(creds: dict) -> None:
-    """Write updated credentials back to disk."""
+def _save_credentials_file(creds: dict) -> None:
+    """Write updated credentials to ~/.claude/.credentials.json."""
     try:
         with open(CLAUDE_CREDENTIALS_PATH, "w") as f:
             json.dump(creds, f)
@@ -130,12 +171,72 @@ def _save_credentials(creds: dict) -> None:
         pass
 
 
-def _check_creds_mtime() -> None:
-    """Check if credentials file changed on disk (e.g. after `claude login`). Reset backoff if so."""
-    global _oauth_creds_mtime
+def _save_credentials_keychain(creds: dict) -> None:
+    """Write updated credentials back to the macOS login Keychain.
+
+    Uses ``-U`` to update the existing generic-password item in place. The
+    account is the current macOS username, matching how Claude Code stores it.
+    """
+    account = os.environ.get("USER") or getpass.getuser()
     try:
-        mtime = os.stat(CLAUDE_CREDENTIALS_PATH).st_mtime
+        subprocess.run(
+            ["security", "add-generic-password", "-U",
+             "-s", KEYCHAIN_SERVICE, "-a", account, "-w", json.dumps(creds)],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _save_credentials(creds: dict) -> None:
+    """Write updated credentials back to the platform credential store."""
+    if IS_MACOS:
+        _save_credentials_keychain(creds)
+    else:
+        _save_credentials_file(creds)
+
+
+def _keychain_mtime() -> float:
+    """Modification time (epoch seconds) of the Keychain creds item, or 0.0.
+
+    Parses the ``"mdat"<timedate>=... "YYYYMMDDhhmmssZ"`` field from
+    ``security``'s attribute dump. Returns 0.0 if unavailable/unparseable, in
+    which case the change-watch simply doesn't fire (manual Refresh still works).
+    """
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0.0
+    if result.returncode != 0:
+        return 0.0
+    match = re.search(r'"mdat".*?"(\d{14})Z', result.stdout)
+    if not match:
+        return 0.0
+    try:
+        dt = datetime.strptime(match.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _creds_mtime() -> float:
+    """Modification time of the active credential store, or 0.0 if unknown."""
+    if IS_MACOS:
+        return _keychain_mtime()
+    try:
+        return os.stat(CLAUDE_CREDENTIALS_PATH).st_mtime
     except OSError:
+        return 0.0
+
+
+def _check_creds_mtime() -> None:
+    """Reset backoff if the credential store changed (e.g. after `claude login`)."""
+    global _oauth_creds_mtime
+    mtime = _creds_mtime()
+    if mtime <= 0:
         return
     if mtime > _oauth_creds_mtime:
         if _oauth_creds_mtime > 0 and _oauth_fail_count > 0:

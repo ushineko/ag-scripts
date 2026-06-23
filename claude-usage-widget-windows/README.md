@@ -1,10 +1,13 @@
-# Claude Usage Widget for Windows
+# Claude Usage Widget
 
-A floating desktop widget that displays Claude Code API usage metrics via the Anthropic OAuth API.
+A floating desktop widget that displays Claude Code API usage metrics via the Anthropic OAuth API. Runs on **macOS** (menu-bar agent `.app`) and **Windows** (run-from-source / `install.bat`).
+
+> The directory is named `claude-usage-widget-windows` for historical reasons; the project is now cross-platform. Renaming the directory is deferred to avoid breaking paths/history.
 
 ## Table of Contents
 
 - [Features](#features)
+- [Platform Support](#platform-support)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -18,22 +21,46 @@ A floating desktop widget that displays Claude Code API usage metrics via the An
 - Always-on-top floating widget with 5-hour utilization progress bar
 - Countdown timer to next usage window reset
 - 7-day utilization display
-- System tray icon with color-coded usage status
+- System tray / menu-bar icon with color-coded usage status
 - Reads authoritative usage data from the Anthropic OAuth API (no local file parsing)
-- Automatic OAuth token refresh with exponential backoff
+- Credentials read from the platform store: macOS **login Keychain**, Windows/Linux `~/.claude/.credentials.json`
+- Automatic OAuth token refresh with exponential backoff (refreshed tokens written back to the store)
 - Draggable widget with position persistence
-- Right-click context menu (Refresh Now, Minimize to Tray, Exit)
+- Selectable font size (right-click → Font Size; persisted)
+- Right-click context menu (Refresh Now, Font Size, Minimize to Tray, Exit)
 - Minimize to tray / restore from tray via left-click
 - Single-instance enforcement
 - Structured logging with `--debug` and `--no-gui` modes
 
+## Platform Support
+
+| Platform | Distribution | Autostart | Credentials | Config / Logs |
+|----------|--------------|-----------|-------------|---------------|
+| **macOS** | PyInstaller `.app` (menu-bar agent, `LSUIElement`) installed to `/Applications` | LaunchAgent (`~/Library/LaunchAgents`) | login Keychain (`Claude Code-credentials`) | `~/Library/Application Support/claude-usage-widget` / `~/Library/Logs/claude-usage-widget` |
+| **Windows** | Run-from-source / `install.bat` | Startup-folder shortcut | `~/.claude/.credentials.json` | `%APPDATA%` / `%LOCALAPPDATA%` |
+| **Linux** | Run-from-source (`python -m src.main`) | — | `~/.claude/.credentials.json` | `~/.claude-usage-widget` |
+
 ## Requirements
 
-- Windows 10 or Windows 11
-- Python 3.12+
+- **macOS**: macOS 11+, a **framework** Python 3 build (the system `/usr/bin/python3` qualifies); `pip3 install -r requirements.txt -r requirements-dev.txt` for building
+- **Windows**: Windows 10/11, Python 3.10+
 - Claude Code CLI installed and logged in (`claude login`)
 
 ## Installation
+
+### macOS
+
+```bash
+cd claude-usage-widget-windows
+pip3 install --user -r requirements.txt -r requirements-dev.txt
+./install.sh          # builds the .app, installs to /Applications, registers a LaunchAgent
+```
+
+First launch (unsigned app): if Gatekeeper blocks it, right-click the app in Finder → **Open** → confirm (once). The gauge icon appears in the menu bar; left-click it to show the widget. macOS may also prompt once to allow access to the `Claude Code-credentials` Keychain item — choose **Always Allow**.
+
+To remove: `./uninstall.sh` (unloads the LaunchAgent, deletes the `.app`, and prompts before removing config + logs).
+
+### Windows
 
 ```powershell
 cd claude-usage-widget-windows
@@ -82,13 +109,14 @@ python -m src.main --no-gui --debug  # With verbose logging
 
 ## Configuration
 
-Settings stored in `%APPDATA%\claude-usage-widget\config.json`:
+Settings are stored in `config.json` under the platform config directory (macOS: `~/Library/Application Support/claude-usage-widget`; Windows: `%APPDATA%\claude-usage-widget`; Linux: `~/.claude-usage-widget`):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `update_interval_seconds` | 30 | How often to poll the API |
 | `opacity` | 0.95 | Widget transparency (0.0-1.0) |
 | `widget_position` | null | Saved `[x, y]` position (auto bottom-right if null) |
+| `font_size` | 9 | Base label font size in px (right-click → Font Size; title renders +2) |
 
 ## Architecture
 
@@ -112,6 +140,16 @@ pytest tests/
 ```
 
 ## Changelog
+
+### v3.0.0 (2026-06-23)
+
+- **macOS support**: PyInstaller `.app` bundle (menu-bar agent, `LSUIElement`), `install.sh`/`uninstall.sh`, LaunchAgent autostart, `scripts/build_macos.sh`, and a generated `.icns`
+- macOS-native config (`~/Library/Application Support`) and log (`~/Library/Logs`) paths via a new `src/platform_support.py`
+- macOS credentials read from the login **Keychain** (`Claude Code-credentials`); refreshed tokens written back to the Keychain
+- Fixed startup crash on the macOS framework Python (3.9) caused by PEP 604 (`X | None`) annotations — added `from __future__ import annotations`
+- Widget stays on top on macOS (NSPanel `hidesOnDeactivate = NO` + floating level, set natively)
+- Selectable, persisted font size (right-click → Font Size); widget width scales with the font
+- Cross-platform entry wrapper `app_main.py` for PyInstaller
 
 ### v2.0.0 (2026-03-04)
 

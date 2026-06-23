@@ -6,8 +6,10 @@ Layout mirrors the Claude section in peripheral-battery-monitor:
   Row 3: 5h: 26%                      7d: 31%
 """
 
+from __future__ import annotations
+
 from PySide6.QtCore import Qt, QPoint, QSize
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -18,7 +20,32 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import structlog
+
 from .display import usage_color, format_percentage, error_message, COLOR_GRAY
+from .platform_support import IS_MACOS
+
+log = structlog.get_logger(__name__)
+
+# Selectable base font sizes (px) offered in the context menu. The title row
+# renders 2px larger than the base; the widget width scales with the base so
+# larger fonts don't clip. 9 is the original/default size.
+FONT_PRESETS = (9, 11, 13, 16, 20)
+DEFAULT_FONT_SIZE = 9
+_BASE_WIDTH = 220  # widget width at the default font size
+
+# Shared dark styling for context menus (and submenus, which don't inherit it).
+_MENU_STYLE = """
+    QMenu {
+        background-color: #2b2b2b;
+        color: #e0e0e0;
+        border: 1px solid #555;
+        padding: 4px;
+    }
+    QMenu::item:selected {
+        background-color: #3d3d3d;
+    }
+"""
 
 
 def _make_terminal_icon(size: int = 16) -> QPixmap:
@@ -51,12 +78,20 @@ class FloatingWidget(QWidget):
         on_exit: callable = None,
         opacity: float = 0.95,
         position: list[int] | None = None,
+        font_size: int = DEFAULT_FONT_SIZE,
     ):
         super().__init__()
         self._on_refresh = on_refresh
         self._on_exit = on_exit
         self._drag_pos: QPoint | None = None
+        self._font_size = font_size
+        self._macos_level_applied = False
 
+        # Qt.Tool keeps the widget off the taskbar and, on macOS, makes it an
+        # NSPanel that floats above normal windows. On macOS that panel also
+        # hides whenever the (background menu-bar agent) app loses focus, which
+        # made the widget vanish — _apply_macos_window_level() fixes that after
+        # the native window exists (see showEvent).
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -64,11 +99,11 @@ class FloatingWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowOpacity(opacity)
-        self.setFixedWidth(220)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
         self._build_ui()
+        self._apply_font_size()
 
         if position:
             self.move(position[0], position[1])
@@ -108,18 +143,15 @@ class FloatingWidget(QWidget):
         header_row = QHBoxLayout()
         header_row.setSpacing(6)
 
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(_make_terminal_icon(16))
-        header_row.addWidget(icon_lbl)
+        self._icon_lbl = QLabel()
+        header_row.addWidget(self._icon_lbl)
 
-        title_lbl = QLabel("Claude Code")
-        title_lbl.setStyleSheet("color: #aaaaaa; font-size: 11px; font-weight: bold;")
-        header_row.addWidget(title_lbl)
+        self._title_lbl = QLabel("Claude Code")
+        header_row.addWidget(self._title_lbl)
 
         header_row.addStretch()
 
         self._countdown_label = QLabel("--")
-        self._countdown_label.setStyleSheet("color: #888888; font-size: 9px;")
         header_row.addWidget(self._countdown_label)
 
         cl.addLayout(header_row)
@@ -138,24 +170,43 @@ class FloatingWidget(QWidget):
         stats_row = QHBoxLayout()
 
         self._five_hour_label = QLabel("5h: --")
-        self._five_hour_label.setStyleSheet("color: #888888; font-size: 9px;")
         stats_row.addWidget(self._five_hour_label)
 
         stats_row.addStretch()
 
         self._seven_day_label = QLabel("7d: --")
-        self._seven_day_label.setStyleSheet("color: #888888; font-size: 9px;")
         stats_row.addWidget(self._seven_day_label)
 
         cl.addLayout(stats_row)
 
         # Status line (errors, stale — hidden unless needed)
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: #6b7280; font-size: 9px;")
         self._status_label.setVisible(False)
         cl.addWidget(self._status_label)
 
         layout.addWidget(self._container)
+
+    def _apply_font_size(self) -> None:
+        """Apply the current font size to all labels and scale the widget width."""
+        base = self._font_size
+        title = base + 2
+        self._title_lbl.setStyleSheet(
+            f"color: #aaaaaa; font-size: {title}px; font-weight: bold;"
+        )
+        self._countdown_label.setStyleSheet(f"color: #888888; font-size: {base}px;")
+        self._five_hour_label.setStyleSheet(f"color: #888888; font-size: {base}px;")
+        self._seven_day_label.setStyleSheet(f"color: #888888; font-size: {base}px;")
+        self._status_label.setStyleSheet(f"color: #6b7280; font-size: {base}px;")
+        self._icon_lbl.setPixmap(_make_terminal_icon(base + 7))
+        self.setFixedWidth(round(_BASE_WIDTH * base / DEFAULT_FONT_SIZE))
+        self.adjustSize()
+
+    def set_font_size(self, size: int) -> None:
+        """Change the widget font size and persist it to config."""
+        self._font_size = size
+        self._apply_font_size()
+        from .config import set_setting
+        set_setting("font_size", size)
 
     def _set_bar_color(self, color_hex: str) -> None:
         """Update the progress bar color."""
@@ -242,21 +293,23 @@ class FloatingWidget(QWidget):
     def _show_context_menu(self, pos) -> None:
         """Show right-click context menu."""
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2b2b2b;
-                color: #e0e0e0;
-                border: 1px solid #555;
-                padding: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #3d3d3d;
-            }
-        """)
+        menu.setStyleSheet(_MENU_STYLE)
 
         refresh_action = QAction("Refresh Now", self)
         refresh_action.triggered.connect(self._request_refresh)
         menu.addAction(refresh_action)
+
+        font_menu = menu.addMenu("Font Size")
+        font_menu.setStyleSheet(_MENU_STYLE)
+        font_group = QActionGroup(self)
+        font_group.setExclusive(True)
+        for size in FONT_PRESETS:
+            size_action = QAction(f"{size} px", self)
+            size_action.setCheckable(True)
+            size_action.setChecked(size == self._font_size)
+            size_action.triggered.connect(lambda _=False, s=size: self.set_font_size(s))
+            font_group.addAction(size_action)
+            font_menu.addAction(size_action)
 
         menu.addSeparator()
 
@@ -308,3 +361,58 @@ class FloatingWidget(QWidget):
         path.addRoundedRect(self.rect().toRectF(), 10, 10)
         painter.fillPath(path, QColor(0, 0, 0, 0))
         painter.end()
+
+    def showEvent(self, event) -> None:
+        """Apply the macOS always-visible window tweak once the native window exists."""
+        super().showEvent(event)
+        # Only on the native cocoa backend — under offscreen/other QPA platforms
+        # winId() is not an NSView and poking it via objc_msgSend would crash.
+        if (
+            IS_MACOS
+            and not self._macos_level_applied
+            and QApplication.platformName() == "cocoa"
+        ):
+            self._macos_level_applied = self._apply_macos_window_level()
+            log.info("macos_window_level_applied", ok=self._macos_level_applied)
+
+    def _apply_macos_window_level(self) -> bool:
+        """Keep the widget visible above other windows on macOS.
+
+        A Qt.Tool window is an NSPanel that, for a background (accessory) app,
+        hides whenever the app loses focus. Using the Objective-C runtime via
+        ctypes (no extra dependency), set ``hidesOnDeactivate = NO`` and a
+        floating window level so the widget stays put and on top. Best-effort:
+        any failure leaves the default Qt behavior unchanged.
+        """
+        try:
+            import ctypes
+            import ctypes.util
+
+            libobjc = ctypes.util.find_library("objc")
+            if not libobjc:
+                return False
+            objc = ctypes.cdll.LoadLibrary(libobjc)
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+
+            def msg(receiver, selector, *args, argtypes=(), restype=ctypes.c_void_p):
+                objc.objc_msgSend.restype = restype
+                objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, *argtypes]
+                return objc.objc_msgSend(receiver, objc.sel_registerName(selector), *args)
+
+            view = ctypes.c_void_p(int(self.winId()))
+            if not view.value:
+                return False
+            window = msg(view, b"window")
+            if not window:
+                return False
+            window = ctypes.c_void_p(window)
+
+            msg(window, b"setHidesOnDeactivate:", ctypes.c_bool(False),
+                argtypes=(ctypes.c_bool,), restype=None)
+            # NSFloatingWindowLevel = 3 (above normal windows).
+            msg(window, b"setLevel:", ctypes.c_long(3),
+                argtypes=(ctypes.c_long,), restype=None)
+            return True
+        except Exception:
+            return False

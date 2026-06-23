@@ -1,5 +1,7 @@
 """Logging configuration using structlog."""
 
+from __future__ import annotations
+
 import logging
 import os
 import sys
@@ -7,9 +9,18 @@ from pathlib import Path
 
 import structlog
 
+from .platform_support import IS_MACOS
+
 
 def get_log_dir() -> Path:
-    """Get the log directory, using LOCALAPPDATA on Windows."""
+    """Get the log directory.
+
+    macOS: ``~/Library/Logs/claude-usage-widget`` (native).
+    Windows: ``%LOCALAPPDATA%\\claude-usage-widget\\logs``.
+    Other: ``~/.claude-usage-widget/logs``.
+    """
+    if IS_MACOS:
+        return Path.home() / "Library" / "Logs" / "claude-usage-widget"
     localappdata = os.environ.get("LOCALAPPDATA", "")
     if localappdata:
         return Path(localappdata) / "claude-usage-widget" / "logs"

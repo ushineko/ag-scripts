@@ -1,5 +1,7 @@
 """Configuration management for Claude Usage Widget."""
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
@@ -7,17 +9,27 @@ from typing import Any
 
 import structlog
 
+from .platform_support import IS_MACOS
+
 log = structlog.get_logger(__name__)
 
 DEFAULTS = {
     "update_interval_seconds": 30,
     "opacity": 0.95,
     "widget_position": None,  # None = auto-position bottom-right
+    "font_size": 9,  # base label font size in px; title renders +2
 }
 
 
 def get_config_dir() -> Path:
-    """Get the configuration directory path."""
+    """Get the configuration directory path.
+
+    macOS: ``~/Library/Application Support/claude-usage-widget`` (native).
+    Windows: ``%APPDATA%\\claude-usage-widget``.
+    Other: ``~/.claude-usage-widget``.
+    """
+    if IS_MACOS:
+        return Path.home() / "Library" / "Application Support" / "claude-usage-widget"
     appdata = os.environ.get("APPDATA", "")
     if appdata:
         return Path(appdata) / "claude-usage-widget"

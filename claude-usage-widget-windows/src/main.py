@@ -4,6 +4,8 @@ Displays Claude Code API usage as a floating desktop widget with system tray ico
 Uses the Anthropic OAuth API for authoritative usage data.
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
@@ -110,6 +112,7 @@ def run_gui() -> None:
     config = load_config()
     opacity = config.get("opacity", 0.95)
     position = config.get("widget_position")
+    font_size = config.get("font_size", 9)
 
     # Create widget and tray
     def on_toggle_widget():
@@ -133,6 +136,7 @@ def run_gui() -> None:
         on_exit=on_exit,
         opacity=opacity,
         position=position,
+        font_size=font_size,
     )
 
     tray = SystemTray(
