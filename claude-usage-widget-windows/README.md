@@ -30,6 +30,7 @@ A floating desktop widget that displays Claude Code API usage metrics via the An
 - Right-click context menu (Refresh Now, Font Size, Minimize to Tray, Exit)
 - Minimize to tray / restore from tray via left-click
 - Single-instance enforcement
+- Terminal modes for tmux/herd helper panes: live self-refreshing `--tui` line and one-shot `--line` (Qt-free, no PySide6 required)
 - Structured logging with `--debug` and `--no-gui` modes
 
 ## Platform Support
@@ -91,12 +92,65 @@ python -m src.main --no-gui          # Fetch and print usage
 python -m src.main --no-gui --debug  # With verbose logging
 ```
 
+### Terminal (TUI) Mode
+
+For a small helper pane in a terminal multiplexer (tmux, herd, etc.). Both modes
+are Qt-free — they do not import PySide6 — so they run in a minimal/headless
+pane. Rendering uses [`rich`](https://github.com/Textualize/rich). Logs are kept
+off the terminal (they would interleave with the redrawn line); pass
+`--log-file PATH` to capture them. Status (offline, rate-limited, stale) is shown
+inline.
+
+```bash
+python -m src.main --tui                 # live, self-refreshing dashboard (Ctrl-C to exit)
+python -m src.main --tui --interval 15   # poll every 15s instead of the config default
+python -m src.main --line                # print one compact line and exit
+python -m src.main --line --no-color     # plain text (no ANSI)
+```
+
+**`--tui`** — a `rich.live.Live` display on the alternate screen (the pane is
+cleared on entry and restored on exit). It fills the pane width: a 5-hour
+progress bar that stretches to fill, the stats trailing it, and the reset
+countdown floated to the far right (color-coded by 5-hour utilization):
+
+```
+Claude  5h ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  47%  ·  7d 31%  ·  sonnet 12%        resets 2h 15m
+```
+
+**`--line`** — one compact line, then exit, for status bars / `watch` loops. It
+is width-aware: in a narrow pane the lower-priority segments (model breakdown,
+then reset, then 7d) are dropped so the 5-hour reading always shows.
+
+```
+Claude 5h 47% · 7d 31% · reset 2h 15m · sonnet 12%
+```
+
+Color is enabled automatically only on a TTY with `NO_COLOR` unset.
+
+> The terminal modes need only `rich` and `structlog` (no PySide6). If you run
+> them from a different interpreter than the GUI (e.g. a system `python3` in a
+> tmux pane), install those there: `python3 -m pip install --user rich structlog`.
+
+**tmux** — run `--tui` in a dedicated pane, or call `--line` from the status bar:
+
+```tmux
+# dedicated helper pane:
+split-window -v 'python -m src.main --tui'
+
+# or in the status bar (re-runs on status-interval):
+set -g status-right '#(cd /path/to/claude-usage-widget-windows && python -m src.main --line)'
+```
+
 ### CLI Options
 
 | Option | Description |
 |--------|-------------|
 | `--debug` | Enable verbose debug logging |
-| `--no-gui` | Fetch usage from API and print to console |
+| `--no-gui` | Fetch usage from API and print a multi-line report to console, then exit |
+| `--tui` | Run a compact, self-refreshing single-line terminal display (helper pane); Ctrl-C to exit |
+| `--line` | Print one compact usage line to stdout and exit (for status bars / watch loops) |
+| `--interval N` | Poll interval in seconds for `--tui` (default: config `update_interval_seconds`; minimum 5) |
+| `--no-color` | Disable ANSI color in `--tui`/`--line` output |
 | `--fetch-json` | Fetch usage and print it as JSON to stdout, then exit (used internally by the GUI's QProcess fetcher; logs go to stderr) |
 | `--log-file PATH` | Write logs to file |
 
@@ -126,6 +180,7 @@ src/
   main.py              # Entry point, QTimer, single-instance, --fetch-json child path
   fetcher.py           # QProcess-based async usage fetch (event loop, no threads)
   oauth.py             # OAuth credentials, token refresh, usage API, backoff
+  tui.py               # Qt-free terminal rendering via rich (--tui full-width dashboard, --line one-shot)
   widget.py            # PySide6 floating widget (frameless, translucent)
   tray.py              # QSystemTrayIcon with context menu
   config.py            # Settings persistence
@@ -142,6 +197,19 @@ pytest tests/
 ```
 
 ## Changelog
+
+### v3.1.0 (2026-06-27)
+
+- Added terminal (TUI) modes for tmux/herd helper panes, both Qt-free (no PySide6 import on these paths):
+  - `--tui`: a compact, self-refreshing single-line display that redraws in place on the poll interval; keeps the last-known-good reading (marked stale) on transient errors, backs off on HTTP 429, and exits cleanly on Ctrl-C
+  - `--line`: prints one compact line and exits, for status bars / watch loops
+- Width-aware rendering: lower-priority segments (model breakdown → reset → 7d) are dropped in narrow panes so the 5-hour reading always shows
+- ANSI color matching the GUI thresholds, auto-enabled only on a TTY with `NO_COLOR` unset; `--no-color` to force off
+- `--interval N` to override the `--tui` poll cadence (minimum 5s)
+- Logs are kept off the terminal in `--tui`/`--line` (they previously went to stderr, which interleaved with the redrawn line); use `--log-file PATH` to capture them
+- Rendering uses [`rich`](https://github.com/Textualize/rich) (new dependency): `--tui` runs a `rich.live.Live` display on the alternate screen, so the launching shell's command echo and prior pane content are cleared on entry and the pane is restored on exit; color/width detection is handled by the library
+- `--tui` is a full-width dashboard: a 5-hour `rich` progress bar that stretches to fill the pane, the 5h/7d/model stats trailing it, and the reset countdown floated to the far right (`--line` stays the compact single line for status bars)
+- New `src/tui.py`
 
 ### v3.0.2 (2026-06-23)
 

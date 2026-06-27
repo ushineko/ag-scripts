@@ -27,21 +27,38 @@ def get_log_dir() -> Path:
     return Path.home() / ".claude-usage-widget" / "logs"
 
 
-def setup_logging(debug: bool = False, log_file: Path | None = None, stream=None) -> None:
+def setup_logging(
+    debug: bool = False,
+    log_file: Path | None = None,
+    stream=None,
+    console: bool = True,
+) -> None:
     """Configure structlog for the application.
 
     ``stream`` selects where console logs go (default stdout). The ``--fetch-json``
     child process routes logs to stderr so that stdout carries only the JSON
     payload the parent QProcess parses.
-    """
-    if stream is None:
-        stream = sys.stdout
 
+    ``console=False`` keeps logs off the terminal entirely — used by the live
+    terminal modes (``--tui``/``--line``), which own the pane (stderr would
+    render right over the redrawn status line). Logs then go to ``log_file`` if
+    given, otherwise they are discarded.
+    """
     log_level = logging.DEBUG if debug else logging.INFO
+
+    # Resolve the single sink structlog (and the stdlib root logger) write to.
+    if console:
+        out = sys.stdout if stream is None else stream
+    elif log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        out = open(log_file, "a", encoding="utf-8")
+        log_file = None  # written via `out`; don't add a duplicate handler below
+    else:
+        out = open(os.devnull, "w")
 
     handlers: list[logging.Handler] = []
 
-    console_handler = logging.StreamHandler(stream)
+    console_handler = logging.StreamHandler(out)
     console_handler.setLevel(log_level)
     handlers.append(console_handler)
 
@@ -65,10 +82,10 @@ def setup_logging(debug: bool = False, log_file: Path | None = None, stream=None
             structlog.processors.StackInfoRenderer(),
             structlog.dev.set_exc_info,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.dev.ConsoleRenderer(colors=stream.isatty()),
+            structlog.dev.ConsoleRenderer(colors=out.isatty()),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=stream),
+        logger_factory=structlog.PrintLoggerFactory(file=out),
         cache_logger_on_first_use=True,
     )

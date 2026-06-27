@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -28,18 +29,46 @@ def parse_args():
         help="Fetch usage and print it as JSON to stdout, then exit (used internally "
         "by the GUI's QProcess fetcher; logs go to stderr).",
     )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Run a compact, self-refreshing single-line terminal display "
+        "(for a tmux/herd helper pane). Ctrl-C to exit.",
+    )
+    parser.add_argument(
+        "--line",
+        action="store_true",
+        help="Print one compact usage line to stdout and exit (for status bars "
+        "called repeatedly, e.g. tmux status-interval).",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        help="Poll interval in seconds for --tui (default: config "
+        "update_interval_seconds; minimum 5).",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable ANSI color in --tui/--line output.",
+    )
     parser.add_argument("--log-file", type=Path, help="Write logs to file")
     return parser.parse_args()
 
 
 args = parse_args()
-# In --fetch-json mode stdout must carry only the JSON payload, so send logs to
-# stderr; otherwise log to stdout as usual.
-setup_logging(
-    debug=args.debug,
-    log_file=args.log_file,
-    stream=sys.stderr if args.fetch_json else sys.stdout,
-)
+# Logging destination depends on the mode:
+#   --tui/--line : the terminal display owns the pane, so logs must stay OFF the
+#                  terminal (stderr renders over the redrawn line) — discard them
+#                  unless --log-file is given.
+#   --fetch-json : stdout carries the JSON payload, so logs go to stderr.
+#   otherwise    : log to stdout as usual.
+if args.tui or args.line:
+    setup_logging(debug=args.debug, log_file=args.log_file, console=False)
+elif args.fetch_json:
+    setup_logging(debug=args.debug, log_file=args.log_file, stream=sys.stderr)
+else:
+    setup_logging(debug=args.debug, log_file=args.log_file, stream=sys.stdout)
 log = structlog.get_logger(__name__)
 
 
@@ -51,6 +80,33 @@ def run_fetch_json() -> int:
     sys.stdout.write(json.dumps(data))
     sys.stdout.flush()
     return 0
+
+
+def _use_color() -> bool:
+    """Whether to emit ANSI color: on a TTY, NO_COLOR unset, and not --no-color."""
+    if args.no_color:
+        return False
+    if os.environ.get("NO_COLOR"):
+        return False
+    return sys.stdout.isatty()
+
+
+def run_line_mode() -> int:
+    """Print one compact usage line to stdout, then exit."""
+    from .tui import run_line
+
+    return run_line(color=_use_color())
+
+
+def run_tui_mode() -> int:
+    """Run the self-refreshing single-line terminal display until interrupted."""
+    from .config import load_config
+    from .tui import run_tui
+
+    interval = args.interval
+    if interval is None:
+        interval = load_config().get("update_interval_seconds", 60)
+    return run_tui(interval=interval, color=_use_color())
 
 
 def run_no_gui() -> int:
@@ -235,9 +291,15 @@ def main():
         debug=args.debug,
         no_gui=args.no_gui,
         fetch_json=args.fetch_json,
+        tui=args.tui,
+        line=args.line,
     )
     if args.fetch_json:
         sys.exit(run_fetch_json())
+    elif args.line:
+        sys.exit(run_line_mode())
+    elif args.tui:
+        sys.exit(run_tui_mode())
     elif args.no_gui:
         sys.exit(run_no_gui())
     else:
