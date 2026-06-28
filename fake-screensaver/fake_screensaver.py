@@ -59,11 +59,19 @@ class FakeScreensaver(QWidget):
         self.initUI()
 
     def initUI(self):
-        # Set background to black
+        # Set background to black. setAutoFillBackground + a stylesheet are both
+        # needed: themes like Oxygen draw their own gradient window background and
+        # ignore the palette Window color unless we force the fill / override via
+        # stylesheet.
+        self.setAutoFillBackground(True)
         palette = self.palette()
         palette.setColor(QPalette.ColorRole.Window, QColor('black'))
         self.setPalette(palette)
-        
+        # ID selector (#...) so the rule applies only to this widget and does NOT
+        # cascade to children — otherwise it would paint the blue BSOD overlay black.
+        self.setObjectName("fakeScreensaverRoot")
+        self.setStyleSheet("QWidget#fakeScreensaverRoot { background-color: black; }")
+
         screens = QApplication.screens()
         selected_screen = None
         
