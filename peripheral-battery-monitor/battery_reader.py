@@ -485,7 +485,8 @@ def get_airpods_battery() -> Optional[BatteryInfo]:
 
     # If D-Bus has battery level directly (Battery1 interface), use it
     if dbus_battery is not None and dbus_battery >= 0:
-        return BatteryInfo(level=dbus_battery, status="Discharging", voltage=None, device_name=name)
+        return BatteryInfo(level=dbus_battery, status="Discharging", voltage=None,
+                           device_name=name, ids={'mac': mac})
 
     log.debug("airpods_logic", mac=mac, dbus_connected=is_connected)
 
@@ -495,6 +496,7 @@ def get_airpods_battery() -> Optional[BatteryInfo]:
             ble_info = asyncio.run(_ble_scan_for_airpods())
             if ble_info:
                 ble_info.device_name = name
+                ble_info.ids = {'mac': mac}
                 if ble_info.status == "Connected":
                     ble_info.status = "BLE-Visible"
                 return ble_info
@@ -502,29 +504,138 @@ def get_airpods_battery() -> Optional[BatteryInfo]:
             pass
 
         # Fallback: connected but no battery data available
-        return BatteryInfo(level=-1, status="Connected", voltage=None, device_name=name)
+        return BatteryInfo(level=-1, status="Connected", voltage=None,
+                           device_name=name, ids={'mac': mac})
 
     return None
 
+_AUDIO_UUIDS = {
+    '0000110b-0000-1000-8000-00805f9b34fb',  # Audio Sink
+    '0000110d-0000-1000-8000-00805f9b34fb',  # Advanced Audio Distribution
+    '0000111e-0000-1000-8000-00805f9b34fb',  # Handsfree
+}
+
+
+def _enumerate_bt_audio_devices() -> list:
+    """Enumerate connected Bluetooth audio devices and their battery via BlueZ D-Bus.
+
+    Vendor-neutral: any headset/headphone that BlueZ recognises as an audio
+    device (Icon 'audio-*' or an audio service UUID) and that exposes
+    org.bluez.Battery1 shows up here without per-vendor code. Returns a list of
+    dicts {mac, name, level} where level is None when no Battery1 interface is
+    present. Only currently-connected devices are returned.
+
+    Uses the D-Bus ObjectManager (a stable contract) rather than parsing
+    bluetoothctl output, which changes between bluez versions.
+    """
+    out = []
+    try:
+        bus = dbus.SystemBus()
+        manager = dbus.Interface(
+            bus.get_object('org.bluez', '/'),
+            'org.freedesktop.DBus.ObjectManager'
+        )
+        objects = manager.GetManagedObjects()
+    except dbus.exceptions.DBusException:
+        return out
+
+    for path, interfaces in objects.items():
+        if 'org.bluez.Device1' not in interfaces:
+            continue
+        dev = interfaces['org.bluez.Device1']
+        if not bool(dev.get('Connected', False)):
+            continue
+
+        icon = str(dev.get('Icon', ''))
+        uuids = {str(u).lower() for u in dev.get('UUIDs', [])}
+        is_audio = icon.startswith('audio-') or bool(_AUDIO_UUIDS & uuids)
+        if not is_audio:
+            continue
+
+        name = str(dev.get('Alias', '') or dev.get('Name', '')).strip()
+        mac = str(dev.get('Address', ''))
+
+        level = None
+        if 'org.bluez.Battery1' in interfaces:
+            lvl = int(interfaces['org.bluez.Battery1'].get('Percentage', -1))
+            if lvl >= 0:
+                level = lvl
+
+        out.append({'mac': mac, 'name': name, 'level': level})
+
+    return out
+
+
+def _headphone_rank_key(info: "BatteryInfo"):
+    """Sort key: connected-first ordering for the two headphone slots.
+
+    Devices with a known battery level rank ahead of connected-but-unknown
+    devices; ties break by higher level, then by name for a deterministic order.
+    """
+    has_level = info.level is not None and info.level >= 0
+    return (0 if has_level else 1,
+            -(info.level if has_level else 0),
+            (info.device_name or "").lower())
+
+
+def get_headphones() -> list:
+    """Return BatteryInfo for every connected headphone, ranked connected-first.
+
+    Sources, merged and de-duplicated by MAC:
+      1. Generic BlueZ Battery1 audio devices (vendor-neutral; covers Sony WH-1000XM6
+         and any future BT headphone).
+      2. AirPods BLE reader — enriches the matching MAC with L/R/case detail.
+      3. SteelSeries Arctis via headsetcontrol (USB dongle, not a BlueZ device).
+    """
+    by_mac = {}
+
+    # 1. Generic BlueZ audio devices.
+    for d in _enumerate_bt_audio_devices():
+        has_level = d['level'] is not None
+        info = BatteryInfo(
+            level=d['level'] if has_level else -1,
+            status="Discharging" if has_level else "Connected",
+            voltage=None,
+            device_name=d['name'] or "Headphones",
+            ids={'mac': d['mac']},
+        )
+        by_mac[d['mac']] = info
+
+    # 2. AirPods enrichment (richer L/R/case detail wins for its MAC).
+    airpods = get_airpods_battery()
+    if airpods:
+        mac = (airpods.ids or {}).get('mac') or f"airpods:{airpods.device_name}"
+        by_mac[mac] = airpods
+
+    infos = list(by_mac.values())
+
+    # 3. SteelSeries Arctis (USB dongle — never appears in the BlueZ pool).
+    arctis = get_headset_battery()
+    if arctis:
+        infos.append(arctis)
+
+    infos.sort(key=_headphone_rank_key)
+    return infos
+
+
 def get_all_batteries() -> dict:
     results = {}
-    
+
     # Mouse
     m = get_mouse_battery()
     if m: results['mouse'] = asdict(m)
-    
+
     # Keyboard
     k = get_keyboard_battery()
     if k: results['kb'] = asdict(k)
-    
-    # Headset
-    h = get_headset_battery()
-    if h: results['headset'] = asdict(h)
-    
-    # AirPods
-    a = get_airpods_battery()
-    if a: results['airpods'] = asdict(a)
-    
+
+    # Headphones: two vendor-neutral slots, connected-first.
+    headphones = get_headphones()
+    if len(headphones) > 0:
+        results['headphone1'] = asdict(headphones[0])
+    if len(headphones) > 1:
+        results['headphone2'] = asdict(headphones[1])
+
     return results
 
 if __name__ == "__main__":
@@ -561,14 +672,9 @@ if __name__ == "__main__":
     else:
         print("No keyboard found via UPower.")
 
-    info_headset = get_headset_battery()
-    if info_headset:
-        print(f"Headset: {info_headset.device_name} - {info_headset.level}% ({info_headset.status})")
+    headphones = get_headphones()
+    if headphones:
+        for i, hp in enumerate(headphones, 1):
+            print(f"Headphone {i}: {hp.device_name} - {hp.level}% ({hp.status})")
     else:
-        print("No headset found via headsetcontrol.")
-
-    info_airpods = get_airpods_battery()
-    if info_airpods:
-        print(f"AirPods: {info_airpods.device_name} - {info_airpods.level}% ({info_airpods.status})")
-    else:
-        print("No AirPods found.")
+        print("No headphones connected.")

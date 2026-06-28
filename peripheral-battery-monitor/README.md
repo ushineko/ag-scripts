@@ -1,7 +1,7 @@
 # Peripheral Battery Monitor
-Version 1.6.1
+Version 1.7.0
 
-A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals, real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
+A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals and connected Bluetooth headphones, real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
 ![Peripheral Battery Monitor](assets/screenshot.png)
 
@@ -20,8 +20,9 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Bluetooth**: Uses `upower` to fetch battery levels %.
   - **Wired**: Detects USB connection and shows "Wired" status.
   - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
-- **Arctis Headsets**: Uses `headsetcontrol` to fetch battery levels.
-- **AirPods Support**: Advanced BLE scanning to fetch granular battery levels for Left, Right, and Case. Supports disconnected monitoring. Now with fallback logic and Case display!
+- **Headphones (vendor-neutral)**: The two bottom cells show whatever Bluetooth headphones are currently connected, prioritizing connected devices. Any headset that reports battery over BlueZ `org.bluez.Battery1` (e.g. Sony WH-1000XM6) appears automatically — no per-vendor code. AirPods and SteelSeries Arctis remain as enrichment sources:
+  - **AirPods**: BLE scanning for granular Left, Right, and Case levels, merged in and de-duplicated by MAC.
+  - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
 - **Wayland Compatible**: Uses system-native movement for dragging.
@@ -96,6 +97,14 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.7.0
+
+- The two bottom (headphone) cells are now vendor-neutral. Instead of one cell pinned to SteelSeries Arctis and the other to Apple AirPods, both cells show whatever Bluetooth headphones are currently connected, prioritizing connected devices. A new generic reader enumerates connected Bluetooth audio devices via the BlueZ D-Bus `ObjectManager` and reads `org.bluez.Battery1`, so any headset that reports battery (e.g. Sony WH-1000XM6) appears automatically — no per-vendor code.
+- AirPods (BLE L/R/case) and SteelSeries Arctis (`headsetcontrol`, a USB dongle) are kept as enrichment sources, merged into the headphone pool and de-duplicated by MAC; the richer entry wins.
+- Headphones are ranked connected-first: devices with a known battery level rank ahead of connected-but-unknown devices. The top two fill the `headphone1`/`headphone2` slots.
+- The "Connected / unknown level" merge fallback is now guarded by device name, so a slot whose occupant changes between polls cannot bleed the previous device's battery level onto a different device.
+- Fix: test mock (`MockQLabel`) was missing `setScaledContents`, which broke every test that instantiates the monitor since v1.6.x.
 
 ### v1.6.1
 

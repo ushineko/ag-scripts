@@ -60,6 +60,7 @@ class MockQLabel(MockQWidget):
     def setText(self, text): pass
     def hide(self): pass
     def setWordWrap(self, wrap): pass
+    def setScaledContents(self, scaled): pass
 
 
 class MockQInputDialog:
@@ -1005,6 +1006,155 @@ class TestCachedDisplayOnError(unittest.TestCase):
         monitor.update_claude_section({"error": "api_error"})
 
         monitor.claude_five_hour_lbl.setText.assert_called_with("5h: 55%")
+
+class TestHeadphoneAggregation(unittest.TestCase):
+    """Generic, vendor-neutral headphone slot aggregation (spec 013)."""
+
+    def test_generic_bt_headphone_surfaced(self):
+        """Behavioral contract: a BlueZ Battery1 headset (e.g. WH-1000XM6) is surfaced
+        by get_headphones() with its real name and level, no vendor-specific code."""
+        from unittest.mock import patch
+
+        with patch.object(battery_reader, '_enumerate_bt_audio_devices',
+                          return_value=[{'mac': 'AA:BB', 'name': 'WH-1000XM6', 'level': 59}]):
+            with patch.object(battery_reader, 'get_airpods_battery', return_value=None):
+                with patch.object(battery_reader, 'get_headset_battery', return_value=None):
+                    hp = battery_reader.get_headphones()
+
+        self.assertEqual(len(hp), 1)
+        self.assertEqual(hp[0].device_name, "WH-1000XM6")
+        self.assertEqual(hp[0].level, 59)
+        self.assertEqual(hp[0].status, "Discharging")
+
+    def test_airpods_deduped_by_mac_detail_wins(self):
+        """Behavioral contract: AirPods present in both the generic pool and the BLE
+        reader are de-duplicated by MAC; the richer L/R/case entry wins."""
+        from unittest.mock import patch
+
+        generic = [{'mac': 'CC:DD', 'name': 'AirPods Pro', 'level': 70}]
+        detailed = BatteryInfo(
+            level=65, status="Discharging", voltage=None, device_name="AirPods Pro",
+            ids={'mac': 'CC:DD'}, details={'left': 70, 'right': 65, 'case': 90},
+        )
+
+        with patch.object(battery_reader, '_enumerate_bt_audio_devices', return_value=generic):
+            with patch.object(battery_reader, 'get_airpods_battery', return_value=detailed):
+                with patch.object(battery_reader, 'get_headset_battery', return_value=None):
+                    hp = battery_reader.get_headphones()
+
+        self.assertEqual(len(hp), 1)  # de-duplicated, not two entries
+        self.assertIsNotNone(hp[0].details)
+        self.assertEqual(hp[0].details['right'], 65)
+
+    def test_arctis_dongle_still_appears(self):
+        """Behavioral contract: a SteelSeries Arctis (USB dongle, not a BlueZ device)
+        still appears alongside generic BlueZ headphones."""
+        from unittest.mock import patch
+
+        arctis = BatteryInfo(level=40, status="Discharging", voltage=None,
+                             device_name="Arctis Headset")
+        with patch.object(battery_reader, '_enumerate_bt_audio_devices',
+                          return_value=[{'mac': 'AA:BB', 'name': 'WH-1000XM6', 'level': 59}]):
+            with patch.object(battery_reader, 'get_airpods_battery', return_value=None):
+                with patch.object(battery_reader, 'get_headset_battery', return_value=arctis):
+                    hp = battery_reader.get_headphones()
+
+        names = {h.device_name for h in hp}
+        self.assertIn("Arctis Headset", names)
+        self.assertIn("WH-1000XM6", names)
+
+    def test_ranking_connected_first_known_level_wins(self):
+        """Behavioral contract: a device with a known level ranks ahead of a
+        connected device with unknown level (-1)."""
+        from unittest.mock import patch
+
+        generic = [
+            {'mac': '11', 'name': 'Unknown Buds', 'level': None},  # connected, no Battery1
+            {'mac': '22', 'name': 'WH-1000XM6', 'level': 59},      # known level
+        ]
+        with patch.object(battery_reader, '_enumerate_bt_audio_devices', return_value=generic):
+            with patch.object(battery_reader, 'get_airpods_battery', return_value=None):
+                with patch.object(battery_reader, 'get_headset_battery', return_value=None):
+                    hp = battery_reader.get_headphones()
+
+        self.assertEqual(hp[0].device_name, "WH-1000XM6")  # known level ranks first
+        self.assertEqual(hp[1].level, -1)
+
+    def test_get_all_batteries_emits_headphone_slots(self):
+        """Behavioral contract: get_all_batteries() exposes the top two headphones as
+        headphone1/headphone2 (not vendor-specific keys)."""
+        from unittest.mock import patch
+
+        hp = [
+            BatteryInfo(level=59, status="Discharging", voltage=None, device_name="WH-1000XM6"),
+            BatteryInfo(level=40, status="Discharging", voltage=None, device_name="Arctis Headset"),
+        ]
+        with patch.object(battery_reader, 'get_mouse_battery', return_value=None):
+            with patch.object(battery_reader, 'get_keyboard_battery', return_value=None):
+                with patch.object(battery_reader, 'get_headphones', return_value=hp):
+                    results = battery_reader.get_all_batteries()
+
+        self.assertEqual(results['headphone1']['device_name'], "WH-1000XM6")
+        self.assertEqual(results['headphone2']['device_name'], "Arctis Headset")
+        self.assertNotIn('headset', results)
+        self.assertNotIn('airpods', results)
+
+
+class TestHeadphoneSlotNameGuard(unittest.TestCase):
+    """A headphone slot can change occupants between polls; the merge fallback must
+    not bleed one device's cached level onto a different device (spec 013)."""
+
+    def test_no_level_bleed_across_device_change(self):
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+        monitor._update_label_block = MagicMock()
+
+        ui_dict = {
+            'last_info': None,
+            'name_lbl': MagicMock(),
+            'val_lbl': MagicMock(),
+            'stat_lbl': MagicMock(),
+            'icon_lbl': MagicMock(),
+            'default_name': 'Headphones',
+        }
+
+        # Slot first shows the XM6 with a known level.
+        xm6 = BatteryInfo(level=59, status="Discharging", voltage=None, device_name="WH-1000XM6")
+        monitor.update_single_device(ui_dict, lambda: xm6, use_offline_cache=False)
+        self.assertEqual(ui_dict['last_info'].level, 59)
+
+        # Next poll the slot is now a DIFFERENT device, connected but unknown level.
+        airpods = BatteryInfo(level=-1, status="Connected", voltage=None, device_name="AirPods Pro")
+        monitor.update_single_device(ui_dict, lambda: airpods, use_offline_cache=False)
+
+        display_info = monitor._update_label_block.call_args[0][4]
+        # The XM6's 59% must NOT bleed onto the AirPods slot.
+        self.assertEqual(display_info.device_name, "AirPods Pro")
+        self.assertEqual(display_info.level, -1)
+
+    def test_same_device_unknown_level_still_merges(self):
+        """Same device reporting -1/Connected still recovers its last known level."""
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value={})
+        monitor = pb.PeripheralMonitor()
+        monitor._update_label_block = MagicMock()
+
+        ui_dict = {
+            'last_info': None,
+            'name_lbl': MagicMock(),
+            'val_lbl': MagicMock(),
+            'stat_lbl': MagicMock(),
+            'icon_lbl': MagicMock(),
+            'default_name': 'Headphones',
+        }
+
+        good = BatteryInfo(level=59, status="Discharging", voltage=None, device_name="WH-1000XM6")
+        monitor.update_single_device(ui_dict, lambda: good, use_offline_cache=False)
+
+        same = BatteryInfo(level=-1, status="Connected", voltage=None, device_name="WH-1000XM6")
+        monitor.update_single_device(ui_dict, lambda: same, use_offline_cache=False)
+
+        display_info = monitor._update_label_block.call_args[0][4]
+        self.assertEqual(display_info.level, 59)  # merged from same device's last good read
 
 
 if __name__ == '__main__':

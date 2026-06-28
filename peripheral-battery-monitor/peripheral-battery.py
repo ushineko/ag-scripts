@@ -25,7 +25,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.6.1"
+__version__ = "1.7.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -491,16 +491,18 @@ class PeripheralMonitor(QWidget):
         # Create device widgets
         self.mouse_ui = self.create_device_cell("Mouse")
         self.kb_ui = self.create_device_cell("Keyboard")
-        self.headset_ui = self.create_device_cell("Headset")
-        self.airpods_ui = self.create_device_cell("AirPods")
-        self.device_uis = [self.mouse_ui, self.kb_ui, self.headset_ui, self.airpods_ui]
+        # Two vendor-neutral headphone slots, filled connected-first by
+        # get_headphones() (headphone1 = highest-ranked connected device).
+        self.headphone1_ui = self.create_device_cell("Headphones")
+        self.headphone2_ui = self.create_device_cell("Headphones")
+        self.device_uis = [self.mouse_ui, self.kb_ui, self.headphone1_ui, self.headphone2_ui]
 
         # Add to grid
         # (Row, Col)
         self.grid_layout.addLayout(self.mouse_ui['layout'], 0, 0)
         self.grid_layout.addLayout(self.kb_ui['layout'], 0, 1)
-        self.grid_layout.addLayout(self.headset_ui['layout'], 1, 0)
-        self.grid_layout.addLayout(self.airpods_ui['layout'], 1, 1)
+        self.grid_layout.addLayout(self.headphone1_ui['layout'], 1, 0)
+        self.grid_layout.addLayout(self.headphone2_ui['layout'], 1, 1)
 
         main_layout.addWidget(self.container)
 
@@ -1221,11 +1223,12 @@ class PeripheralMonitor(QWidget):
         # 2. Update Keyboard
         self.update_single_device(self.kb_ui, lambda: results.get('kb'), use_offline_cache=True)
 
-        # 3. Update Headset - User wants immediate "Disconnected" state, no offline cache
-        self.update_single_device(self.headset_ui, lambda: results.get('headset'), use_offline_cache=False)
+        # 3. Headphone slots - vendor-neutral, connected-first. Immediate
+        #    "Disconnected" state, no offline cache.
+        self.update_single_device(self.headphone1_ui, lambda: results.get('headphone1'), use_offline_cache=False)
 
-        # 4. Update AirPods - User wants "Disconnected", no offline cache
-        self.update_single_device(self.airpods_ui, lambda: results.get('airpods'), use_offline_cache=False)
+        # 4. Second headphone slot
+        self.update_single_device(self.headphone2_ui, lambda: results.get('headphone2'), use_offline_cache=False)
 
         # 5. Update Claude Code section
         self.update_claude_section(results.get('claude_usage'))
@@ -1265,9 +1268,17 @@ class PeripheralMonitor(QWidget):
                     last_known = None
 
             # Smart Fallback Logic for "Connected" but "--%" (Level -1)
-            # Only use merged level if status hasn't changed
+            # Only use merged level if status hasn't changed AND the slot is still
+            # showing the same device. A headphone slot is filled connected-first,
+            # so its occupant can change between polls; without the name guard the
+            # previous device's cached level would bleed onto a different device.
+            same_device = (
+                current_info and last_known
+                and (current_info.device_name or "").strip().lower()
+                    == (last_known.device_name or "").strip().lower()
+            )
             if current_info and current_info.level == -1 and current_info.status == "Connected":
-                if last_known and last_known.level >= 0 and not status_changed:
+                if last_known and last_known.level >= 0 and not status_changed and same_device:
                      # Create a merged info object
                      merged = battery_reader.BatteryInfo(
                          level=last_known.level,
