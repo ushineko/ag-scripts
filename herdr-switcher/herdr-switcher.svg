@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Tokyo Night palette to match the herdr workspace theme -->
+  <rect x="16" y="16" width="224" height="224" rx="44" fill="#1a1b26"/>
+  <!-- Stacked "spaces", back to front, the front one highlighted -->
+  <rect x="64" y="56" width="128" height="92" rx="14" fill="#414868"/>
+  <rect x="80" y="80" width="128" height="92" rx="14" fill="#565f89"/>
+  <rect x="48" y="104" width="128" height="92" rx="14" fill="#7aa2f7"/>
+  <!-- Switch arrow on the front space -->
+  <path d="M92 150 h40 m0 0 l-14 -14 m14 14 l-14 14"
+        fill="none" stroke="#1a1b26" stroke-width="10"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
