@@ -16,6 +16,7 @@ Two modes:
 
 from __future__ import annotations
 
+import signal
 import time
 
 import structlog
@@ -277,14 +278,33 @@ def run_tui(interval: int, color: bool, *, use_cache: bool = True) -> int:
     log.info("starting_tui_mode", interval=base, cache=use_cache)
     try:
         with Live(console=console, screen=True, auto_refresh=False) as live:
-            while True:
-                if use_cache:
-                    data, fetched_at = fetch_usage_cached(base)
-                else:
-                    data, fetched_at = fetch_claude_usage(), time.time()
-                note = _staleness_note(data, fetched_at, base)
-                live.update(build_tui_view(data, note=note), refresh=True)
-                time.sleep(base)
+            # Repaint immediately on a terminal/pane resize. With auto_refresh
+            # off, Live only redraws on update(), so without this the pane goes
+            # blank after a resize until the next poll (`base` seconds away).
+            # Live uses an RLock, so refreshing from the main-thread signal
+            # handler is reentrant-safe; time.sleep is auto-resumed after the
+            # handler (PEP 475), so the poll cadence is unchanged. SIGWINCH is
+            # Unix-only — the Windows/GUI paths never reach here.
+            prev_winch = None
+            if hasattr(signal, "SIGWINCH"):
+                def _on_resize(_signum, _frame):
+                    try:
+                        live.refresh()
+                    except Exception:  # a redraw hiccup must not kill the handler
+                        log.debug("resize_refresh_failed", exc_info=True)
+                prev_winch = signal.signal(signal.SIGWINCH, _on_resize)
+            try:
+                while True:
+                    if use_cache:
+                        data, fetched_at = fetch_usage_cached(base)
+                    else:
+                        data, fetched_at = fetch_claude_usage(), time.time()
+                    note = _staleness_note(data, fetched_at, base)
+                    live.update(build_tui_view(data, note=note), refresh=True)
+                    time.sleep(base)
+            finally:
+                if prev_winch is not None:
+                    signal.signal(signal.SIGWINCH, prev_winch)
     except KeyboardInterrupt:
         log.info("tui_exit")
         return 0
