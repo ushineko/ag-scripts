@@ -7,12 +7,13 @@ covered directly.
 """
 
 import io
+import time
 from unittest import mock
 
 from rich.console import Console
 
 import src.tui as tui
-from src.tui import build_line, build_tui_view, run_tui
+from src.tui import build_line, build_tui_view
 
 # A future timestamp keeps the reset countdown deterministic (always positive).
 FUTURE = "2099-01-01T00:00:00+00:00"
@@ -184,39 +185,62 @@ class _DummyLive:
         self.frames.append(renderable)
 
 
-class TestRunTuiBackoff:
-    """The live loop lengthens its sleep on HTTP 429 and resets on success."""
+class TestCacheWiring:
+    """--line/--tui use the cooperative cache by default; --no-cache bypasses it."""
 
-    def _run(self, responses):
+    def test_run_line_uses_cache_by_default(self):
+        with mock.patch.object(tui, "fetch_usage_cached", return_value=(_data(), 0.0)) as cached, \
+             mock.patch.object(tui, "fetch_claude_usage") as direct, \
+             mock.patch.object(tui, "Console", lambda *a, **k: Console(file=io.StringIO())):
+            tui.run_line(color=False, use_cache=True, ttl=60)
+        cached.assert_called_once()
+        direct.assert_not_called()
+
+    def test_run_line_no_cache_fetches_directly(self):
+        with mock.patch.object(tui, "fetch_usage_cached") as cached, \
+             mock.patch.object(tui, "fetch_claude_usage", return_value=_data()) as direct, \
+             mock.patch.object(tui, "Console", lambda *a, **k: Console(file=io.StringIO())):
+            tui.run_line(color=False, use_cache=False, ttl=60)
+        direct.assert_called_once()
+        cached.assert_not_called()
+
+
+class TestStalenessNote:
+    """run_tui marks a reading stale (from the shared cache age) past ~1.5x interval."""
+
+    def test_fresh_reading_has_no_note(self):
+        assert tui._staleness_note(_data(), time.time(), 60) is None
+
+    def test_old_reading_is_marked_cached(self):
+        note = tui._staleness_note(_data(), time.time() - 600, 60)
+        assert note is not None and note.startswith("cached")
+
+    def test_no_note_without_fetched_at(self):
+        assert tui._staleness_note(_data(), None, 60) is None
+
+    def test_no_note_for_error_payload(self):
+        assert tui._staleness_note({"error": "offline"}, time.time() - 600, 60) is None
+
+
+class TestRunTuiLoop:
+    """The live loop polls at a fixed interval (the cache gate, not run_tui, does
+    the API throttling/backoff) and exits cleanly on Ctrl-C."""
+
+    def test_polls_cache_at_fixed_interval_and_exits(self):
         slept = []
-        seq = iter(responses)
 
         def fake_sleep(secs):
             slept.append(secs)
-            if len(slept) >= len(responses):
+            if len(slept) >= 3:
                 raise KeyboardInterrupt
 
-        # Patch Live (no real terminal) and Console (fixed width, off-screen).
-        with mock.patch.object(tui, "fetch_claude_usage", side_effect=lambda: next(seq)), \
+        with mock.patch.object(tui, "fetch_usage_cached", return_value=(_data(), 0.0)) as cached, \
              mock.patch.object(tui.time, "sleep", fake_sleep), \
              mock.patch.object(tui, "Live", _DummyLive), \
              mock.patch.object(tui, "Console",
                                lambda *a, **k: Console(file=io.StringIO(), width=80)):
-            rc = run_tui(interval=10, color=False)
-        return rc, slept
+            rc = tui.run_tui(interval=10, color=False)
 
-    def test_backs_off_on_rate_limit_then_resets(self):
-        ok = _data(util5=47)
-        limited = {"error": "rate_limited", "retry_after": 0}
-        rc, slept = self._run([ok, limited, limited, ok])
         assert rc == 0
-        assert slept[0] == 10
-        assert slept[1] > 10
-        assert slept[2] > slept[1]
-        assert slept[3] == 10
-
-    def test_honors_retry_after(self):
-        limited = {"error": "rate_limited", "retry_after": 120}
-        rc, slept = self._run([limited, limited])
-        assert rc == 0
-        assert slept[0] >= 120
+        assert slept == [10, 10, 10]                 # fixed cadence, no per-process backoff
+        cached.assert_called_with(10)                 # polls the cache with the interval as TTL

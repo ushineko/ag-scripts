@@ -21,6 +21,7 @@ PURE_MODULES = [
     "src.logging_config",
     "src.config",
     "src.oauth",
+    "src.usage_cache",
 ]
 
 

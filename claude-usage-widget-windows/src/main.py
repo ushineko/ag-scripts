@@ -52,6 +52,13 @@ def parse_args():
         action="store_true",
         help="Disable ANSI color in --tui/--line output.",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the shared usage cache in --tui/--line and fetch directly "
+        "(by default these modes coordinate via a cache so multiple panes share "
+        "~1 API request per interval).",
+    )
     parser.add_argument("--log-file", type=Path, help="Write logs to file")
     return parser.parse_args()
 
@@ -93,20 +100,22 @@ def _use_color() -> bool:
 
 def run_line_mode() -> int:
     """Print one compact usage line to stdout, then exit."""
+    from .config import load_config
     from .tui import run_line
 
-    return run_line(color=_use_color())
+    ttl = load_config().get("update_interval_seconds", 60)
+    return run_line(color=_use_color(), use_cache=not args.no_cache, ttl=ttl)
 
 
 def run_tui_mode() -> int:
-    """Run the self-refreshing single-line terminal display until interrupted."""
+    """Run the self-refreshing terminal dashboard until interrupted."""
     from .config import load_config
     from .tui import run_tui
 
     interval = args.interval
     if interval is None:
         interval = load_config().get("update_interval_seconds", 60)
-    return run_tui(interval=interval, color=_use_color())
+    return run_tui(interval=interval, color=_use_color(), use_cache=not args.no_cache)
 
 
 def run_no_gui() -> int:

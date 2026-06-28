@@ -27,14 +27,13 @@ from rich.text import Text
 
 from .display import format_percentage
 from .oauth import fetch_claude_usage, get_time_until_reset
+from .usage_cache import fetch_usage_cached
 
 log = structlog.get_logger(__name__)
 
 # Segment separator and live-loop tuning.
 SEP = " · "
 MIN_INTERVAL = 5          # floor for --interval (seconds)
-MAX_INTERVAL = 30 * 60    # backoff ceiling (seconds)
-MAX_BACKOFF_LEVEL = 6
 
 # Compact, single-line error/status text (the full GUI messages are too long).
 _ERR_TEXT = {
@@ -53,16 +52,28 @@ def _err_text(error_code: str | None) -> str:
     return _ERR_TEXT.get(error_code, error_code)
 
 
-def _age(since: float | None) -> str:
-    """Human-readable age of a monotonic timestamp, e.g. '3m ago'."""
-    if not since:
-        return ""
-    minutes = int((time.monotonic() - since) // 60)
+def _fmt_age(seconds: float) -> str:
+    """Human-readable duration, e.g. '3m ago'."""
+    minutes = int(seconds // 60)
     if minutes < 1:
         return "just now"
     if minutes < 60:
         return f"{minutes}m ago"
     return f"{minutes // 60}h{minutes % 60}m ago"
+
+
+def _staleness_note(data, fetched_at: float | None, interval: int) -> str | None:
+    """A 'cached Xm ago' note when a good reading is older than ~1.5x interval.
+
+    The age comes from the shared cache's ``fetched_at`` (wall clock), so every
+    pane shows a consistent staleness regardless of when it started.
+    """
+    if not isinstance(data, dict) or "five_hour" not in data or fetched_at is None:
+        return None
+    age = time.time() - fetched_at
+    if age > interval * 1.5:
+        return f"cached {_fmt_age(age)}"
+    return None
 
 
 def _usage_style(util: float | None) -> str:
@@ -233,58 +244,47 @@ def build_tui_view(data: dict | None, *, note: str | None = None):
     return grid
 
 
-def run_line(color: bool) -> int:
-    """Fetch usage once, print a single compact line, and exit."""
-    log.info("starting_line_mode")
+def run_line(color: bool, *, use_cache: bool = True, ttl: int = 60) -> int:
+    """Fetch usage once, print a single compact line, and exit.
+
+    By default reads through the cooperative cache (``ttl`` freshness window) so
+    repeated/concurrent callers don't each hit the API; ``use_cache=False`` does
+    a direct per-process fetch.
+    """
+    log.info("starting_line_mode", cache=use_cache)
     console = Console(no_color=not color, highlight=False)
-    data = fetch_claude_usage()
+    if use_cache:
+        data, _ = fetch_usage_cached(ttl)
+    else:
+        data = fetch_claude_usage()
     # soft_wrap keeps the line intact (no wrapping/cropping) for status bars.
     console.print(build_line(data), soft_wrap=True)
     return 0
 
 
-def run_tui(interval: int, color: bool) -> int:
-    """Run a self-refreshing single-line display until interrupted.
+def run_tui(interval: int, color: bool, *, use_cache: bool = True) -> int:
+    """Run a self-refreshing full-width dashboard until interrupted.
 
     Uses ``rich.live.Live`` on the alternate screen, so the launching shell's
-    echo is cleared on entry and the pane is restored on exit. Keeps the last
-    good reading on transient errors (marked stale) and backs off the poll
-    interval on HTTP 429, honoring the server's ``retry_after``. Ctrl-C exits.
+    echo is cleared on entry and the pane is restored on exit. By default reads
+    through the cooperative cache so multiple panes share ~1 API fetch per
+    interval — the shared gate (honoring ``Retry-After``) handles throttling, so
+    no per-process backoff is needed here. ``use_cache=False`` fetches directly.
+    Ctrl-C exits.
     """
     base = max(MIN_INTERVAL, interval)
-    current = base
-    backoff = 0
-    last_good: dict | None = None
-    last_good_time: float | None = None
-
     console = Console(no_color=not color, highlight=False)
-    log.info("starting_tui_mode", interval=base)
+    log.info("starting_tui_mode", interval=base, cache=use_cache)
     try:
         with Live(console=console, screen=True, auto_refresh=False) as live:
             while True:
-                data = fetch_claude_usage()
-                err = data.get("error") if isinstance(data, dict) else None
-
-                if isinstance(data, dict) and not err:
-                    last_good = data
-                    last_good_time = time.monotonic()
-                    render, note = data, None
-                    if backoff:
-                        backoff = 0
-                        current = base
+                if use_cache:
+                    data, fetched_at = fetch_usage_cached(base)
                 else:
-                    if last_good is not None:
-                        render = last_good
-                        note = f"{_err_text(err)} · {_age(last_good_time)}"
-                    else:
-                        render, note = data, None
-                    if err == "rate_limited" and isinstance(data, dict):
-                        backoff = min(backoff + 1, MAX_BACKOFF_LEVEL)
-                        retry = (data.get("retry_after") or 0)
-                        current = min(max(base * (2 ** backoff), retry), MAX_INTERVAL)
-
-                live.update(build_tui_view(render, note=note), refresh=True)
-                time.sleep(current)
+                    data, fetched_at = fetch_claude_usage(), time.time()
+                note = _staleness_note(data, fetched_at, base)
+                live.update(build_tui_view(data, note=note), refresh=True)
+                time.sleep(base)
     except KeyboardInterrupt:
         log.info("tui_exit")
         return 0

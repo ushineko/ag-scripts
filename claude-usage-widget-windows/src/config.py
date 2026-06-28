@@ -41,6 +41,23 @@ def get_config_path() -> Path:
     return get_config_dir() / "config.json"
 
 
+def get_cache_dir() -> Path:
+    """Get the cache directory path (shared across processes).
+
+    macOS: ``~/Library/Caches/claude-usage-widget`` (native).
+    Windows: ``%LOCALAPPDATA%\\claude-usage-widget\\cache``.
+    Other: ``${XDG_CACHE_HOME:-~/.cache}/claude-usage-widget``.
+    """
+    if IS_MACOS:
+        return Path.home() / "Library" / "Caches" / "claude-usage-widget"
+    localappdata = os.environ.get("LOCALAPPDATA", "")
+    if localappdata:
+        return Path(localappdata) / "claude-usage-widget" / "cache"
+    xdg_cache = os.environ.get("XDG_CACHE_HOME", "")
+    base = Path(xdg_cache) if xdg_cache else Path.home() / ".cache"
+    return base / "claude-usage-widget"
+
+
 def load_config() -> dict[str, Any]:
     """Load configuration from file, creating defaults if needed."""
     config_path = get_config_path()

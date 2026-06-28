@@ -131,6 +131,22 @@ Color is enabled automatically only on a TTY with `NO_COLOR` unset.
 > them from a different interpreter than the GUI (e.g. a system `python3` in a
 > tmux pane), install those there: `python3 -m pip install --user rich structlog`.
 
+#### Shared cache across panes
+
+`--tui`/`--line` coordinate through a small shared cache file (a daemonless
+"cooperative cache"), so **running one strip per project does not multiply API
+calls** — across all instances only ~1 request is made per interval. Whichever
+instance first finds the cache stale fetches once (under a non-blocking lock to
+avoid a startup stampede) and writes it; the rest read the file. A failed
+fetch/429 never clobbers the last-good reading — panes keep showing it (marked
+`cached Xm ago`) while the shared gate backs off (honoring `Retry-After`).
+
+The cache lives at `~/Library/Caches/claude-usage-widget/usage.json` (macOS),
+`%LOCALAPPDATA%\claude-usage-widget\cache\` (Windows), or
+`${XDG_CACHE_HOME:-~/.cache}/claude-usage-widget/` (Linux), and holds only usage
+percentages and reset timestamps — **no credentials**. Pass `--no-cache` to
+bypass it and fetch directly per process. The GUI widget polls independently.
+
 **tmux** — run `--tui` in a dedicated pane, or call `--line` from the status bar:
 
 ```tmux
@@ -147,10 +163,11 @@ set -g status-right '#(cd /path/to/claude-usage-widget-windows && python -m src.
 |--------|-------------|
 | `--debug` | Enable verbose debug logging |
 | `--no-gui` | Fetch usage from API and print a multi-line report to console, then exit |
-| `--tui` | Run a compact, self-refreshing single-line terminal display (helper pane); Ctrl-C to exit |
+| `--tui` | Run a self-refreshing full-width terminal dashboard (helper pane); Ctrl-C to exit |
 | `--line` | Print one compact usage line to stdout and exit (for status bars / watch loops) |
 | `--interval N` | Poll interval in seconds for `--tui` (default: config `update_interval_seconds`; minimum 5) |
 | `--no-color` | Disable ANSI color in `--tui`/`--line` output |
+| `--no-cache` | Bypass the shared cross-process usage cache in `--tui`/`--line` and fetch directly |
 | `--fetch-json` | Fetch usage and print it as JSON to stdout, then exit (used internally by the GUI's QProcess fetcher; logs go to stderr) |
 | `--log-file PATH` | Write logs to file |
 
@@ -180,6 +197,7 @@ src/
   main.py              # Entry point, QTimer, single-instance, --fetch-json child path
   fetcher.py           # QProcess-based async usage fetch (event loop, no threads)
   oauth.py             # OAuth credentials, token refresh, usage API, backoff
+  usage_cache.py       # Qt-free cooperative cross-process cache (shared by --tui/--line)
   tui.py               # Qt-free terminal rendering via rich (--tui full-width dashboard, --line one-shot)
   widget.py            # PySide6 floating widget (frameless, translucent)
   tray.py              # QSystemTrayIcon with context menu
@@ -197,6 +215,15 @@ pytest tests/
 ```
 
 ## Changelog
+
+### v3.2.0 (2026-06-28)
+
+- Cooperative cross-process usage cache for `--tui`/`--line` (on by default): multiple panes (e.g. one strip per herdr project) now share ~1 API request per interval instead of each polling independently
+  - Coordination via a shared `usage.json` with a single attempt-gate (unifying freshness + backoff) and a non-blocking `flock` to avoid a cold-start stampede; the lock auto-releases on process death
+  - Failed fetches/429s never clobber the last-known-good reading — panes keep showing it (marked `cached Xm ago`) while the shared gate backs off, honoring `Retry-After`
+  - Cache holds only usage data (no credentials); lives under the platform cache dir
+  - `--no-cache` bypasses it (direct per-process fetch); the GUI widget continues to poll independently
+  - New `src/usage_cache.py` and `config.get_cache_dir()`; `run_tui`'s per-process backoff removed (the shared gate subsumes it)
 
 ### v3.1.0 (2026-06-27)
 
