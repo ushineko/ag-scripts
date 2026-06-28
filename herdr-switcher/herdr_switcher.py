@@ -18,8 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-from PyQt6.QtCore import QTimer  # noqa: E402
-from PyQt6.QtGui import QIcon  # noqa: E402
+from PyQt6.QtCore import Qt, QTimer  # noqa: E402
+from PyQt6.QtGui import QGuiApplication, QIcon, QKeySequence  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QMenu,
@@ -37,6 +37,17 @@ from popup import SpacePopup  # noqa: E402
 APP_ID = "herdr-switcher"
 ICON_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "herdr-switcher.svg")
 
+# How often to poll the live modifier state while the popup is open (ms).
+_MODIFIER_POLL_MS = 40
+
+
+def _hotkey_modifiers(hotkey: str):
+    """The modifier part of a hotkey chord (e.g. Shift of 'Shift+Tab')."""
+    seq = QKeySequence.fromString(hotkey, QKeySequence.SequenceFormat.PortableText)
+    if seq.count() == 0:
+        return Qt.KeyboardModifier.NoModifier
+    return seq[0].keyboardModifiers()
+
 
 class Daemon:
     def __init__(self, app: QApplication) -> None:
@@ -46,7 +57,22 @@ class Daemon:
 
         self.popup = SpacePopup()
         self.popup.activate_requested.connect(self._on_commit)
+        self.popup.cancelled.connect(self._stop_timers)
 
+        # Modifier(s) of the hotkey chord (e.g. Shift of Shift+Tab). Commit is
+        # driven by the *release* of these (alt-tab semantics), not by a pause.
+        self._chord_mods = _hotkey_modifiers(self.cfg["hotkey"])
+
+        # Poll the live modifier state while the popup is open; commit when the
+        # chord's modifier(s) are released.
+        self._mod_timer = QTimer()
+        self._mod_timer.setInterval(_MODIFIER_POLL_MS)
+        self._mod_timer.timeout.connect(self._poll_modifier)
+        self._mod_seen_held = False
+        self._mod_release_ticks = 0
+
+        # Fallback pause-commit, used only for a no-modifier hotkey (nothing to
+        # hold, so alt-tab release semantics don't apply).
         self.commit_timer = QTimer()
         self.commit_timer.setSingleShot(True)
         self.commit_timer.setInterval(int(self.cfg["popup_commit_delay_ms"]))
@@ -118,22 +144,54 @@ class Daemon:
         return ordered, initial_row
 
     def _on_hotkey_pressed(self) -> None:
-        self.commit_timer.stop()
         if self.popup.isVisible():
-            self.popup.cycle_next()
-        else:
-            spaces, initial_row = self._build_space_list()
-            self.popup.show_with_spaces(spaces, initial_row=initial_row)
+            self.popup.cycle_next()  # modifier still held; keep cycling
+            return
+        self._stop_timers()
+        spaces, initial_row = self._build_space_list()
+        self.popup.show_with_spaces(spaces, initial_row=initial_row)
+        if self._chord_mods:
+            self._mod_seen_held = False
+            self._mod_release_ticks = 0
+            self._mod_timer.start()
 
     def _on_hotkey_released(self) -> None:
-        if self.popup.isVisible():
+        # The chord "released" signal fires when the non-modifier key (Tab) goes
+        # up while the modifier (Shift) may still be held — committing here is the
+        # awkward behavior being fixed. For a modifier chord, do nothing; the
+        # modifier poll commits on actual release. Only a no-modifier hotkey
+        # falls back to a short pause-commit.
+        if not self._chord_mods and self.popup.isVisible():
             self.commit_timer.start()
+
+    def _poll_modifier(self) -> None:
+        """Commit once the chord's modifier(s) are released (alt-tab semantics)."""
+        if not self.popup.isVisible():
+            self._mod_timer.stop()
+            return
+        held = bool(QGuiApplication.queryKeyboardModifiers() & self._chord_mods)
+        if held:
+            self._mod_seen_held = True
+            self._mod_release_ticks = 0
+            return
+        # Not held: honor it once we've seen it held, or seen it consistently
+        # released (the tick guard avoids a spurious early read on a fast tap).
+        if self._mod_seen_held or self._mod_release_ticks >= 1:
+            self._mod_timer.stop()
+            self.popup.activate_current()
+        else:
+            self._mod_release_ticks += 1
 
     def _commit_selection(self) -> None:
         if self.popup.isVisible():
             self.popup.activate_current()
 
+    def _stop_timers(self) -> None:
+        self.commit_timer.stop()
+        self._mod_timer.stop()
+
     def _on_commit(self, space) -> None:
+        self._stop_timers()
         try:
             result = switch_to_space(space, terminal=self.cfg["terminal"])
         except Exception as exc:  # noqa: BLE001 - never let a switch crash the daemon
