@@ -480,16 +480,20 @@ class PeripheralMonitor(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
 
+        # Scale-aware metrics; real values applied via _apply_layout_metrics().
+        self.device_icon_size = 24
+        self.claude_layout = None
+        self.claude_header_row = None
+
         # Layout inside the container - Grid 2x2
         self.grid_layout = QGridLayout(self.container)
-        self.grid_layout.setContentsMargins(15, 12, 15, 12)
-        self.grid_layout.setSpacing(15)
 
         # Create device widgets
         self.mouse_ui = self.create_device_cell("Mouse")
         self.kb_ui = self.create_device_cell("Keyboard")
         self.headset_ui = self.create_device_cell("Headset")
         self.airpods_ui = self.create_device_cell("AirPods")
+        self.device_uis = [self.mouse_ui, self.kb_ui, self.headset_ui, self.airpods_ui]
 
         # Add to grid
         # (Row, Col)
@@ -547,12 +551,13 @@ class PeripheralMonitor(QWidget):
         h_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         icon_lbl = QLabel(self)
-        icon_lbl.setFixedSize(24, 24)
+        icon_lbl.setFixedSize(self.device_icon_size, self.device_icon_size)
+        icon_lbl.setScaledContents(True)
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
+
         # Initial Icon (Show 'missing' until first update)
         init_icon = QIcon.fromTheme("battery-missing")
-        icon_lbl.setPixmap(init_icon.pixmap(24, 24))
+        icon_lbl.setPixmap(init_icon.pixmap(self.device_icon_size, self.device_icon_size))
         
         log = structlog.get_logger()
         log.debug("initial_icon_set", device=default_name)
@@ -589,11 +594,11 @@ class PeripheralMonitor(QWidget):
         )
 
         claude_layout = QVBoxLayout(self.claude_frame)
-        claude_layout.setContentsMargins(15, 8, 15, 10)
         claude_layout.setSpacing(4)
+        self.claude_layout = claude_layout
 
         header_row = QHBoxLayout()
-        header_row.setSpacing(8)
+        self.claude_header_row = header_row
 
         icon_lbl = QLabel(self)
         icon = QIcon.fromTheme("dialog-scripts", QIcon.fromTheme("utilities-terminal"))
@@ -649,16 +654,67 @@ class PeripheralMonitor(QWidget):
 
         return self.claude_frame
 
+    def _scaled_metrics(self, scale):
+        """Compute scale-aware layout spacing so padding shrinks with the font.
+
+        Margins/spacing are otherwise fixed pixels set once at construction, so
+        a small font leaves proportionally huge whitespace. Each value is scaled
+        by ``font_scale`` with a small floor to avoid collapsing to zero.
+        """
+        def s(base, lo=1):
+            return max(lo, int(round(base * scale)))
+
+        return {
+            "grid_margin_h": s(15, 6),
+            "grid_margin_v": s(12, 5),
+            "grid_spacing": s(15, 5),
+            "cell_spacing": s(2, 0),
+            "icon": s(24, 14),
+            "claude_margin_h": s(15, 6),
+            "claude_margin_top": s(8, 3),
+            "claude_margin_bottom": s(10, 4),
+            "claude_header_spacing": s(8, 3),
+        }
+
+    def _apply_layout_metrics(self):
+        """Re-apply scale-aware margins/spacing to live layouts and icons."""
+        scale = self.settings.get("font_scale", 1.0)
+        m = self._scaled_metrics(scale)
+
+        self.device_icon_size = m["icon"]
+
+        if hasattr(self, "grid_layout"):
+            self.grid_layout.setContentsMargins(
+                m["grid_margin_h"], m["grid_margin_v"],
+                m["grid_margin_h"], m["grid_margin_v"],
+            )
+            self.grid_layout.setSpacing(m["grid_spacing"])
+
+        for ui in getattr(self, "device_uis", []):
+            ui["layout"].setSpacing(m["cell_spacing"])
+            icon_lbl = ui["icon_lbl"]
+            icon_lbl.setFixedSize(self.device_icon_size, self.device_icon_size)
+
+        if getattr(self, "claude_layout", None) is not None:
+            self.claude_layout.setContentsMargins(
+                m["claude_margin_h"], m["claude_margin_top"],
+                m["claude_margin_h"], m["claude_margin_bottom"],
+            )
+        if getattr(self, "claude_header_row", None) is not None:
+            self.claude_header_row.setSpacing(m["claude_header_spacing"])
+
     def update_style(self):
         opacity = self.settings.get("opacity", 0.95)
         scale = self.settings.get("font_scale", 1.0)
-        
+
         alpha = int(opacity * 255)
-        
+
         # Base sizes
         val_size = int(22 * scale)
         name_size = int(11 * scale)
         stat_size = int(10 * scale)
+
+        self._apply_layout_metrics()
 
         # We style the container specifically, not the global QWidget
         self.setStyleSheet(f"""
@@ -1275,7 +1331,7 @@ class PeripheralMonitor(QWidget):
             
             # Update Icon
             icon = QIcon.fromTheme(icon_name, QIcon.fromTheme("battery-missing"))
-            icon_lbl.setPixmap(icon.pixmap(24, 24))
+            icon_lbl.setPixmap(icon.pixmap(self.device_icon_size, self.device_icon_size))
             
             # Handle special "Unknown Level but Connected" state
             if level == -1:
@@ -1340,14 +1396,14 @@ class PeripheralMonitor(QWidget):
             # If we overrode icon_name above, update it
             if status_text in ["Wired", "Wireless"]:
                 icon = QIcon.fromTheme(icon_name)
-                icon_lbl.setPixmap(icon.pixmap(24, 24))
+                icon_lbl.setPixmap(icon.pixmap(self.device_icon_size, self.device_icon_size))
         else:
             name_lbl.setText(fallback_name)
             val_lbl.setText('<span style="color: gray;">--%</span>')
             stat_lbl.setText("Disconnected")
             
             icon = QIcon.fromTheme("battery-missing")
-            icon_lbl.setPixmap(icon.pixmap(24, 24))
+            icon_lbl.setPixmap(icon.pixmap(self.device_icon_size, self.device_icon_size))
 
     def format_time(self):
         from PyQt6.QtCore import QTime

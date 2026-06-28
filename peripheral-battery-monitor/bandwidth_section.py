@@ -298,6 +298,15 @@ class BandwidthSection(QFrame):
         cum_size = int(9 * font_scale)
         title_size = int(11 * font_scale)
 
+        # Scale padding/spacing with the font so a small font doesn't leave
+        # proportionally large whitespace.
+        def s(base, lo=1):
+            return max(lo, int(round(base * font_scale)))
+
+        self._root_layout.setContentsMargins(s(15, 6), s(8, 3), s(15, 6), s(10, 4))
+        self._root_layout.setSpacing(s(4, 1))
+        self._rows_container.setSpacing(s(2, 0))
+
         self.setStyleSheet(f"""
             QFrame#BandwidthSection {{
                 background-color: rgba(35, 35, 35, {alpha});
