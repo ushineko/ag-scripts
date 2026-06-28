@@ -60,6 +60,9 @@ To activate, you can bind this script to a global hotkey (e.g., `Meta+L` or `Met
 
 ## Changelog
 
+### v1.2.1
+- Fixed grey/gradient background under themed Qt styles (e.g. Oxygen); the window now reliably renders black
+
 ### v1.2.0
 - Added "Blue Screen of Delight" easter egg (press `B` to toggle)
 
