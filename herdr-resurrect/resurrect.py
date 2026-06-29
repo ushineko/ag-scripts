@@ -44,6 +44,7 @@ def _annotated_live_panes() -> list[dict]:
 def save() -> list[PaneSnap]:
     cfg = config.load()
     wl = whitelist.effective_whitelist(cfg)
+    patterns = whitelist.cmdline_patterns(cfg)
     snaps: list[PaneSnap] = []
     for p in _annotated_live_panes():
         if whitelist.is_agent_pane(p.get("agent_status", "")):
@@ -52,7 +53,7 @@ def save() -> list[PaneSnap]:
         if fg is None:
             continue  # idle shell
         name, argv = fg
-        if name not in wl:
+        if not whitelist.is_capturable(name, " ".join(argv), wl, patterns):
             continue
         snaps.append(PaneSnap(
             session=p["_session"],

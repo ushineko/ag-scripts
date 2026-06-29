@@ -50,6 +50,19 @@ class TestWhitelist(unittest.TestCase):
         self.assertNotIn("btop", wl)
         self.assertIn("lazygit", wl)
 
+    def test_cmdline_pattern_captures_generic_program(self):
+        wl = whitelist.effective_whitelist({})
+        pats = whitelist.cmdline_patterns({"cmdline_patterns": [r"-m src\.main --tui"]})
+        # name 'python3' is not whitelisted, but the cmdline matches a pattern
+        self.assertFalse("python3" in wl)
+        self.assertTrue(whitelist.is_capturable(
+            "python3", "/usr/bin/python3 -m src.main --tui", wl, pats))
+        # an unrelated python3 invocation is still skipped
+        self.assertFalse(whitelist.is_capturable(
+            "python3", "/usr/bin/python3 some_other.py", wl, pats))
+        # a whitelisted name is captured regardless of patterns
+        self.assertTrue(whitelist.is_capturable("btop", "btop -u 500", wl, []))
+
 
 class TestSnapshot(unittest.TestCase):
     def test_cmdline_quotes_whitespace_args(self):

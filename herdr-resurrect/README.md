@@ -61,6 +61,7 @@ command = "herdr-resurrect restore"
 | `save_interval_min` | `5` | Periodic-save cadence (timer; re-run install.sh to apply) |
 | `whitelist_add` | `[]` | Extra program names to capture/restore |
 | `whitelist_remove` | `[]` | Default-whitelist names to drop |
+| `cmdline_patterns` | `[]` | Regexes on the full command line — capture by command, not name (e.g. `"-m src\\.main --tui"` to catch a `python3 -m …` TUI) |
 | `history` | `3` | Snapshots kept under `history/` |
 
 Default whitelist: system monitors (`btop`, `htop`, `nvtop`, `glances`, …), git

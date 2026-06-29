@@ -4,6 +4,8 @@ idle shells, which are AI-agent panes (left to herdr's resume_agents_on_restore)
 
 from __future__ import annotations
 
+import re
+
 # Foreground process names that mean "just a shell" -> the pane is idle.
 SHELLS = {
     "sh", "bash", "zsh", "fish", "dash", "ash", "ksh", "tcsh", "csh", "nu",
@@ -61,3 +63,21 @@ def effective_whitelist(config: dict) -> set[str]:
     wl |= {normalize_name(x) for x in config.get("whitelist_add", [])}
     wl -= {normalize_name(x) for x in config.get("whitelist_remove", [])}
     return wl
+
+
+def cmdline_patterns(config: dict) -> list[re.Pattern]:
+    """Regexes matched against a pane's full command line. Lets specific
+    invocations be captured even when the program name is generic (e.g.
+    `python3 -m src.main --tui`)."""
+    out: list[re.Pattern] = []
+    for p in config.get("cmdline_patterns", []):
+        try:
+            out.append(re.compile(p))
+        except re.error:
+            continue
+    return out
+
+
+def is_capturable(name: str, cmdline: str, whitelist: set[str],
+                  patterns: list[re.Pattern]) -> bool:
+    return name in whitelist or any(p.search(cmdline) for p in patterns)

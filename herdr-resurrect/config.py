@@ -17,6 +17,7 @@ DEFAULTS: dict = {
     "save_interval_min": 5,        # periodic systemd-timer save cadence
     "whitelist_add": [],           # extra program names to capture/restore
     "whitelist_remove": [],        # default-whitelist names to drop
+    "cmdline_patterns": [],        # regexes on full cmdline (capture by command, not name)
     "history": 3,                  # snapshots to keep in history/
 }
 
