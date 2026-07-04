@@ -19,17 +19,32 @@ into those panes.
   and writes `~/.config/herdr-resurrect/snapshot.json`. Skips idle shells, AI-agent
   panes, and anything not whitelisted. Runs on demand and every ~5 min (systemd
   user timer).
+  - **Clobber guard** — a save right after a restart would otherwise capture the
+    bare shells and overwrite the snapshot restore depends on. So when a pane
+    goes idle because its program vanished (pane still present, program gone) and
+    that looks like a restart — within 30 min of boot, or a large fraction of
+    captured panes idling at once — save **carries the last-known program
+    forward** instead of dropping it. A one-off pane close during steady state is
+    dropped normally, so intentionally-closed panels don't get relaunched.
 - **restore** — after a reboot, once herdr has restored the layout, matches each
   saved program to its live pane (by `pane_id`, falling back to
   session+workspace+cwd) and, if that pane is an **idle shell**, relaunches the
   program with `herdr pane run`. Never double-launches; never touches a busy pane.
+- **autorestore** — what the login timer runs. herdr has no post-restore hook and
+  each session's server is spawned lazily, so this polls for herdr readiness and
+  retries `restore` across a window (default 15 min), covering sessions attached
+  later. Idempotent — repeated passes no-op once programs are back.
 
 ## Install
 
 ```sh
-./install.sh      # symlink CLI + enable the periodic-save systemd user timer
+./install.sh      # symlink CLI + enable the save + auto-restore systemd timers
 ./uninstall.sh    # remove (add --purge to also delete config + snapshots)
 ```
+
+Two systemd user timers: `herdr-resurrect-save.timer` (snapshot every N min) and
+`herdr-resurrect-autorestore.timer` (restore ~30s after login). After a reboot
+your pane programs come back automatically — no keypress.
 
 Requires `python3` and `herdr`. (Periodic auto-save is Linux/systemd; the CLI
 itself is cross-platform.)
@@ -39,15 +54,18 @@ itself is cross-platform.)
 ```sh
 herdr-resurrect save               # snapshot now (all sessions)
 herdr-resurrect restore --dry-run  # preview what would relaunch
-herdr-resurrect restore            # relaunch into idle panes (run after a reboot)
+herdr-resurrect restore            # relaunch into idle panes (auto-run after login)
+herdr-resurrect autorestore        # poll-then-restore (what the login timer runs)
 herdr-resurrect status             # last snapshot age + program count
 herdr-resurrect list               # what the snapshot holds
 ```
 
-Bind `save`/`restore` to a herdr key via `config.toml` if you like:
+The login timer restores automatically; bind a manual `restore` to a herdr key
+via `config.toml` for on-demand use. Pick a **free** chord — herdr already uses
+`prefix+r` (resize) and `prefix+R` (reload-config), so use e.g. `prefix+ctrl+r`:
 ```toml
 [[keys.command]]
-key = "prefix+R"
+key = "prefix+ctrl+r"
 type = "shell"
 command = "herdr-resurrect restore"
 ```
@@ -76,9 +94,9 @@ editors (`nvim`, `vim`, `helix`), `k9s`, `watch`, `tail`, `glow`, … Bare shell
 | `herdr_api.py` | herdr socket wrapper (sessions, panes, process-info, pane run) |
 | `whitelist.py` | foreground-program extraction, idle/agent classification, whitelist |
 | `snapshot.py` | `PaneSnap` model, atomic write + history, live-pane matching |
-| `resurrect.py` | `save()` / `restore()` orchestration |
+| `resurrect.py` | `save()` (with clobber guard) / `restore()` orchestration |
 | `config.py` | config + paths |
-| `cli.py` | `save` / `restore` / `status` / `list` |
+| `cli.py` | `save` / `restore` / `autorestore` / `status` / `list` |
 
 ## Caveats
 

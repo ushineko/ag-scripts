@@ -8,8 +8,11 @@ BIN_DIR="$HOME/.local/bin"
 UNIT_DIR="$HOME/.config/systemd/user"
 
 if [[ "$OSTYPE" != "darwin"* ]]; then
-    systemctl --user disable --now "$APP-save.timer" >/dev/null 2>&1 || true
-    rm -f "$UNIT_DIR/$APP-save.timer" "$UNIT_DIR/$APP-save.service"
+    for unit in "$APP-save.timer" "$APP-autorestore.timer"; do
+        systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+    done
+    rm -f "$UNIT_DIR/$APP-save.timer"        "$UNIT_DIR/$APP-save.service" \
+          "$UNIT_DIR/$APP-autorestore.timer" "$UNIT_DIR/$APP-autorestore.service"
     systemctl --user daemon-reload 2>/dev/null || true
 fi
 

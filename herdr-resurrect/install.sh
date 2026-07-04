@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install herdr-resurrect: symlink the CLI and install a systemd user timer that
-# snapshots running pane programs every N minutes. Restore is manual:
+# Install herdr-resurrect: symlink the CLI and install systemd user timers that
+# (1) snapshot running pane programs every N minutes and (2) auto-restore them
+# shortly after login. Manual restore is still available:
 #   herdr-resurrect restore   (after a reboot, once herdr has restored the layout)
 set -euo pipefail
 
@@ -50,15 +51,37 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+    cat > "$UNIT_DIR/$APP-autorestore.service" <<EOF
+[Unit]
+Description=Auto-restore herdr pane programs after a boot/restart (herdr-resurrect)
+[Service]
+Type=oneshot
+ExecStart=$BIN_DIR/$APP autorestore
+EOF
+
+    cat > "$UNIT_DIR/$APP-autorestore.timer" <<EOF
+[Unit]
+Description=Trigger herdr-resurrect auto-restore shortly after login
+[Timer]
+OnStartupSec=30s
+Persistent=false
+[Install]
+WantedBy=timers.target
+EOF
+
     systemctl --user daemon-reload
-    systemctl --user enable --now "$APP-save.timer" >/dev/null 2>&1 || \
-        systemctl --user enable --now "$APP-save.timer"
+    for unit in "$APP-save.timer" "$APP-autorestore.timer"; do
+        systemctl --user enable --now "$unit" >/dev/null 2>&1 || \
+            systemctl --user enable --now "$unit"
+    done
     echo "installed + enabled $APP-save.timer (every ${interval}m)"
+    echo "installed + enabled $APP-autorestore.timer (30s after login)"
 fi
 
 echo
 echo "$APP installed."
 echo "  Snapshot now:   $APP save"
-echo "  After a reboot: $APP restore   (preview with --dry-run)"
+echo "  After a reboot: auto-restores ~30s after login; manual: $APP restore"
+echo "                  (preview with --dry-run)"
 echo "  Status:         $APP status | $APP list"
 echo "  Config:         ~/.config/$APP/config.json (whitelist, interval)"

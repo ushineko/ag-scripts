@@ -3,6 +3,7 @@
 
   herdr-resurrect save              # snapshot running programs (all sessions)
   herdr-resurrect restore [--dry-run]
+  herdr-resurrect autorestore [--window S] [--interval S]  # poll then restore
   herdr-resurrect status            # last snapshot age + contents
   herdr-resurrect list              # what the snapshot would relaunch
 """
@@ -63,6 +64,29 @@ def _cmd_restore(a) -> int:
     return 0
 
 
+def _cmd_autorestore(a) -> int:
+    """Poll for herdr readiness after a boot/restart and relaunch pane programs.
+
+    herdr has no systemd unit and no post-restore hook, and each named session's
+    server is spawned lazily when its terminal is opened. So rather than fire
+    once at a fixed time, poll: retry restore across a window, no-op while herdr
+    is down, and re-run so sessions attached later in the window still get filled.
+    restore() only fills idle panes, so repeated passes are safe once programs
+    are back."""
+    interval = max(5, a.interval)
+    deadline = time.monotonic() + max(interval, a.window)
+    while True:
+        try:
+            r = resurrect.restore()
+            for snap, pid in r.restored:
+                print(f"[autorestore] {pid:8} {snap.cmdline}", flush=True)
+        except herdr_api.HerdrError:
+            pass  # herdr not up yet (or mid-restore); keep polling
+        if time.monotonic() >= deadline:
+            return 0
+        time.sleep(interval)
+
+
 def _cmd_status(_a) -> int:
     snaps, saved_at = snapshot.load_snaps()
     print(f"snapshot: {_age(saved_at)}  ({len(snaps)} program(s))")
@@ -86,6 +110,13 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("restore")
     r.add_argument("--dry-run", action="store_true")
     r.set_defaults(func=_cmd_restore)
+    ar = sub.add_parser("autorestore",
+                        help="poll for herdr after boot, then restore (for the timer)")
+    ar.add_argument("--window", type=float, default=900.0,
+                    help="seconds to keep polling (default 900)")
+    ar.add_argument("--interval", type=float, default=30.0,
+                    help="seconds between restore attempts (default 30)")
+    ar.set_defaults(func=_cmd_autorestore)
     sub.add_parser("status").set_defaults(func=_cmd_status)
     sub.add_parser("list").set_defaults(func=_cmd_list)
     args = p.parse_args(argv)

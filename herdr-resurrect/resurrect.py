@@ -7,13 +7,32 @@ already restored the layout), via `herdr pane run`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 
 import config
 import herdr_api
 import snapshot
 import whitelist
 from snapshot import PaneSnap
+
+# After a full-server restart (reboot or `herdr server` restart) herdr restores
+# the pane layout as bare shells; the programs that were running are gone until a
+# restore relaunches them. A plain save() in that window would capture the empty
+# state and clobber the snapshot that restore() depends on. These two guards
+# decide when a now-idle pane's last-known program should be carried forward
+# instead of dropped.
+BOOT_GRACE_SEC = 1800          # within 30 min of boot, bare == "not yet restored"
+RESTART_DROP_RATIO = 0.5       # >=50% of captured panes idling at once == restart
+
+
+def _uptime_sec() -> float:
+    """Seconds since system boot, or +inf if it can't be determined (so the
+    boot-grace guard simply never triggers rather than misfiring)."""
+    try:
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    except (AttributeError, OSError):
+        return float("inf")
 
 
 def _annotated_live_panes() -> list[dict]:
@@ -41,12 +60,56 @@ def _annotated_live_panes() -> list[dict]:
     return panes
 
 
+def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
+                      live: list[dict], *, uptime_sec: float,
+                      boot_grace_sec: float = BOOT_GRACE_SEC,
+                      restart_drop_ratio: float = RESTART_DROP_RATIO,
+                      ) -> list[PaneSnap]:
+    """Carry forward the last-known program for panes that are currently idle but
+    were running before a restart, so a full-server restart doesn't clobber the
+    restore source with bare shells.
+
+    A previously-captured entry that is absent now is preserved only when its
+    pane still exists in the layout AND is idle (its program vanished, the pane
+    didn't), AND the drop looks like a restart rather than a deliberate close:
+    either we're within the post-boot grace window, or a large fraction of
+    captured panes went idle at once (the signature of a server restart). During
+    steady state a one-off pane close falls through and is dropped normally, so
+    intentionally-closed panels don't linger and get auto-relaunched."""
+    new_by_pane = {(s.session, s.pane_id) for s in new_snaps}
+    recoverable: list[tuple[PaneSnap, dict]] = []
+    for s in prev_snaps:
+        if (s.session, s.pane_id) in new_by_pane:
+            continue  # still captured this cycle (running); nothing to preserve
+        pane = snapshot.match_live_pane(s, live)
+        if pane is not None and pane.get("_fg") is None:
+            recoverable.append((s, pane))
+    if not recoverable:
+        return new_snaps
+    mass_drop = (len(prev_snaps) > 0
+                 and len(recoverable) / len(prev_snaps) >= restart_drop_ratio)
+    if not (mass_drop or uptime_sec < boot_grace_sec):
+        return new_snaps
+    # Preserve, refreshing layout coordinates from the live pane in case herdr
+    # reassigned ids across the restart (the program/argv is what matters).
+    preserved = [
+        replace(s,
+                pane_id=pane.get("pane_id", s.pane_id),
+                tab_id=pane.get("tab_id", s.tab_id),
+                workspace_id=pane.get("workspace_id", s.workspace_id),
+                workspace_label=pane.get("_workspace_label", s.workspace_label))
+        for s, pane in recoverable
+    ]
+    return new_snaps + preserved
+
+
 def save() -> list[PaneSnap]:
     cfg = config.load()
     wl = whitelist.effective_whitelist(cfg)
     patterns = whitelist.cmdline_patterns(cfg)
-    snaps: list[PaneSnap] = []
-    for p in _annotated_live_panes():
+    live = _annotated_live_panes()
+    new_snaps: list[PaneSnap] = []
+    for p in live:
         if whitelist.is_agent_pane(p.get("agent_status", "")):
             continue  # herdr's resume_agents_on_restore handles agent panes
         fg = p["_fg"]
@@ -55,7 +118,7 @@ def save() -> list[PaneSnap]:
         name, argv = fg
         if not whitelist.is_capturable(name, " ".join(argv), wl, patterns):
             continue
-        snaps.append(PaneSnap(
+        new_snaps.append(PaneSnap(
             session=p["_session"],
             workspace_id=p.get("workspace_id", ""),
             workspace_label=p.get("_workspace_label", ""),
@@ -65,6 +128,9 @@ def save() -> list[PaneSnap]:
             name=name,
             argv=argv,
         ))
+    prev_snaps, _ = snapshot.load_snaps()
+    snaps = _merge_preserving(new_snaps, prev_snaps, live,
+                              uptime_sec=_uptime_sec())
     snapshot.write_snapshot(snaps, history=int(cfg.get("history", 3)))
     return snaps
 

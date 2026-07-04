@@ -91,5 +91,65 @@ class TestSnapshot(unittest.TestCase):
         self.assertIsNone(snapshot.match_live_pane(snap, live))
 
 
+import resurrect  # noqa: E402
+
+
+def _live(session="default", pane="w1:p1", wid="w1", label="proj", cwd="/p",
+          fg=None, tab="w1:t1"):
+    """A live-pane dict as _annotated_live_panes() produces it. fg=None == idle."""
+    return {"_session": session, "pane_id": pane, "workspace_id": wid,
+            "_workspace_label": label, "cwd": cwd, "tab_id": tab, "_fg": fg}
+
+
+class TestMergePreserving(unittest.TestCase):
+    def test_preserves_bare_pane_within_boot_grace(self):
+        # Reboot: btop's pane came back idle, so this cycle captured nothing.
+        prev = [_snap(pane="w1:p1", name="btop", argv=["btop", "-u", "500"])]
+        live = [_live(pane="w1:p1", fg=None)]
+        merged = resurrect._merge_preserving([], prev, live, uptime_sec=60)
+        self.assertEqual([s.name for s in merged], ["btop"])
+
+    def test_mass_drop_preserves_even_outside_grace(self):
+        # herdr server restart long after boot: every captured pane went idle.
+        prev = [_snap(pane="w1:p1", name="btop"),
+                _snap(pane="w1:p2", name="nvtop")]
+        live = [_live(pane="w1:p1", fg=None), _live(pane="w1:p2", fg=None)]
+        merged = resurrect._merge_preserving([], prev, live, uptime_sec=99999)
+        self.assertEqual(sorted(s.name for s in merged), ["btop", "nvtop"])
+
+    def test_single_close_in_steady_state_is_dropped(self):
+        # Steady state: 1 of 4 closed -> ratio 0.25 < 0.5, past grace -> drop it.
+        prev = [_snap(pane=f"w1:p{i}", name=n)
+                for i, n in enumerate(["btop", "nvtop", "lazygit", "yazi"], 1)]
+        new = [s for s in prev if s.name != "yazi"]
+        live = [_live(pane=f"w1:p{i}", fg=("x", ["x"])) for i in range(1, 4)]
+        live.append(_live(pane="w1:p4", fg=None))  # closed pane now idle
+        merged = resurrect._merge_preserving(new, prev, live, uptime_sec=99999)
+        self.assertNotIn("yazi", [s.name for s in merged])
+        self.assertEqual(len(merged), 3)
+
+    def test_vanished_pane_not_preserved(self):
+        # Pane itself is gone (workspace removed) -> nothing to restore into.
+        prev = [_snap(pane="w1:p1", name="btop")]
+        merged = resurrect._merge_preserving([], prev, live=[], uptime_sec=60)
+        self.assertEqual(merged, [])
+
+    def test_running_pane_not_duplicated(self):
+        # Program still running this cycle -> present in new, not re-added.
+        prev = [_snap(pane="w1:p1", name="btop")]
+        new = [_snap(pane="w1:p1", name="btop")]
+        live = [_live(pane="w1:p1", fg=("btop", ["btop"]))]
+        merged = resurrect._merge_preserving(new, prev, live, uptime_sec=60)
+        self.assertEqual(len(merged), 1)
+
+    def test_preserve_refreshes_reassigned_pane_id(self):
+        # herdr gave the pane a new id after restart; match by label+cwd, keep prog.
+        prev = [_snap(pane="OLD", label="proj", cwd="/p", name="btop")]
+        live = [_live(pane="NEW", wid="w1", label="proj", cwd="/p", fg=None)]
+        merged = resurrect._merge_preserving([], prev, live, uptime_sec=60)
+        self.assertEqual(merged[0].pane_id, "NEW")
+        self.assertEqual(merged[0].name, "btop")
+
+
 if __name__ == "__main__":
     unittest.main()
