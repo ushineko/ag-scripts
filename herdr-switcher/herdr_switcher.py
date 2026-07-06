@@ -22,6 +22,7 @@ from PyQt6.QtCore import Qt, QTimer  # noqa: E402
 from PyQt6.QtGui import QGuiApplication, QIcon, QKeySequence  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
+    QDialog,
     QMenu,
     QSystemTrayIcon,
 )
@@ -32,6 +33,7 @@ import mru  # noqa: E402
 import session_windows  # noqa: E402
 from core import switch_to_space  # noqa: E402
 from global_shortcut import GlobalShortcut, parse_hotkey  # noqa: E402
+from hotkey_dialog import HotkeyCaptureDialog  # noqa: E402
 from popup import SpacePopup  # noqa: E402
 
 APP_ID = "herdr-switcher"
@@ -98,12 +100,41 @@ class Daemon:
         tray = QSystemTrayIcon(self._icon())
         tray.setToolTip("herdr-switcher")
         menu = QMenu()
-        menu.addAction(f"Hotkey: {self.cfg['hotkey']}").setEnabled(False)
+        self._hotkey_action = menu.addAction(self._hotkey_label())
+        self._hotkey_action.triggered.connect(self._change_hotkey)
         menu.addSeparator()
         menu.addAction("Quit", self.app.quit)
         tray.setContextMenu(menu)
         tray.show()
         return tray
+
+    def _hotkey_label(self) -> str:
+        return f"Change hotkey…  ({self.cfg['hotkey']})"
+
+    def _change_hotkey(self) -> None:
+        """Capture a new chord from the tray, rebind it live, and persist it."""
+        dialog = HotkeyCaptureDialog(self.cfg["hotkey"])
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        new = dialog.sequence()
+        if not new or new == self.cfg["hotkey"]:
+            return
+        code = parse_hotkey(new)
+        if code is None:
+            self._notify(f"'{new}' is not a valid shortcut")
+            return
+        if not self.shortcut.set_binding(code):
+            self._notify(f"Could not bind {new} (already in use?)")
+            return
+        # Bound successfully — persist and refresh derived state.
+        self.cfg["hotkey"] = new
+        try:
+            config.save(self.cfg)
+        except OSError as exc:
+            self._notify(f"Bound {new}, but saving config failed: {exc}")
+        self._chord_mods = _hotkey_modifiers(new)
+        self._hotkey_action.setText(self._hotkey_label())
+        self._notify(f"Hotkey set to {new}")
 
     def _bind_hotkey(self) -> None:
         if not self.shortcut.is_available():

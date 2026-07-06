@@ -42,7 +42,8 @@ Dependencies: `python-pyqt6`, `qt6-tools` (for `qdbus6`), `herdr`, `kdotool`.
 
 - **Ctrl+Meta+Tab** — open the popup. Tap again to cycle, release or pause (~0.6s) to
   commit; Enter or click also commit; Esc cancels.
-- Tray icon → Quit.
+- Tray icon → **Change hotkey…** (capture a new chord; rebinds live and saves)
+  or **Quit**.
 - Headless CLI (handy for scripting / debugging):
   ```sh
   herdr-switcher-cli list                       # all spaces, * = current
@@ -53,7 +54,8 @@ Dependencies: `python-pyqt6`, `qt6-tools` (for `qdbus6`), `herdr`, `kdotool`.
 
 ## Configuration
 
-`~/.config/herdr-switcher/config.json`:
+Change the hotkey from the tray (**Change hotkey…** → press a chord), or edit
+`~/.config/herdr-switcher/config.json` directly and restart:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
