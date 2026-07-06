@@ -26,4 +26,4 @@ if [[ "${1:-}" == "--purge" ]]; then
 fi
 
 echo "herdr-switcher uninstalled."
-echo "Note: if Shift+Tab stays captured, log out/in to clear the stale KGlobalAccel binding."
+echo "Note: if Ctrl+Meta+Tab stays captured, log out/in to clear the stale KGlobalAccel binding."

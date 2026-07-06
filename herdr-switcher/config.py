@@ -21,7 +21,7 @@ CONFIG_VERSION = 1
 
 DEFAULTS: dict = {
     "version": CONFIG_VERSION,
-    "hotkey": "Shift+Tab",          # macOS will default to "Alt+Tab" once supported
+    "hotkey": "Ctrl+Meta+Tab",      # macOS will default to "Alt+Tab" once supported
     "popup_commit_delay_ms": 600,
     "terminal": "alacritty",        # used to attach detached sessions
     "max_rows": 12,

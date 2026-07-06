@@ -4,7 +4,7 @@ An alt-tab popup for switching between [herdr](https://herdr.dev) **spaces**
 (workspaces), across all running herdr sessions. The successor to
 `vscode-launcher` now that terminals run herdr instead of tmux.
 
-Press **Shift+Tab** → a popup lists your spaces, most-recently-used first →
+Press **Ctrl+Meta+Tab** → a popup lists your spaces, most-recently-used first →
 pick one → herdr-switcher raises and maximizes the terminal hosting that space's
 session and focuses the space.
 
@@ -40,7 +40,7 @@ Dependencies: `python-pyqt6`, `qt6-tools` (for `qdbus6`), `herdr`, `kdotool`.
 
 ## Usage
 
-- **Shift+Tab** — open the popup. Tap again to cycle, release or pause (~0.6s) to
+- **Ctrl+Meta+Tab** — open the popup. Tap again to cycle, release or pause (~0.6s) to
   commit; Enter or click also commit; Esc cancels.
 - Tray icon → Quit.
 - Headless CLI (handy for scripting / debugging):
@@ -57,14 +57,15 @@ Dependencies: `python-pyqt6`, `qt6-tools` (for `qdbus6`), `herdr`, `kdotool`.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `hotkey` | `Shift+Tab` | Global shortcut (Qt portable text, e.g. `Ctrl+Tab`) |
+| `hotkey` | `Ctrl+Meta+Tab` | Global shortcut (Qt portable text, e.g. `Shift+Tab`) |
 | `popup_commit_delay_ms` | `600` | Pause-to-commit delay |
 | `terminal` | `alacritty` | Terminal used to attach detached sessions |
 | `max_rows` | `12` | Max visible rows in the popup |
 
 > **Note:** the hotkey is a *global* shortcut — while the daemon runs, that combo
-> is captured system-wide (so plain `Shift+Tab` backtab in apps is intercepted).
-> Change `hotkey` if that bothers you.
+> is captured system-wide. `Ctrl+Meta+Tab` is chosen to avoid clashing with apps
+> that reserve plain `Shift+Tab` (e.g. Claude Code). Change `hotkey` if it clashes
+> with something on your setup.
 
 ## Architecture
 

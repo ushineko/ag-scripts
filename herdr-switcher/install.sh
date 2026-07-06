@@ -79,6 +79,6 @@ disown 2>/dev/null || true
 
 echo
 echo "herdr-switcher installed and started."
-echo "  Hotkey: Shift+Tab (configurable in ~/.config/herdr-switcher/config.json)"
+echo "  Hotkey: Ctrl+Meta+Tab (configurable in ~/.config/herdr-switcher/config.json)"
 echo "  CLI:    $APP-cli list | current | switch <session> <workspace_id>"
 echo "  Autostarts on next login."

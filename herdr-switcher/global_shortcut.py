@@ -18,11 +18,16 @@ from PyQt6.QtCore import QMetaType, QObject, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusArgument, QDBusConnection, QDBusInterface
 from PyQt6.QtGui import QKeySequence
 
-# setShortcut flags (KGlobalAccelD::Registration enum):
-#   0x1 = SetPresent     — record this as the current binding
-#   0x2 = NoAutoloading  — don't restore from saved kglobalshortcutsrc
-_FLAG_SET_PRESENT = 0x1
-_FLAG_NO_AUTOLOADING = 0x2
+# setShortcut flags (KGlobalAccelD::SetShortcutFlag enum, from
+# <KGlobalAccelD/kglobalacceld.h>):
+#   0x2 = SetPresent     — record this as the current binding
+#   0x4 = NoAutoloading  — don't restore from saved kglobalshortcutsrc
+#   0x8 = IsDefault
+# NoAutoloading is essential: without it, setShortcut re-autoloads the saved
+# binding and ignores the requested keys, so a changed `hotkey` config never
+# takes effect (the combo silently reverts to whatever was last saved).
+_FLAG_SET_PRESENT = 0x2
+_FLAG_NO_AUTOLOADING = 0x4
 
 
 def _qstringlist(values: list[str]) -> QDBusArgument:
