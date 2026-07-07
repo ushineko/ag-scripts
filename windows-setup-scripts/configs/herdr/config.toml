@@ -1,0 +1,42 @@
+onboarding = false
+
+[update]
+channel = "preview"
+
+[terminal]
+# Use PowerShell 7 (pwsh) for new panes, not legacy Windows PowerShell 5.1.
+# Stable app-execution-alias path (survives pwsh version updates).
+default_shell = 'C:\Users\nvere\AppData\Local\Microsoft\WindowsApps\pwsh.exe'
+
+[theme]
+name = "tokyo-night"
+
+[ui.toast]
+delivery = "system"
+
+[ui]
+show_agent_labels_on_pane_borders = true
+agent_panel_scope = "all"
+
+[session]
+# Re-open supported AI-agent panes into their native conversations after a
+# herdr server restart (e.g. reboot).
+resume_agents_on_restore = true
+
+[experimental]
+# Persist recent pane scrollback (visible text, not the running process) across
+# full server restarts.
+pane_history = true
+
+# --- NOT YET PORTED TO WINDOWS -------------------------------------------
+# The Linux host binds two shell keybindings that depend on bash scripts and
+# Linux paths, so they are intentionally omitted here:
+#
+#   prefix+y       -> ~/.config/herdr/scripts/herdr-panel-toggle.sh
+#                     (toggles lazygit + yazi side panels)
+#   prefix+ctrl+r  -> ~/.local/bin/herdr-resurrect restore
+#                     (herdr-resurrect Python tool; not installed on Windows)
+#
+# Porting these requires PowerShell equivalents of the scripts and, for
+# resurrect, installing the herdr-resurrect tool. Tracked as a follow-up.
+# -------------------------------------------------------------------------

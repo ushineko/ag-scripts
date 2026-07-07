@@ -1,0 +1,5 @@
+# Match herdr's Tokyo Night (night variant, bg #1a1b26).
+# Flavor installed via: ya pkg add BennyOe/tokyo-night
+[flavor]
+dark  = "tokyo-night"
+light = "tokyo-night"

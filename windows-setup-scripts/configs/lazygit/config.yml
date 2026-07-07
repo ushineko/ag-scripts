@@ -1,0 +1,32 @@
+# lazygit — Tokyo Night (night variant) to match herdr and yazi.
+# Palette: bg #1a1b26 / fg #c0caf5 / blue #7aa2f7 / purple #bb9af7
+#          green #9ece6a / yellow #e0af68 / red #f7768e / cyan #7dcfff
+#          selection #292e42 / comment #565f89
+gui:
+  theme:
+    activeBorderColor:
+      - "#7aa2f7"
+      - bold
+    inactiveBorderColor:
+      - "#565f89"
+    searchingActiveBorderColor:
+      - "#7aa2f7"
+      - bold
+    optionsTextColor:
+      - "#7aa2f7"
+    selectedLineBgColor:
+      - "#292e42"
+    cherryPickedCommitBgColor:
+      - "#283457"
+    cherryPickedCommitFgColor:
+      - "#7aa2f7"
+    markedBaseCommitBgColor:
+      - "#3b4261"
+    markedBaseCommitFgColor:
+      - "#e0af68"
+    unstagedChangesColor:
+      - "#f7768e"
+    defaultFgColor:
+      - "#c0caf5"
+  authorColors:
+    "*": "#bb9af7"

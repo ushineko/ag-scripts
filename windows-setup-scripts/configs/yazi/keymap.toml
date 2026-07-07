@@ -1,0 +1,30 @@
+# yazi keymap — mnemonic one-key shortcuts layered on top of the defaults
+# (Windows port). These prepend to the built-ins, so o / O / arrows / hjkl
+# all still work.
+#
+#   R  read the hovered markdown rendered, full-screen (glow pager)
+#   e  edit the hovered file in nvim
+#   M  open in VS Code (GUI)
+#
+# Defaults worth remembering:
+#   o      open with the first matching opener (for *.md: glow read)
+#   O      open interactively — pick read / edit / GUI / reveal from a menu
+#   <Tab>  toggle the preview pane
+#
+# Windows note: the Linux config wrapped R/e in herdr-zoom-run.sh for herdr
+# pane-zoom. That bash wrapper is not ported; keys run the tools directly.
+
+[[mgr.prepend_keymap]]
+on   = "R"
+run  = "shell 'glow -p \"$@\"' --block"
+desc = "Read with glow (pager)"
+
+[[mgr.prepend_keymap]]
+on   = "e"
+run  = "shell 'nvim \"$@\"' --block"
+desc = "Edit in nvim"
+
+[[mgr.prepend_keymap]]
+on   = "M"
+run  = "shell 'code \"$@\"' --orphan"
+desc = "Open in VS Code (GUI)"

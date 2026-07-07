@@ -1,0 +1,45 @@
+# yazi configuration — sysadmin doc-browsing workflow (Windows port).
+#
+# Goal: browse the tree, read markdown rendered in the preview pane, and hand
+# off to a full read / spot-edit / GUI render with a single opener choice.
+#
+# Windows note: the Linux config wraps openers in herdr-zoom-run.sh so the
+# herdr pane zooms during a blocking read/edit. That wrapper is bash-only; the
+# openers below run the same tools directly. Pane-zoom nicety is not ported.
+
+[mgr]
+show_hidden    = false
+sort_by        = "natural"
+sort_dir_first = true
+linemode       = "size"
+
+# --- Markdown gets rendered (not raw) in the preview pane, via the glow plugin.
+[plugin]
+prepend_previewers = [
+  { url = "*.md",       run = "glow" },
+  { url = "*.markdown", run = "glow" },
+]
+
+# --- Named openers. "$@" expands to the hovered (or selected) file(s).
+[opener]
+read = [
+  # Full-screen rendered read inside the terminal (blocks until you quit).
+  { run = 'glow -p "$@"', block = true, desc = "Read (glow pager)", for = "windows" },
+]
+edit = [
+  { run = 'nvim "$@"', block = true, desc = "Edit (nvim)", for = "windows" },
+]
+md-gui = [
+  # Detached GUI editor for full fidelity (mermaid, images).
+  { run = 'code "%*"', orphan = true, desc = "Open in VS Code", for = "windows" },
+]
+reveal = [
+  { run = 'explorer /select,"%1"', orphan = true, desc = "Reveal in Explorer", for = "windows" },
+]
+
+# --- For *.md, Enter/o opens the first opener (glow read); O shows the menu.
+[open]
+prepend_rules = [
+  { url = "*.md",       use = [ "read", "edit", "md-gui", "reveal" ] },
+  { url = "*.markdown", use = [ "read", "edit", "md-gui", "reveal" ] },
+]

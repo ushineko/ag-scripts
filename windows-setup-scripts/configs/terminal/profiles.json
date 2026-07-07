@@ -90,6 +90,20 @@
                 "icon": "\ud83e\udd16",
                 "name": "Claude Code",
                 "startingDirectory": "%USERPROFILE%"
+            },
+            {
+                "colorScheme": "One Half Dark",
+                "commandline": "pwsh.exe -NoExit -Command \"& herdr\"",
+                "font":
+                {
+                    "face": "Hack Nerd Font Mono",
+                    "size": 8
+                },
+                "guid": "{d2b4e6f8-1a3c-4b5d-9e7f-2a3b4c5d6e7f}",
+                "hidden": false,
+                "icon": "\ud83d\udc11",
+                "name": "herdr",
+                "startingDirectory": "%USERPROFILE%"
             }
         ]
     },
