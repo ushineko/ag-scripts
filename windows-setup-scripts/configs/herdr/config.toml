@@ -28,15 +28,16 @@ resume_agents_on_restore = true
 # full server restarts.
 pane_history = true
 
-# --- NOT YET PORTED TO WINDOWS -------------------------------------------
-# The Linux host binds two shell keybindings that depend on bash scripts and
-# Linux paths, so they are intentionally omitted here:
-#
-#   prefix+y       -> ~/.config/herdr/scripts/herdr-panel-toggle.sh
-#                     (toggles lazygit + yazi side panels)
-#   prefix+ctrl+r  -> ~/.local/bin/herdr-resurrect restore
-#                     (herdr-resurrect Python tool; not installed on Windows)
-#
-# Porting these requires PowerShell equivalents of the scripts and, for
-# resurrect, installing the herdr-resurrect tool. Tracked as a follow-up.
+# Toggle lazygit (right, full-height) + yazi (under the main area) side panels.
+# Windows port of herdr-panel-toggle.sh. herdr runs keybound commands through
+# cmd.exe /d /c on Windows; pwsh and the script are given by absolute path so a
+# minimal PATH does not matter. Accepts `both` (default) / `lazygit` / `yazi`.
+[[keys.command]]
+key = "prefix+y"
+type = "shell"
+command = 'C:\Users\nvere\AppData\Local\Microsoft\WindowsApps\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nvere\AppData\Roaming\herdr\scripts\herdr-panel-toggle.ps1 both'
+
+# --- STILL DEFERRED ------------------------------------------------------
+# prefix+ctrl+r -> herdr-resurrect restore : the herdr-resurrect Python tool
+# is not installed on Windows yet, so this binding is intentionally omitted.
 # -------------------------------------------------------------------------
