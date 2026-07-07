@@ -94,3 +94,22 @@ Change the hotkey from the tray (**Change hotkey…** → press a chord), or edi
 - **Detached session won't open a terminal** — ensure the configured `terminal`
   is on PATH. (herdr's nested-session guard is handled: the spawn strips
   `HERDR_ENV`/`HERDR_SESSION`.)
+
+## Changelog
+
+### v1.1.0
+- Default hotkey changed from `Shift+Tab` to `Ctrl+Meta+Tab` — `Shift+Tab` is
+  reserved by apps such as Claude Code (backtab), so the global capture clashed.
+- Added a **Change hotkey…** tray action: press a chord in a capture dialog to
+  rebind live and save it, no JSON editing or daemon restart.
+- Fixed the KGlobalAccel `setShortcut` flag constants (`SetPresent`/
+  `NoAutoloading` were `0x1`/`0x2`; correct values are `0x2`/`0x4`). Without
+  `NoAutoloading` set, `setShortcut` re-autoloaded the saved binding and ignored
+  the requested keys, so changing the `hotkey` config had no effect after the
+  first registration. Live rebinding now works.
+- Added `--version`.
+
+### v1.0.0
+- Initial release: alt-tab popup daemon (PyQt6 + KGlobalAccel) listing herdr
+  spaces across all sessions, ordered by recency, with tap-to-cycle and
+  commit-on-modifier-release. Tray icon, autostart, and headless CLI.

@@ -36,6 +36,8 @@ from global_shortcut import GlobalShortcut, parse_hotkey  # noqa: E402
 from hotkey_dialog import HotkeyCaptureDialog  # noqa: E402
 from popup import SpacePopup  # noqa: E402
 
+__version__ = "1.1.0"
+
 APP_ID = "herdr-switcher"
 ICON_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "herdr-switcher.svg")
 
@@ -100,6 +102,8 @@ class Daemon:
         tray = QSystemTrayIcon(self._icon())
         tray.setToolTip("herdr-switcher")
         menu = QMenu()
+        menu.addAction(f"herdr-switcher v{__version__}").setEnabled(False)
+        menu.addSeparator()
         self._hotkey_action = menu.addAction(self._hotkey_label())
         self._hotkey_action.triggered.connect(self._change_hotkey)
         menu.addSeparator()
@@ -241,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="herdr-switcher")
     parser.add_argument("--tray", action="store_true",
                         help="run tray-resident (default behavior)")
+    parser.add_argument("--version", action="version",
+                        version=f"herdr-switcher {__version__}")
     parser.parse_args(argv)
 
     app = QApplication(sys.argv[:1])
