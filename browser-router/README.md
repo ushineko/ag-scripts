@@ -101,7 +101,7 @@ page immediately).
 This runs only on the Vivaldi path, and is best-effort: if KWin/qdbus is
 unavailable, or no Vivaldi window is on the primary monitor (e.g. cold start),
 the router silently falls back to a plain hand-off — identical to prior
-behavior. It adds ~0.2 s to Vivaldi-routed link clicks.
+behavior. It adds ~0.4 s to Vivaldi-routed link clicks.
 
 ### Configuration
 

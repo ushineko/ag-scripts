@@ -110,7 +110,7 @@ EOF
         "$qdbus" org.kde.KWin "/Scripting/Script${id}" org.kde.kwin.Script.run >/dev/null 2>&1 || true
         # Give KWin time to activate the window and Vivaldi time to register the
         # focus change before we forward the URL over the singleton socket.
-        sleep 0.2
+        sleep 0.4
         "$qdbus" org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "$name_id" >/dev/null 2>&1 || true
     fi
     rm -f "$script"
