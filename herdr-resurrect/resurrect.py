@@ -65,41 +65,50 @@ def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
                       boot_grace_sec: float = BOOT_GRACE_SEC,
                       restart_drop_ratio: float = RESTART_DROP_RATIO,
                       ) -> list[PaneSnap]:
-    """Carry forward the last-known program for panes that are currently idle but
-    were running before a restart, so a full-server restart doesn't clobber the
-    restore source with bare shells.
+    """Carry forward the last-known program for panes that stopped running before
+    a restart, so a full-server restart doesn't clobber the restore source with
+    bare shells.
 
-    A previously-captured entry that is absent now is preserved only when its
-    pane still exists in the layout AND is idle (its program vanished, the pane
-    didn't), AND the drop looks like a restart rather than a deliberate close:
-    either we're within the post-boot grace window, or a large fraction of
-    captured panes went idle at once (the signature of a server restart). During
-    steady state a one-off pane close falls through and is dropped normally, so
-    intentionally-closed panels don't linger and get auto-relaunched."""
+    A previously-captured entry that is absent now is preserved when the drop
+    looks like a restart rather than a deliberate close: either we're within the
+    post-boot grace window, or a large fraction of captured panes went away at
+    once (the signature of a server restart). During steady state a one-off pane
+    close falls through and is dropped normally, so intentionally-closed panels
+    don't linger and get auto-relaunched.
+
+    Crucially, the restart signal and the preservation are computed from *all*
+    absent panes, not only those already re-materialized in the live layout.
+    Right after a reboot herdr may fire the periodic save (OnBootSec=2min) before
+    it has rebuilt the pane layout, so `live` can be empty even though every
+    program needs carrying forward. Requiring the pane to already exist would
+    drop everything and overwrite the snapshot restore() depends on — exactly the
+    clobber this guard exists to prevent. An entry whose pane never comes back is
+    harmless: restore() finds no idle pane to match and simply skips it, and once
+    uptime clears the grace window a genuinely-removed pane is dropped on the next
+    steady-state save."""
     new_by_pane = {(s.session, s.pane_id) for s in new_snaps}
-    recoverable: list[tuple[PaneSnap, dict]] = []
-    for s in prev_snaps:
-        if (s.session, s.pane_id) in new_by_pane:
-            continue  # still captured this cycle (running); nothing to preserve
-        pane = snapshot.match_live_pane(s, live)
-        if pane is not None and pane.get("_fg") is None:
-            recoverable.append((s, pane))
-    if not recoverable:
+    absent = [s for s in prev_snaps
+              if (s.session, s.pane_id) not in new_by_pane]
+    if not absent:
         return new_snaps
     mass_drop = (len(prev_snaps) > 0
-                 and len(recoverable) / len(prev_snaps) >= restart_drop_ratio)
+                 and len(absent) / len(prev_snaps) >= restart_drop_ratio)
     if not (mass_drop or uptime_sec < boot_grace_sec):
         return new_snaps
-    # Preserve, refreshing layout coordinates from the live pane in case herdr
-    # reassigned ids across the restart (the program/argv is what matters).
-    preserved = [
-        replace(s,
-                pane_id=pane.get("pane_id", s.pane_id),
-                tab_id=pane.get("tab_id", s.tab_id),
-                workspace_id=pane.get("workspace_id", s.workspace_id),
-                workspace_label=pane.get("_workspace_label", s.workspace_label))
-        for s, pane in recoverable
-    ]
+    preserved: list[PaneSnap] = []
+    for s in absent:
+        pane = snapshot.match_live_pane(s, live)
+        if pane is not None and pane.get("_fg") is not None:
+            continue  # pane already runs a different program; don't shadow it
+        if pane is not None:
+            # Pane is back but idle: refresh layout coordinates in case herdr
+            # reassigned ids across the restart (the program/argv is what matters).
+            s = replace(s,
+                        pane_id=pane.get("pane_id", s.pane_id),
+                        tab_id=pane.get("tab_id", s.tab_id),
+                        workspace_id=pane.get("workspace_id", s.workspace_id),
+                        workspace_label=pane.get("_workspace_label", s.workspace_label))
+        preserved.append(s)
     return new_snaps + preserved
 
 

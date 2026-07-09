@@ -128,10 +128,33 @@ class TestMergePreserving(unittest.TestCase):
         self.assertNotIn("yazi", [s.name for s in merged])
         self.assertEqual(len(merged), 3)
 
-    def test_vanished_pane_not_preserved(self):
-        # Pane itself is gone (workspace removed) -> nothing to restore into.
+    def test_unmaterialized_layout_preserved_within_boot_grace(self):
+        # Reboot: the periodic save (OnBootSec=2min) fired before herdr rebuilt
+        # the layout, so live is empty. The program must still be carried forward
+        # -- dropping it here is what clobbers the restore source. restore() will
+        # harmlessly skip it if the pane never returns.
         prev = [_snap(pane="w1:p1", name="btop")]
         merged = resurrect._merge_preserving([], prev, live=[], uptime_sec=60)
+        self.assertEqual([s.name for s in merged], ["btop"])
+
+    def test_unmatched_pane_dropped_in_steady_state(self):
+        # Long past boot, single pane vanished (workspace removed): not a restart
+        # signature (ratio 0.25 < 0.5) -> dropped so it doesn't linger.
+        prev = [_snap(pane=f"w1:p{i}", name=n)
+                for i, n in enumerate(["btop", "nvtop", "lazygit", "yazi"], 1)]
+        new = [s for s in prev if s.name != "yazi"]
+        live = [_live(pane=f"w1:p{i}", fg=("x", ["x"])) for i in range(1, 4)]
+        # yazi's pane is gone entirely (not in live).
+        merged = resurrect._merge_preserving(new, prev, live, uptime_sec=99999)
+        self.assertNotIn("yazi", [s.name for s in merged])
+        self.assertEqual(len(merged), 3)
+
+    def test_busy_pane_not_shadowed(self):
+        # Pane came back running a different (non-whitelisted) program: don't
+        # carry forward the old one over it.
+        prev = [_snap(pane="w1:p1", name="btop")]
+        live = [_live(pane="w1:p1", fg=("vim", ["vim"]))]
+        merged = resurrect._merge_preserving([], prev, live, uptime_sec=60)
         self.assertEqual(merged, [])
 
     def test_running_pane_not_duplicated(self):
