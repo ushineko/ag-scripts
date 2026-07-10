@@ -30,7 +30,12 @@ def _uptime_sec() -> float:
     """Seconds since system boot, or +inf if it can't be determined (so the
     boot-grace guard simply never triggers rather than misfiring)."""
     try:
-        return time.clock_gettime(time.CLOCK_BOOTTIME)
+        return time.clock_gettime(time.CLOCK_BOOTTIME)  # POSIX
+    except (AttributeError, OSError):
+        pass
+    try:
+        import ctypes  # Windows: kernel tick count (ms since boot)
+        return ctypes.windll.kernel32.GetTickCount64() / 1000.0
     except (AttributeError, OSError):
         return float("inf")
 

@@ -22,6 +22,33 @@ class TestWhitelist(unittest.TestCase):
         self.assertEqual(whitelist.normalize_name("-zsh"), "zsh")
         self.assertEqual(whitelist.normalize_name("/usr/bin/nvim"), "nvim")
 
+    def test_normalize_strips_windows_exe_suffix_and_path(self):
+        # herdr on Windows reports foreground names with the .exe suffix; the
+        # whitelist lists bare names, so normalize must strip it (case-insensitive)
+        # for is_capturable to match. Also handle Windows-style paths.
+        self.assertEqual(whitelist.normalize_name("nvim.exe"), "nvim")
+        self.assertEqual(whitelist.normalize_name("BTOP.EXE"), "BTOP")
+        self.assertEqual(whitelist.normalize_name("lazygit.cmd"), "lazygit")
+        self.assertEqual(
+            whitelist.normalize_name(r"C:\Program Files\nvim\nvim.exe"), "nvim")
+
+    def test_windows_exe_name_is_capturable(self):
+        wl = whitelist.effective_whitelist({})
+        # "nvim.exe" would fail a bare-name lookup; normalization makes it match.
+        self.assertTrue(whitelist.is_capturable(
+            whitelist.normalize_name("nvim.exe"), "nvim.exe", wl, []))
+
+    def test_pwsh_is_recognized_as_shell(self):
+        self.assertTrue(whitelist.is_shell("pwsh.exe"))
+        self.assertTrue(whitelist.is_shell("powershell.exe"))
+        self.assertTrue(whitelist.is_shell("cmd.exe"))
+
+    def test_foreground_program_idle_when_only_pwsh_by_name(self):
+        # A pwsh sub-shell whose pid != shell_pid must still read as idle.
+        pinfo = {"shell_pid": 10, "foreground_processes": [
+            {"pid": 11, "name": "pwsh.exe", "argv": ["pwsh.exe"]}]}
+        self.assertIsNone(whitelist.foreground_program(pinfo))
+
     def test_is_agent_pane(self):
         self.assertFalse(whitelist.is_agent_pane("unknown"))
         self.assertFalse(whitelist.is_agent_pane(""))

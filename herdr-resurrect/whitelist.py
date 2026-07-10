@@ -9,7 +9,13 @@ import re
 # Foreground process names that mean "just a shell" -> the pane is idle.
 SHELLS = {
     "sh", "bash", "zsh", "fish", "dash", "ash", "ksh", "tcsh", "csh", "nu",
+    "pwsh", "powershell", "cmd",
 }
+
+# Executable suffixes Windows reports on process names (herdr returns "nvim.exe",
+# "pwsh.exe"). Stripped by normalize_name so the whitelist and SHELLS sets, which
+# list bare names, match on Windows too. Harmless on POSIX (no such suffixes).
+_WIN_EXE_SUFFIXES = (".exe", ".com", ".bat", ".cmd")
 
 # Programs safe to relaunch verbatim after a restart. TUIs / viewers / watchers
 # with no unsaved external state. Extend via config (allow); trim via config (deny).
@@ -25,8 +31,14 @@ DEFAULT_WHITELIST = {
 
 
 def normalize_name(name: str) -> str:
-    """Strip a leading '-' (login shells report '-zsh') and any path."""
-    return name.lstrip("-").rsplit("/", 1)[-1]
+    """Strip a leading '-' (login shells report '-zsh'), any path (POSIX or
+    Windows), and a Windows executable suffix (`nvim.exe` -> `nvim`)."""
+    base = name.lstrip("-").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    low = base.lower()
+    for suf in _WIN_EXE_SUFFIXES:
+        if low.endswith(suf):
+            return base[: -len(suf)]
+    return base
 
 
 def is_shell(name: str) -> bool:
