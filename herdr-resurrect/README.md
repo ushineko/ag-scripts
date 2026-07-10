@@ -49,6 +49,30 @@ your pane programs come back automatically — no keypress.
 Requires `python3` and `herdr`. (Periodic auto-save is Linux/systemd; the CLI
 itself is cross-platform.)
 
+### Windows
+
+```powershell
+.\install.ps1      # launcher + two scheduled tasks + pwsh-profile one-shot
+.\uninstall.ps1    # remove (add -Purge to also delete config + snapshots)
+```
+
+`install.ps1` is the Windows analogue of `install.sh` (no systemd). It writes a
+`%USERPROFILE%\bin\herdr-resurrect.cmd` launcher, registers two per-user
+scheduled tasks — `herdr-resurrect-save` (snapshot every N min) and
+`herdr-resurrect-autorestore` (at logon, poll for herdr then restore) — and adds
+a one-shot restore trigger to the pwsh profile that fires the first time a herdr
+server starts (covers herdr launched long after logon; see
+`herdr-resurrect-autostart.ps1`). Program names are matched with the `.exe`
+suffix stripped (`nvim.exe` → `nvim`) so the whitelist applies on Windows.
+
+> **Capture depends on herdr's Windows `pane process-info` reporting the pane's
+> foreground program.** As of herdr 0.7.1-preview this was observed to surface a
+> human-launched program (an agent pane) but **not** programs injected via the
+> `pane run` socket API in testing — verify on your build by hand-launching a
+> whitelisted TUI (`yazi`/`lazygit`) in a normal pane, then `herdr-resurrect
+> list`. If nothing is captured, herdr is not yet exposing non-agent pane
+> programs on Windows and this tool has nothing to snapshot.
+
 ## Usage
 
 ```sh

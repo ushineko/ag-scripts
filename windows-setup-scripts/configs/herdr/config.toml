@@ -37,7 +37,12 @@ key = "prefix+y"
 type = "shell"
 command = 'C:\Users\nvere\AppData\Local\Microsoft\WindowsApps\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nvere\AppData\Roaming\herdr\scripts\herdr-panel-toggle.ps1 both'
 
-# --- STILL DEFERRED ------------------------------------------------------
-# prefix+ctrl+r -> herdr-resurrect restore : the herdr-resurrect Python tool
-# is not installed on Windows yet, so this binding is intentionally omitted.
-# -------------------------------------------------------------------------
+# Relaunch the programs that were running in panes before a restart
+# (herdr-resurrect). prefix+R / prefix+r are herdr's reload-config / resize, so
+# ctrl+r. On Windows keybound commands run through cmd.exe /d /c; the launcher
+# .cmd (installed by herdr-resurrect/install.ps1) resolves python + cli.py by
+# absolute path so a minimal PATH does not matter.
+[[keys.command]]
+key = "prefix+ctrl+r"
+type = "shell"
+command = 'C:\Users\nvere\bin\herdr-resurrect.cmd restore'
