@@ -201,5 +201,122 @@ class TestMergePreserving(unittest.TestCase):
         self.assertEqual(merged[0].name, "btop")
 
 
+from unittest import mock  # noqa: E402
+
+
+def _labelpane(label="panel:yazi", pane="w1:p1", shell_pid=100, fg=None,
+               agent_status="unknown", session="default"):
+    """A live-pane dict with a pane label + shell pid, as label restore reads it."""
+    return {"_session": session, "pane_id": pane, "label": label,
+            "_shell_pid": shell_pid, "_fg": fg, "agent_status": agent_status}
+
+
+class TestLabelMatch(unittest.TestCase):
+    def test_exact_label_match(self):
+        self.assertEqual(
+            resurrect.match_label_command("panel:yazi", {"panel:yazi": "yazi"}),
+            "yazi")
+
+    def test_bare_suffix_match(self):
+        # Config keyed on the bare name still matches a "panel:yazi" label.
+        self.assertEqual(
+            resurrect.match_label_command("panel:lazygit", {"lazygit": "lazygit"}),
+            "lazygit")
+
+    def test_no_match_and_empty_label(self):
+        self.assertIsNone(resurrect.match_label_command("panel:btop", {"yazi": "y"}))
+        self.assertIsNone(resurrect.match_label_command("", {"yazi": "y"}))
+
+
+class TestCommandProgram(unittest.TestCase):
+    def test_extracts_normalized_program(self):
+        self.assertEqual(resurrect._command_program("yazi"), "yazi")
+        self.assertEqual(
+            resurrect._command_program(r"C:\miniforge3\python.exe -m src.main"),
+            "python")
+        self.assertEqual(resurrect._command_program("lazygit.exe --path ."),
+                         "lazygit")
+
+
+class TestLabelPaneBusy(unittest.TestCase):
+    def test_busy_only_when_target_program_is_a_child(self):
+        # Target program running -> busy.
+        with mock.patch.object(resurrect.pane_busy, "shell_child_names",
+                               return_value={"yazi"}):
+            self.assertTrue(resurrect._label_pane_busy(_labelpane(), "yazi"))
+
+    def test_transient_prompt_child_is_not_busy(self):
+        # An idle shell momentarily has oh-my-posh as a child; target is yazi.
+        with mock.patch.object(resurrect.pane_busy, "shell_child_names",
+                               return_value={"oh-my-posh", "git"}):
+            self.assertFalse(resurrect._label_pane_busy(_labelpane(), "yazi"))
+
+    def test_no_children_is_not_busy(self):
+        with mock.patch.object(resurrect.pane_busy, "shell_child_names",
+                               return_value=set()):
+            self.assertFalse(resurrect._label_pane_busy(_labelpane(), "yazi"))
+
+    def test_falls_back_to_fg_when_os_unknown(self):
+        with mock.patch.object(resurrect.pane_busy, "shell_child_names",
+                               return_value=None):
+            self.assertTrue(resurrect._label_pane_busy(
+                _labelpane(fg=("yazi", ["yazi"])), "yazi"))
+            self.assertFalse(resurrect._label_pane_busy(
+                _labelpane(fg=None), "yazi"))
+            # fg is a different program -> not busy for this label.
+            self.assertFalse(resurrect._label_pane_busy(
+                _labelpane(fg=("btop", ["btop"])), "yazi"))
+
+
+class TestRestoreFromLabels(unittest.TestCase):
+    def _run(self, live, label_commands, child_names, dry_run=True):
+        result = resurrect.RestoreResult(dry_run=dry_run)
+        with mock.patch.object(resurrect.pane_busy, "shell_child_names",
+                               return_value=child_names):
+            resurrect._restore_from_labels(label_commands, live, result,
+                                           dry_run=dry_run)
+        return result
+
+    def test_idle_labeled_pane_is_restored(self):
+        live = [_labelpane(label="panel:yazi", pane="w1:p1")]
+        r = self._run(live, {"panel:yazi": "yazi"}, child_names=set())
+        self.assertEqual(r.labels_restored, [("panel:yazi", "w1:p1", "yazi")])
+        self.assertEqual(r.labels_already, [])
+
+    def test_busy_labeled_pane_is_skipped(self):
+        live = [_labelpane(label="panel:yazi")]
+        r = self._run(live, {"panel:yazi": "yazi"}, child_names={"yazi"})
+        self.assertEqual(r.labels_restored, [])
+        self.assertEqual(r.labels_already, [("panel:yazi", "yazi")])
+
+    def test_idle_with_prompt_child_is_restored(self):
+        # oh-my-posh child present but the target (yazi) is not -> still restore.
+        live = [_labelpane(label="panel:yazi", pane="w1:p1")]
+        r = self._run(live, {"panel:yazi": "yazi"}, child_names={"oh-my-posh"})
+        self.assertEqual(r.labels_restored, [("panel:yazi", "w1:p1", "yazi")])
+
+    def test_unconfigured_label_ignored(self):
+        live = [_labelpane(label="panel:htop")]
+        r = self._run(live, {"panel:yazi": "yazi"}, child_names=set())
+        self.assertEqual(r.labels_restored, [])
+
+    def test_agent_pane_skipped(self):
+        live = [_labelpane(label="panel:yazi", agent_status="working")]
+        r = self._run(live, {"panel:yazi": "yazi"}, child_names=set())
+        self.assertEqual(r.labels_restored, [])
+
+    def test_non_dry_run_invokes_pane_run(self):
+        live = [_labelpane(label="panel:usage", pane="w1:p2")]
+        with mock.patch.object(resurrect.herdr_api, "pane_run") as pr, \
+                mock.patch.object(resurrect.pane_busy, "shell_child_names",
+                                  return_value=set()):
+            result = resurrect.RestoreResult(dry_run=False)
+            resurrect._restore_from_labels({"panel:usage": "py -m app"}, live,
+                                           result, dry_run=False)
+        pr.assert_called_once_with("default", "w1:p2", "py -m app")
+        self.assertEqual(result.labels_restored,
+                         [("panel:usage", "w1:p2", "py -m app")])
+
+
 if __name__ == "__main__":
     unittest.main()

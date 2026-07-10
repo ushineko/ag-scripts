@@ -65,13 +65,13 @@ server starts (covers herdr launched long after logon; see
 `herdr-resurrect-autostart.ps1`). Program names are matched with the `.exe`
 suffix stripped (`nvim.exe` → `nvim`) so the whitelist applies on Windows.
 
-> **Capture depends on herdr's Windows `pane process-info` reporting the pane's
-> foreground program.** As of herdr 0.7.1-preview this was observed to surface a
-> human-launched program (an agent pane) but **not** programs injected via the
-> `pane run` socket API in testing — verify on your build by hand-launching a
-> whitelisted TUI (`yazi`/`lazygit`) in a normal pane, then `herdr-resurrect
-> list`. If nothing is captured, herdr is not yet exposing non-agent pane
-> programs on Windows and this tool has nothing to snapshot.
+> **Snapshot capture depends on herdr's Windows `pane process-info` reporting the
+> pane's foreground program.** As of herdr 0.7.1-preview it reports only the
+> pane's *shell* (`pwsh.exe`), never the program running inside it — confirmed by
+> comparing `pane process-info` against the OS process table (the shell has a
+> `yazi.exe`/`lazygit.exe` child that herdr does not surface). So the
+> snapshot-based `save`/`restore` captures nothing on this build. Use
+> **[`label_commands`](#label-driven-restore)** instead, which needs no capture.
 
 ## Usage
 
@@ -105,11 +105,45 @@ command = "herdr-resurrect restore"
 | `whitelist_remove` | `[]` | Default-whitelist names to drop |
 | `cmdline_patterns` | `[]` | Regexes on the full command line — capture by command, not name (e.g. `"-m src\\.main --tui"` to catch a `python3 -m …` TUI) |
 | `history` | `3` | Snapshots kept under `history/` |
+| `label_commands` | `{}` | Label → command map for [label-driven restore](#label-driven-restore) (no snapshot needed) |
 
 Default whitelist: system monitors (`btop`, `htop`, `nvtop`, `glances`, …), git
 TUIs (`lazygit`, `gitui`, `tig`), file managers (`yazi`, `ranger`, `nnn`),
 editors (`nvim`, `vim`, `helix`), `k9s`, `watch`, `tail`, `glow`, … Bare shells,
 `ssh`, and REPLs are never captured.
+
+### Label-driven restore
+
+`save`/`restore` learn *what* was running by inspecting each pane — which fails
+where herdr's Windows `pane process-info` can't see a pane's program (above). For
+panes you keep at fixed roles (a yazi side panel, a git TUI, a status strip),
+`label_commands` sidesteps capture entirely: it maps a herdr **pane label** to a
+command and relaunches it whenever that labeled pane comes back idle.
+
+```json
+{
+  "label_commands": {
+    "panel:yazi": "yazi",
+    "panel:lazygit": "lazygit",
+    "panel:usage": "C:\\miniforge3\\python.exe -m src.main --tui"
+  }
+}
+```
+
+It is **declarative and stateless** — no snapshot, no saved state. herdr restores
+the labeled pane only if it was open at restart, so the layout itself is the
+record of what to bring back; `restore` just fills any matching idle pane. A key
+matches the full label (`panel:yazi`) or the bare suffix after the last `:`
+(`yazi`). The command runs in the pane's shell, so it inherits the pane's restored
+cwd (e.g. the usage widget's repo dir).
+
+"Idle" is judged from the **OS process table**, not herdr: a pane counts as busy
+only when the label's target program is already a child of its shell. That
+matching-by-name is deliberate — a prompt renderer (oh-my-posh/starship/git)
+briefly appears as a child of an idle shell, and a blunt "has any child" test
+would wrongly skip the restore. Running `restore` repeatedly is therefore safe:
+once the program is back it is seen as busy and skipped, so the login poller never
+stacks duplicates. Set labels on panes with `herdr pane rename <pane> <label>`.
 
 ## Architecture
 
@@ -118,7 +152,8 @@ editors (`nvim`, `vim`, `helix`), `k9s`, `watch`, `tail`, `glow`, … Bare shell
 | `herdr_api.py` | herdr socket wrapper (sessions, panes, process-info, pane run) |
 | `whitelist.py` | foreground-program extraction, idle/agent classification, whitelist |
 | `snapshot.py` | `PaneSnap` model, atomic write + history, live-pane matching |
-| `resurrect.py` | `save()` (with clobber guard) / `restore()` orchestration |
+| `pane_busy.py` | OS process-table check: a shell's child image names (label-restore idle test) |
+| `resurrect.py` | `save()` (with clobber guard) / `restore()` (snapshot + label) orchestration |
 | `config.py` | config + paths |
 | `cli.py` | `save` / `restore` / `autorestore` / `status` / `list` |
 

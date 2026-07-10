@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 
 import config
 import herdr_api
+import pane_busy
 import snapshot
 import whitelist
 from snapshot import PaneSnap
@@ -61,6 +62,7 @@ def _annotated_live_panes() -> list[dict]:
             except herdr_api.HerdrError:
                 pinfo = {}
             p["_fg"] = whitelist.foreground_program(pinfo)
+            p["_shell_pid"] = pinfo.get("shell_pid")
             panes.append(p)
     return panes
 
@@ -149,21 +151,56 @@ def save() -> list[PaneSnap]:
     return snaps
 
 
+def match_label_command(label: str, label_commands: dict[str, str]) -> str | None:
+    """Command configured for a pane label, or None. Matches the full label
+    (`panel:yazi`) first, then the bare suffix after the last ':' (`yazi`), so
+    config keys can be written either way."""
+    if not label:
+        return None
+    if label in label_commands:
+        return label_commands[label]
+    return label_commands.get(label.rsplit(":", 1)[-1])
+
+
+def _command_program(cmd: str) -> str:
+    """Normalized image name of a command's leading executable token, e.g.
+    'C:\\miniforge3\\python.exe -m src.main' -> 'python', 'yazi' -> 'yazi'."""
+    parts = cmd.split()
+    return whitelist.normalize_name(parts[0] if parts else cmd).lower()
+
+
+def _label_pane_busy(pane: dict, cmd: str) -> bool:
+    """Whether the pane already runs `cmd`'s program (so restore would duplicate
+    it). Prefers the OS process table, which is authoritative even where herdr's
+    Windows process-info can't see the program; matching the specific program
+    name ignores transient prompt renderers (oh-my-posh/starship/git) that
+    briefly appear as children of an idle shell. Falls back to herdr's foreground
+    view where the OS check is unavailable (e.g. macOS)."""
+    target = _command_program(cmd)
+    names = pane_busy.shell_child_names(pane.get("_shell_pid"))
+    if names is not None:
+        return target in names
+    fg = pane.get("_fg")
+    if fg is None:
+        return False
+    return whitelist.normalize_name(fg[0]).lower() == target
+
+
 @dataclass
 class RestoreResult:
     restored: list[tuple[PaneSnap, str]] = field(default_factory=list)
     already: list[PaneSnap] = field(default_factory=list)
     busy: list[PaneSnap] = field(default_factory=list)
     unmatched: list[PaneSnap] = field(default_factory=list)
+    # Label-driven restore (label, pane_id, command).
+    labels_restored: list[tuple[str, str, str]] = field(default_factory=list)
+    labels_already: list[tuple[str, str]] = field(default_factory=list)
+    labels_failed: list[tuple[str, str]] = field(default_factory=list)
     dry_run: bool = False
 
 
-def restore(*, dry_run: bool = False) -> RestoreResult:
-    snaps, _saved_at = snapshot.load_snaps()
-    result = RestoreResult(dry_run=dry_run)
-    if not snaps:
-        return result
-    live = _annotated_live_panes()
+def _restore_from_snapshot(snaps: list[PaneSnap], live: list[dict],
+                           result: RestoreResult, *, dry_run: bool) -> None:
     for snap in snaps:
         pane = snapshot.match_live_pane(snap, live)
         if pane is None:
@@ -182,4 +219,38 @@ def restore(*, dry_run: bool = False) -> RestoreResult:
                 result.busy.append(snap)
                 continue
         result.restored.append((snap, pane["pane_id"]))
+
+
+def _restore_from_labels(label_commands: dict[str, str], live: list[dict],
+                         result: RestoreResult, *, dry_run: bool) -> None:
+    for pane in live:
+        if whitelist.is_agent_pane(pane.get("agent_status", "")):
+            continue  # herdr's resume_agents_on_restore owns agent panes
+        cmd = match_label_command(pane.get("label", ""), label_commands)
+        if cmd is None:
+            continue
+        label = pane.get("label", "")
+        if _label_pane_busy(pane, cmd):
+            result.labels_already.append((label, cmd))
+            continue
+        if not dry_run:
+            try:
+                herdr_api.pane_run(pane["_session"], pane["pane_id"], cmd)
+            except herdr_api.HerdrError:
+                result.labels_failed.append((label, cmd))
+                continue
+        result.labels_restored.append((label, pane["pane_id"], cmd))
+
+
+def restore(*, dry_run: bool = False) -> RestoreResult:
+    cfg = config.load()
+    label_commands = cfg.get("label_commands", {}) or {}
+    snaps, _saved_at = snapshot.load_snaps()
+    result = RestoreResult(dry_run=dry_run)
+    if not snaps and not label_commands:
+        return result
+    live = _annotated_live_panes()
+    _restore_from_snapshot(snaps, live, result, dry_run=dry_run)
+    if label_commands:
+        _restore_from_labels(label_commands, live, result, dry_run=dry_run)
     return result

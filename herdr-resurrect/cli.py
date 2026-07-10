@@ -17,6 +17,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import config  # noqa: E402
 import herdr_api  # noqa: E402
 import resurrect  # noqa: E402
 import snapshot  # noqa: E402
@@ -61,6 +62,16 @@ def _cmd_restore(a) -> int:
         print(f"  [skip busy]  {s.pane_id:8} {s.cmdline}")
     for s in r.unmatched:
         print(f"  [no pane]    {s.pane_id:8} {s.cmdline}")
+    if r.labels_restored or r.labels_already or r.labels_failed:
+        print(f"labels {tag}: {len(r.labels_restored)}   "
+              f"already-running: {len(r.labels_already)}   "
+              f"failed: {len(r.labels_failed)}")
+        for label, pid, cmd in r.labels_restored:
+            print(f"  [{tag}] {label:14} {pid:8} {cmd}")
+        for label, cmd in r.labels_already:
+            print(f"  [skip busy]  {label:14} {cmd}")
+        for label, cmd in r.labels_failed:
+            print(f"  [failed]     {label:14} {cmd}")
     return 0
 
 
@@ -80,6 +91,8 @@ def _cmd_autorestore(a) -> int:
             r = resurrect.restore()
             for snap, pid in r.restored:
                 print(f"[autorestore] {pid:8} {snap.cmdline}", flush=True)
+            for label, pid, cmd in r.labels_restored:
+                print(f"[autorestore] {pid:8} {label} -> {cmd}", flush=True)
         except herdr_api.HerdrError:
             pass  # herdr not up yet (or mid-restore); keep polling
         if time.monotonic() >= deadline:
@@ -94,12 +107,19 @@ def _cmd_status(_a) -> int:
 
 
 def _cmd_list(_a) -> int:
-    snaps, saved_at = snapshot.load_snaps()
-    if not snaps:
-        print("no snapshot")
+    snaps, _saved_at = snapshot.load_snaps()
+    label_commands = config.load().get("label_commands", {}) or {}
+    if not snaps and not label_commands:
+        print("no snapshot and no label_commands configured")
         return 1
-    for s in snaps:
-        print(f"  {s.session:8} {s.workspace_label:20} {s.pane_id:8} {s.cmdline}")
+    if snaps:
+        print("snapshot:")
+        for s in snaps:
+            print(f"  {s.session:8} {s.workspace_label:20} {s.pane_id:8} {s.cmdline}")
+    if label_commands:
+        print("label_commands:")
+        for label, cmd in label_commands.items():
+            print(f"  {label:20} {cmd}")
     return 0
 
 
