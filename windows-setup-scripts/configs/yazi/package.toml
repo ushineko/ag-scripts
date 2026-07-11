@@ -1,7 +1,9 @@
-[[plugin.deps]]
-use = "Reledia/glow"
-rev = "bd3eaa5"
-hash = "f8d302ba41ab9deb4133fe3d0a64b6c6"
+# The markdown previewer (glow.yazi) is vendored under plugins/ instead of being
+# managed here: upstream Reledia/glow is unmaintained and broke on yazi 26.x
+# (removed Command:args, ya.mgr_emit, ya.preview_widgets, ui.Text.parse). The
+# local fork in plugins/glow.yazi/main.lua is ported to the current API. Keeping
+# it out of `ya pkg` avoids `ya pkg upgrade` clobbering the fork with the broken
+# upstream. See plugins/glow.yazi/main.lua.
 
 [[flavor.deps]]
 use = "BennyOe/tokyo-night"
