@@ -2,9 +2,9 @@
 # (Windows port). These prepend to the built-ins, so o / O / arrows / hjkl
 # all still work.
 #
-#   R  read the hovered markdown rendered, full-screen (glow pager)
+#   R  read the hovered markdown rendered, full-screen (glow TUI)
 #   e  edit the hovered file in nvim
-#   M  open in VS Code (GUI)
+#   M  open in Zettlr (GUI markdown viewer)
 #
 # Defaults worth remembering:
 #   o      open with the first matching opener (for *.md: glow read)
@@ -13,18 +13,23 @@
 #
 # Windows note: the Linux config wrapped R/e in herdr-zoom-run.sh for herdr
 # pane-zoom. That bash wrapper is not ported; keys run the tools directly.
+# The `shell` command uses yazi's OWN placeholders (cross-platform), not shell
+# tokens: `%h` = path of the hovered file, `%s` = the selected files. The Unix
+# `$@` and the cmd `%*` are NOT yazi placeholders — they reached the tool as a
+# literal string ("bad arguments"). yazi quotes the substituted path, so `%h`
+# takes no surrounding quotes.
 
 [[mgr.prepend_keymap]]
 on   = "R"
-run  = "shell 'glow -p \"$@\"' --block"
-desc = "Read with glow (pager)"
+run  = "shell 'glow -t %h' --block"
+desc = "Read with glow (TUI)"
 
 [[mgr.prepend_keymap]]
 on   = "e"
-run  = "shell 'nvim \"$@\"' --block"
+run  = "shell 'nvim %h' --block"
 desc = "Edit in nvim"
 
 [[mgr.prepend_keymap]]
 on   = "M"
-run  = "shell 'code \"$@\"' --orphan"
-desc = "Open in VS Code (GUI)"
+run  = "shell '\"C:\\Users\\nvere\\AppData\\Local\\Programs\\Zettlr\\Zettlr.exe\" %h' --orphan"
+desc = "Open in Zettlr (GUI)"

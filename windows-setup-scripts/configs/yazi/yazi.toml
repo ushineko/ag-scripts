@@ -20,21 +20,27 @@ prepend_previewers = [
   { url = "*.markdown", run = "glow" },
 ]
 
-# --- Named openers. "$@" expands to the hovered (or selected) file(s).
+# --- Named openers. `run` uses yazi's placeholders: `%s` = paths of all selected
+# files (the hovered file when nothing is multi-selected), auto-quoted by yazi.
+# Shell tokens like `$@` / `%*` are NOT yazi placeholders (they reach the tool as
+# a literal string — "bad arguments"). See the mpv example in the yazi docs:
+# `"C:\Program Files\mpv.exe" %s` — the exe is quoted, `%s` is not.
 [opener]
 read = [
   # Full-screen rendered read inside the terminal (blocks until you quit).
-  { run = 'glow -p "$@"', block = true, desc = "Read (glow pager)", for = "windows" },
+  # `-t` (self-contained TUI), NOT `-p` (pager): glow 2.x's pager shells out to
+  # `less`, which isn't on the Windows PATH, so `-p` fails with "less not found".
+  { run = 'glow -t %s', block = true, desc = "Read (glow TUI)", for = "windows" },
 ]
 edit = [
-  { run = 'nvim "$@"', block = true, desc = "Edit (nvim)", for = "windows" },
+  { run = 'nvim %s', block = true, desc = "Edit (nvim)", for = "windows" },
 ]
 md-gui = [
-  # Detached GUI editor for full fidelity (mermaid, images).
-  { run = 'code "%*"', orphan = true, desc = "Open in VS Code", for = "windows" },
+  # Detached GUI markdown viewer with full fidelity (mermaid, images).
+  { run = '"C:\Users\nvere\AppData\Local\Programs\Zettlr\Zettlr.exe" %s', orphan = true, desc = "Open in Zettlr", for = "windows" },
 ]
 reveal = [
-  { run = 'explorer /select,"%1"', orphan = true, desc = "Reveal in Explorer", for = "windows" },
+  { run = 'explorer /select,%s', orphan = true, desc = "Reveal in Explorer", for = "windows" },
 ]
 
 # --- For *.md, Enter/o opens the first opener (glow read); O shows the menu.
