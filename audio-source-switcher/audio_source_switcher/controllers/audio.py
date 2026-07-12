@@ -173,6 +173,16 @@ class AudioController:
         volume_percent = max(0, min(150, volume_percent))
         self.run_command(['pactl', 'set-sink-volume', sink_name, f"{volume_percent}%"])
 
+    def step_sink_volume(self, sink_name: str, direction: str, step: int = 5):
+        """Adjusts sink volume by a relative step. direction is 'up' or 'down'."""
+        delta = f"+{step}%" if direction == "up" else f"-{step}%"
+        self.run_command(['pactl', 'set-sink-volume', sink_name, delta])
+
+    def get_sink_mute(self, sink_name: str) -> bool:
+        """Returns True if the sink is muted, False otherwise (or on failure)."""
+        output = self.run_command(['pactl', 'get-sink-mute', sink_name], ignore_errors=True)
+        return bool(output) and "yes" in output.lower()
+
     def get_line_in_source(self) -> str | None:
         """Finds the Line-In source name dynamically by port type."""
         json_output = self.run_command(['pactl', '--format=json', 'list', 'sources'])

@@ -78,6 +78,13 @@ fi
 echo "Updating desktop database..."
 update-desktop-database "$INSTALL_DIR"
 
+# Remove the volume OSD KWin rules.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/install_kwin_rule.py" ]; then
+    echo "Removing KWin OSD rules..."
+    /usr/bin/python3 "$SCRIPT_DIR/install_kwin_rule.py" --uninstall || true
+fi
+
 restore_volume_keys
 
 echo "Uninstallation complete."

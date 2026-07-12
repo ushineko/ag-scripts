@@ -8,7 +8,7 @@ A couple of projects that may be of broader interest—either as standalone util
 
 | Project | Description |
 | :--- | :--- |
-| [audio-source-switcher](audio-source-switcher/) | Feature-rich PyQt6 audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, and global hotkeys. A good example of PipeWire/PulseAudio graph manipulation. |
+| [audio-source-switcher](audio-source-switcher/) | Feature-rich PyQt6 audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, global hotkeys, and a custom on-screen volume indicator (OSD). A good example of PipeWire/PulseAudio graph manipulation and KDE Wayland window rules. |
 | [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring, plus configurable real-time/cumulative network bandwidth with Tailscale exit-node awareness. Demonstrates BLE scanning, upower/solaar integration, `/proc/net/dev` parsing, and KDE Wayland window rules. |
 | [game-desktop-creator](game-desktop-creator/) | PyQt6 GUI for creating start menu launchers for Steam, Epic (via Heroic), and GOG games. Useful for Linux gaming setups. |
 | [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology—spec-driven, iterative development with quality gates and fresh context per iteration. |
@@ -19,7 +19,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | Project | Description |
 | :--- | :--- |
 | [alacritty-maximizer](alacritty-maximizer/) | PyQt6 GUI to launch Alacritty windows fully maximized on specific monitors without titlebars. Manages KWin rules automatically. |
-| [audio-source-switcher](audio-source-switcher/) | Feature-rich audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, and global hotkeys. |
+| [audio-source-switcher](audio-source-switcher/) | Feature-rich audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, global hotkeys, and a custom on-screen volume indicator (OSD). |
 | [bluetooth-reset](bluetooth-reset/) | Resets the Linux Bluetooth stack when BlueZ becomes unresponsive. Fixes stuck daemon issues from AirPods connect/disconnect cycles. |
 | [browser-router](browser-router/) | Routes URLs to different browsers based on domain patterns. Workaround for Chromium lacking PipeWire camera support on Wayland. |
 | [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology. |

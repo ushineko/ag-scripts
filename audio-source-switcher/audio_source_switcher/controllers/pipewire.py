@@ -117,14 +117,21 @@ class PipeWireController:
 
 
 class VolumeMonitorThread(QThread):
-    """Monitors 'pactl subscribe' for sink changes.
-    When 'jamesdsp_sink' changes volume, it signals the main thread to sync.
+    """Monitors 'pactl subscribe' for sink change events.
+
+    Emits ``volume_changed_signal`` on any sink 'change' event. The receiver is
+    responsible for reading the current volume and deciding whether it actually
+    changed (subscribe fires on more than just volume).
     """
 
     volume_changed_signal = pyqtSignal()
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._process = None
+
     def run(self):
-        process = subprocess.Popen(
+        self._process = subprocess.Popen(
             ['pactl', 'subscribe'],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -133,8 +140,19 @@ class VolumeMonitorThread(QThread):
         )
 
         while True:
-            line = process.stdout.readline()
+            line = self._process.stdout.readline()
             if not line:
                 break
             if "Event 'change' on sink" in line:
                 self.volume_changed_signal.emit()
+
+    def stop(self):
+        """Terminate the subscribe subprocess so run() unblocks and the thread ends."""
+        proc = self._process
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        self.wait(1500)

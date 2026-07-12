@@ -17,7 +17,9 @@ from PyQt6.QtGui import QBrush, QColor, QIcon, QAction
 from audio_source_switcher.config import ConfigManager
 from audio_source_switcher.controllers.audio import AudioController
 from audio_source_switcher.controllers.bluetooth import BluetoothController, ConnectThread
-from audio_source_switcher.controllers.pipewire import PipeWireController
+from audio_source_switcher.controllers.pipewire import PipeWireController, VolumeMonitorThread
+from audio_source_switcher.gui.osd import VolumeOSD
+from audio_source_switcher.volume import adjust_volume, resolve_active_sink
 
 
 class MainWindow(QMainWindow):
@@ -207,6 +209,9 @@ class MainWindow(QMainWindow):
         # System Tray Setup
         self.setup_tray()
 
+        # On-screen volume indicator (OSD) + volume-change monitor
+        self.setup_volume_osd()
+
     # ── Helpers ──────────────────────────────────────────────────────
 
     def _get_bt_map(self) -> dict[str, str]:
@@ -298,6 +303,50 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error in volume sync: {e}")
 
+    # ── Volume OSD ───────────────────────────────────────────────────
+
+    def setup_volume_osd(self):
+        """Create the OSD widget and wire the pactl-subscribe volume monitor."""
+        self.osd = VolumeOSD()
+        self._last_osd_volume = None
+
+        # Coalesce bursts of subscribe events into one read.
+        self._osd_debounce = QTimer(self)
+        self._osd_debounce.setSingleShot(True)
+        self._osd_debounce.setInterval(80)
+        self._osd_debounce.timeout.connect(self._process_volume_event)
+
+        self.volume_monitor = VolumeMonitorThread(self)
+        self.volume_monitor.volume_changed_signal.connect(self._osd_debounce.start)
+        self.volume_monitor.start()
+
+    def handle_volume_hotkey(self, direction: str):
+        """Apply a smart volume step (from a forwarded hotkey) and show the OSD."""
+        pw = PipeWireController()
+        _target, new_vol, muted = adjust_volume(self.audio, pw, direction)
+        if new_vol is None:
+            return
+        self._show_osd(new_vol, muted)
+
+    def _process_volume_event(self):
+        """Debounced handler for pactl subscribe: show OSD only on a real change."""
+        pw = PipeWireController()
+        target = resolve_active_sink(self.audio, pw)
+        if not target:
+            return
+        vol = self.audio.get_sink_volume(target)
+        if vol is None:
+            return
+        muted = self.audio.get_sink_mute(target)
+        state = (vol, muted)
+        if state == self._last_osd_volume:
+            return  # not a volume/mute change (or our own hotkey already showed it)
+        self._show_osd(vol, muted)
+
+    def _show_osd(self, volume: int, muted: bool):
+        self._last_osd_volume = (volume, muted)
+        self.osd.show_volume(volume, muted)
+
     # ── System Tray ──────────────────────────────────────────────────
 
     def setup_tray(self):
@@ -353,7 +402,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 12.1</b></p>
+            <p><b>Version 13.0</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
@@ -434,6 +483,8 @@ class MainWindow(QMainWindow):
     def quit_app(self):
         self.config["window_geometry"] = self.saveGeometry().toHex().data().decode()
         self.config_mgr.save_config(self.config)
+        if getattr(self, "volume_monitor", None) is not None:
+            self.volume_monitor.stop()
         self.audio.cleanup_loopback()
         QApplication.quit()
 
