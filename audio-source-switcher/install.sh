@@ -100,4 +100,14 @@ if [ "$BIND_VOLUME_KEYS" = "1" ]; then
     fi
 fi
 
+# 7. Install KWin rules for the volume OSD (centered + keep-above on KDE Wayland).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/install_kwin_rule.py" ]; then
+    echo "Installing KWin rules for the volume OSD..."
+    if ! /usr/bin/python3 "$SCRIPT_DIR/install_kwin_rule.py"; then
+        echo "Warning: could not install KWin OSD rules (not a KDE session?). The OSD"
+        echo "         will still appear but may not be centered or kept-above."
+    fi
+fi
+
 echo "Done! You can now launch '$APP_NAME' from your application menu."

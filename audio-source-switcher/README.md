@@ -145,7 +145,13 @@ If you'd rather do it manually: **System Settings → Shortcuts → Audio Volume
 > **Locked Media Keys?**
 > If your system refuses to unbind the standard media keys (e.g., Fn+F12), try binding a combination like `Alt+F12` (or `Alt+VolumeUp`) instead. This is often easier to configure and reliable on all keyboards.
 
-**Note**: The app will show a visual satisfaction bar (OSD) when you change volume, confirming it's working. Plasma's own audio OSD may also pop up showing `jamesdsp_sink` at 100%; this is cosmetic — the real hardware volume change is what the app's OSD reports.
+**Note**: When the app is running, it shows its own centered on-screen volume
+indicator (OSD) — a single panel that appears on volume change, updates in place on
+rapid repeat presses, and auto-hides after ~1.5s. It also appears for volume changes
+from any source (mixer, other apps), mirroring the system OSD. If the app is not
+running, `--vol-up`/`--vol-down` fall back to a `notify-send` popup. Plasma's own
+audio OSD may still pop up showing `jamesdsp_sink` at 100%; this is cosmetic — the
+real hardware volume change is what the app's OSD reports.
 
 - Python 3
 - `PyQt6`
@@ -186,6 +192,25 @@ If you'd rather do it manually: **System Settings → Shortcuts → Audio Volume
 Device priority and settings are saved to `~/.config/audio-source-switcher/config.json`.
 
 ## Changelog
+
+### v13.0
+
+- **On-Screen Volume Indicator (OSD)**: Replaced per-keypress `notify-send` popups
+  with a self-owned OSD — a frameless panel centered on the active monitor that
+  appears on volume change, updates in place on rapid repeat presses (no more
+  stacked notifications), and auto-hides after ~1.5s. Shows a fill bar, percentage,
+  and a muted state.
+- **Owned by the running instance**: `--vol-up`/`--vol-down` now forward over the
+  existing single-instance local socket to the running app, which performs the smart
+  (JamesDSP-aware) volume change and updates the one OSD widget. When no instance is
+  running, they fall back to the previous inline change + `notify-send`.
+- **All-source triggering**: A `pactl subscribe` monitor surfaces the OSD for volume
+  changes from any source (mixer, other apps, media keys), debounced and filtered so
+  non-volume sink events don't fire it.
+- **KWin rules**: `install_kwin_rule.py` installs per-screen rules forcing the OSD to
+  a centered position and keep-above (KDE/Wayland gives clients no say over position
+  or stacking). Wired into `install.sh` / `uninstall.sh`; removable with
+  `install_kwin_rule.py --uninstall`.
 
 ### v12.1
 

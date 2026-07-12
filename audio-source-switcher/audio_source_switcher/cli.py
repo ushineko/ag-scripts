@@ -2,42 +2,59 @@ import argparse
 import subprocess
 import sys
 
+from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 from audio_source_switcher.controllers.audio import AudioController
 from audio_source_switcher.controllers.pipewire import PipeWireController
 from audio_source_switcher.gui.main_window import MainWindow
+from audio_source_switcher.volume import adjust_volume
+
+SOCKET_NAME = "ag_audio_source_switcher"
+
+
+def _forward_to_instance(message: bytes) -> bool:
+    """Send a one-shot message to a running instance. Returns True if delivered.
+
+    Requires a QCoreApplication to exist for QLocalSocket's event handling.
+    """
+    socket = QLocalSocket()
+    socket.connectToServer(SOCKET_NAME)
+    if not socket.waitForConnected(300):
+        return False
+    socket.write(message)
+    socket.waitForBytesWritten(500)
+    socket.disconnectFromServer()
+    return True
 
 
 def handle_volume_command(direction: str):
-    """direction: 'up' or 'down'. Bypasses standard volume control to handle JamesDSP."""
+    """direction: 'up' or 'down'.
+
+    Prefers the running instance (which shows the OSD). Falls back to an inline
+    smart volume change + notify-send when no instance is running.
+    """
+    # QCoreApplication is required for QLocalSocket; lighter than a GUI QApplication.
+    _app = QCoreApplication(sys.argv)
+
+    msg = b"VOL_UP" if direction == "up" else b"VOL_DOWN"
+    if _forward_to_instance(msg):
+        return
+
+    # Fallback: no instance running. Apply the change inline and use notify-send.
     audio = AudioController()
     pw = PipeWireController()
+    _target, new_vol, _muted = adjust_volume(audio, pw, direction)
 
-    default = audio.get_default_sink()
-    target_sink = default
-
-    if default == "jamesdsp_sink":
-        hw_target = pw.get_jamesdsp_target()
-        if hw_target:
-            target_sink = hw_target
-
-    step = "+5%" if direction == "up" else "-5%"
-    subprocess.run(['pactl', 'set-sink-volume', target_sink, step])
-
-    try:
-        new_vol = audio.get_sink_volume(target_sink)
-        if new_vol is not None:
-            subprocess.run([
-                'notify-send',
-                '-h', f'int:value:{new_vol}',
-                '-h', 'string:synchronous:volume',
-                '-t', '2000',
-                f"Volume: {new_vol}%"
-            ])
-    except Exception as e:
-        print(f"Error showing OSD: {e}")
+    if new_vol is not None:
+        subprocess.run([
+            'notify-send',
+            '-h', f'int:value:{new_vol}',
+            '-h', 'string:synchronous:volume',
+            '-t', '2000',
+            f"Volume: {new_vol}%"
+        ])
 
 
 def main():
@@ -61,9 +78,8 @@ def main():
 
     # Single Instance Check (only for GUI mode, not --connect)
     if not args.connect:
-        socket_name = "ag_audio_source_switcher"
         socket = QLocalSocket()
-        socket.connectToServer(socket_name)
+        socket.connectToServer(SOCKET_NAME)
 
         if socket.waitForConnected(500):
             print("Application already running. Bringing to front.")
@@ -72,10 +88,10 @@ def main():
             socket.disconnectFromServer()
             sys.exit(0)
 
-        QLocalServer.removeServer(socket_name)
+        QLocalServer.removeServer(SOCKET_NAME)
         server = QLocalServer()
-        if not server.listen(socket_name):
-            print(f"Warning: Could not start local server on {socket_name}.")
+        if not server.listen(SOCKET_NAME):
+            print(f"Warning: Could not start local server on {SOCKET_NAME}.")
 
     window = MainWindow(target_device=args.connect)
 
@@ -86,7 +102,11 @@ def main():
                 return
             client_socket.waitForReadyRead(1000)
             data = client_socket.readAll().data()
-            if b"SHOW" in data:
+            if b"VOL_UP" in data:
+                window.handle_volume_hotkey("up")
+            elif b"VOL_DOWN" in data:
+                window.handle_volume_hotkey("down")
+            elif b"SHOW" in data:
                 window.show_window()
             client_socket.disconnectFromServer()
         server.newConnection.connect(handle_new_connection)
