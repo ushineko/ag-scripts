@@ -3,8 +3,9 @@
 . "$PSScriptRoot\..\lib\common.ps1"
 
 $script:LazygitConfigDir     = "$PSScriptRoot\..\configs\lazygit"
-# lazygit --print-config-dir returns %APPDATA%\lazygit on Windows.
-$script:LazygitDestConfigDir = "$env:APPDATA\lazygit"
+# lazygit --print-config-dir returns %LOCALAPPDATA%\lazygit on Windows (the Local
+# roaming-state dir, NOT %APPDATA%\Roaming). Verified via `lazygit --print-config-dir`.
+$script:LazygitDestConfigDir = "$env:LOCALAPPDATA\lazygit"
 
 function Test-Lazygit {
     try {

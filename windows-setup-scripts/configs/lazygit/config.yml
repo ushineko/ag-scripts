@@ -3,6 +3,10 @@
 #          green #9ece6a / yellow #e0af68 / red #f7768e / cyan #7dcfff
 #          selection #292e42 / comment #565f89
 gui:
+  # Pin the stacked single-column layout. Default 'auto' flips to the
+  # two-column landscape layout once the pane exceeds 84 cols (or drops
+  # below 46 rows), which reflows the panels mid-session.
+  portraitMode: always
   theme:
     activeBorderColor:
       - "#7aa2f7"
