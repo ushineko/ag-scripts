@@ -22,11 +22,12 @@
     - lazygit (terminal git UI)
     - Windows Terminal profiles
     - Hack Nerd Font
+    - drag-translucency (fade windows while dragging, via AutoHotkey v2)
 .PARAMETER DryRun
     Show what would be installed without making changes
 .PARAMETER Components
     Specific components to install (comma-separated).
-    Options: prerequisites, powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, antigravity, clockwork-orange, herdr, yazi, glow, lazygit, terminal, all
+    Options: prerequisites, powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, antigravity, clockwork-orange, herdr, yazi, glow, lazygit, terminal, drag-translucency, all
 .PARAMETER Force
     Overwrite existing installations/configs
 .PARAMETER SkipBackup
@@ -75,6 +76,7 @@ $ScriptRoot = $PSScriptRoot
 . "$ScriptRoot\modules\lazygit.ps1"
 . "$ScriptRoot\modules\terminal.ps1"
 . "$ScriptRoot\modules\ssh-agent.ps1"
+. "$ScriptRoot\modules\drag-translucency.ps1"
 
 function Show-Banner {
     Write-Host ""
@@ -117,6 +119,7 @@ function Main {
         @{ Name = "glow";          Func = { Install-Glow -DryRun:$DryRun -Force:$Force } }
         @{ Name = "lazygit";       Func = { Install-Lazygit -DryRun:$DryRun -Force:$Force } }
         @{ Name = "terminal";      Func = { Install-TerminalProfiles -DryRun:$DryRun -Force:$Force } }
+        @{ Name = "drag-translucency"; Func = { Install-DragTranslucency -DryRun:$DryRun -Force:$Force } }
     )
 
     $failed = @()
