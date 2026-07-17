@@ -1,7 +1,7 @@
 # Peripheral Battery Monitor
-Version 1.8.0
+Version 1.9.0
 
-A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals and connected Bluetooth headphones, real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
+A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
 ![Peripheral Battery Monitor](assets/screenshot.png)
 
@@ -15,12 +15,13 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - [Changelog](#changelog)
 
 ## Features
+- **Two Configurable Slots**: The top area shows two cells, each selectable (right-click → Devices) to show any supported device type: Mouse, Keyboard, Headphone, or the secondary Headphone. Defaults to Mouse (left) and the current Headphone (right); a slot with nothing connected shows a placeholder.
 - **Logitech Support**: Uses `solaar` libraries to fetch precise mouse battery levels.
 - **Keychron Support**:
   - **Bluetooth**: Uses `upower` to fetch battery levels %.
   - **Wired**: Detects USB connection and shows "Wired" status.
   - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
-- **Headphones (vendor-neutral)**: The two bottom cells show whatever Bluetooth headphones are currently connected, prioritizing connected devices. Any headset that reports battery over BlueZ `org.bluez.Battery1` (e.g. Sony WH-1000XM6) appears automatically — no per-vendor code. AirPods and SteelSeries Arctis remain as enrichment sources:
+- **Headphones (vendor-neutral)**: The Headphone slot shows the current, most-recently-connected active headphone, switching automatically as you connect/disconnect devices. Any headset that reports battery over BlueZ `org.bluez.Battery1` (e.g. Sony WH-1000XM6) appears automatically — no per-vendor code. AirPods and SteelSeries Arctis remain as enrichment sources:
   - **AirPods**: BLE scanning for granular Left, Right, and Case levels, merged in and de-duplicated by MAC.
   - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
@@ -28,7 +29,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Position Restore**: Reappears at its last on-screen position on the next launch. On KDE Wayland this is done via the KWin Scripting D-Bus API (`kwin_window_position.py`), because `move()`, Qt geometry, and KWin "Remember" position rules do not work reliably on Wayland. See the [Changelog](#changelog) for details.
-- **Compact UI**: Clean, dark-mode 2x2 grid dashboard showing all 4 devices.
+- **Compact UI**: Clean, dark-mode dashboard with two configurable device cells at the top.
 
 ## Requirements
 - Python 3.12+ (tested on 3.14)
@@ -97,6 +98,14 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.9.0
+
+- **Two configurable device slots.** The top area now shows two cells instead of a fixed 2×2 grid of four. Each cell can be set (right-click → Devices → Left/Right Slot) to any supported device type: **Mouse**, **Keyboard**, **Headphone**, or **Headphone (2nd)**. Defaults to Mouse (left) + Headphone (right).
+  - The **Headphone** slot is dynamic: it shows the current, most-recently-connected active headphone (vendor-neutral, ranked connected-first across BlueZ/AirPods/Arctis) and switches automatically as devices connect/disconnect. **Headphone (2nd)** shows the secondary headphone when two are connected.
+  - A slot whose device is not detected/connected shows a placeholder.
+  - The selection persists in the config (`slot_left` / `slot_right`).
+- Motivation: only one headphone is really active at a time, and a fixed keyboard cell is wasted space when the keyboard is used wired. Two configurable slots make the top area fit each user's setup.
 
 ### v1.8.0
 

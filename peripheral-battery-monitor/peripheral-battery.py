@@ -26,9 +26,28 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
+
+# The top area shows two user-configurable slots. Each slot may be set to any of
+# these device types via the right-click menu. The config value is also the key
+# in battery_reader.get_all_batteries()'s result dict. "headphone1" is the
+# current, most-recently-connected active headphone (vendor-neutral, ranked
+# connected-first); "headphone2" is the secondary one when two are connected.
+#   (config_value, menu_label, fallback_label, use_offline_cache)
+SLOT_TYPES = [
+    ("mouse",      "Mouse",           "Mouse",        True),
+    ("kb",         "Keyboard",        "Keyboard",     True),
+    ("headphone1", "Headphone",       "Headphones",   False),
+    ("headphone2", "Headphone (2nd)", "Headphones",   False),
+]
+SLOT_SPECS = {
+    value: {"menu_label": menu, "fallback": fallback, "cache": cache}
+    for value, menu, fallback, cache in SLOT_TYPES
+}
+DEFAULT_SLOT_LEFT = "mouse"
+DEFAULT_SLOT_RIGHT = "headphone1"
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
 
 CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -455,6 +474,8 @@ class PeripheralMonitor(QWidget):
             "bandwidth_cumulative": {},
             "window_x": None,  # last on-screen position (KWin-reported); None => default
             "window_y": None,
+            "slot_left": DEFAULT_SLOT_LEFT,    # device type shown in the left cell
+            "slot_right": DEFAULT_SLOT_RIGHT,  # device type shown in the right cell
         }
         if os.path.exists(CONFIG_PATH):
             try:
@@ -503,24 +524,23 @@ class PeripheralMonitor(QWidget):
         self.claude_layout = None
         self.claude_header_row = None
 
-        # Layout inside the container - Grid 2x2
+        # Layout inside the container - two configurable slots side by side.
         self.grid_layout = QGridLayout(self.container)
 
-        # Create device widgets
-        self.mouse_ui = self.create_device_cell("Mouse")
-        self.kb_ui = self.create_device_cell("Keyboard")
-        # Two vendor-neutral headphone slots, filled connected-first by
-        # get_headphones() (headphone1 = highest-ranked connected device).
-        self.headphone1_ui = self.create_device_cell("Headphones")
-        self.headphone2_ui = self.create_device_cell("Headphones")
-        self.device_uis = [self.mouse_ui, self.kb_ui, self.headphone1_ui, self.headphone2_ui]
+        # Two configurable slots. Each is assigned a device type from settings
+        # (see SLOT_TYPES / _assign_slot); default is Mouse (left) + Headphone.
+        self.slot_left_ui = self.create_device_cell("")
+        self.slot_right_ui = self.create_device_cell("")
+        self.device_uis = [self.slot_left_ui, self.slot_right_ui]
 
-        # Add to grid
-        # (Row, Col)
-        self.grid_layout.addLayout(self.mouse_ui['layout'], 0, 0)
-        self.grid_layout.addLayout(self.kb_ui['layout'], 0, 1)
-        self.grid_layout.addLayout(self.headphone1_ui['layout'], 1, 0)
-        self.grid_layout.addLayout(self.headphone2_ui['layout'], 1, 1)
+        self._assign_slot(self.slot_left_ui,
+                          self._valid_slot(self.settings.get("slot_left"), DEFAULT_SLOT_LEFT))
+        self._assign_slot(self.slot_right_ui,
+                          self._valid_slot(self.settings.get("slot_right"), DEFAULT_SLOT_RIGHT))
+
+        # (Row, Col) — single row, two columns.
+        self.grid_layout.addLayout(self.slot_left_ui['layout'], 0, 0)
+        self.grid_layout.addLayout(self.slot_right_ui['layout'], 0, 1)
 
         main_layout.addWidget(self.container)
 
@@ -548,7 +568,7 @@ class PeripheralMonitor(QWidget):
             main_layout.addWidget(self.claude_frame)
             self.claude_section_visible = True
 
-        self.setMinimumWidth(260)  # Increased for 2x2 grid to avoid cutoff names on start
+        self.setMinimumWidth(260)  # Keeps the two slot cells wide enough to avoid cutoff names
         self.update_style()
         self.adjustSize()
 
@@ -602,8 +622,32 @@ class PeripheralMonitor(QWidget):
             'stat_lbl': stat_lbl,
             'icon_lbl': icon_lbl,
             'last_info': None,
-            'default_name': default_name
+            'default_name': default_name,
+            'category': None,  # assigned device type (see _assign_slot)
         }
+
+    @staticmethod
+    def _valid_slot(value, default):
+        """Return value if it is a known slot type, else the default."""
+        return value if value in SLOT_SPECS else default
+
+    def _assign_slot(self, ui_dict, category):
+        """Point a slot cell at a device type and reset it to a clean placeholder.
+
+        Clears the cached reading (the occupant is changing) and shows the type's
+        fallback label until the next poll fills in the real device.
+        """
+        spec = SLOT_SPECS[category]
+        ui_dict['category'] = category
+        ui_dict['default_name'] = spec['fallback']
+        ui_dict['last_info'] = None
+        ui_dict['name_lbl'].setText(spec['fallback'])
+        ui_dict['val_lbl'].setText("--%")
+        ui_dict['stat_lbl'].setText("Disconnected")
+        missing = QIcon.fromTheme("battery-missing")
+        ui_dict['icon_lbl'].setPixmap(
+            missing.pixmap(self.device_icon_size, self.device_icon_size)
+        )
 
     def create_claude_section(self):
         """Create the Claude Code usage stats section."""
@@ -922,6 +966,26 @@ class PeripheralMonitor(QWidget):
             font_group.addAction(action)
             fontMenu.addAction(action)
 
+        # Device Slots Submenu — each of the two cells can show any device type.
+        devicesMenu = contextMenu.addMenu("Devices")
+        for side, title in (("slot_left", "Left Slot"), ("slot_right", "Right Slot")):
+            slotMenu = devicesMenu.addMenu(title)
+            slot_group = QActionGroup(self)
+            current = self._valid_slot(
+                self.settings.get(side),
+                DEFAULT_SLOT_LEFT if side == "slot_left" else DEFAULT_SLOT_RIGHT,
+            )
+            for value, menu_label, _fallback, _cache in SLOT_TYPES:
+                action = QAction(menu_label, self, checkable=True)
+                action.setData(value)
+                action.triggered.connect(
+                    lambda checked, s=side, v=value: self._set_slot(s, v)
+                )
+                if value == current:
+                    action.setChecked(True)
+                slot_group.addAction(action)
+                slotMenu.addAction(action)
+
         if is_claude_installed():
             contextMenu.addSeparator()
             claudeMenu = contextMenu.addMenu("Claude Code")
@@ -1001,6 +1065,18 @@ class PeripheralMonitor(QWidget):
         self.settings["claude_activity_interval"] = minutes
         self.save_settings()
         self.activity_timer.setInterval(minutes * 60000)
+
+    def _set_slot(self, side, value):
+        """Change which device type a top-area slot shows (from the menu)."""
+        if value not in SLOT_SPECS:
+            return
+        self.settings[side] = value
+        self.save_settings()
+        ui_dict = self.slot_left_ui if side == "slot_left" else self.slot_right_ui
+        self._assign_slot(ui_dict, value)
+        self.adjustSize()
+        # Refresh immediately so the new device fills in without waiting for the poll.
+        self.update_status()
 
     def toggle_bandwidth_section(self, checked):
         """Toggle the bandwidth section visibility from the context menu."""
@@ -1278,20 +1354,20 @@ class PeripheralMonitor(QWidget):
         self.claude_duration_lbl.setText(get_time_until_reset(resets_at) if resets_at else "")
 
     def on_data_ready(self, results):
-        # 1. Update Mouse - Now comes from results like everything else
-        self.update_single_device(self.mouse_ui, lambda: results.get('mouse'), use_offline_cache=True)
-        
-        # 2. Update Keyboard
-        self.update_single_device(self.kb_ui, lambda: results.get('kb'), use_offline_cache=True)
+        # Two configurable slots. Each resolves its assigned device type to a
+        # result key. Mouse/keyboard use the offline cache (levels are stable
+        # while briefly unreachable); headphone slots do not, so an unplugged /
+        # disconnected headphone drops straight to the placeholder.
+        for ui_dict in self.device_uis:
+            spec = SLOT_SPECS.get(ui_dict['category'])
+            if not spec:
+                continue
+            key = ui_dict['category']
+            self.update_single_device(
+                ui_dict, lambda k=key: results.get(k), use_offline_cache=spec['cache']
+            )
 
-        # 3. Headphone slots - vendor-neutral, connected-first. Immediate
-        #    "Disconnected" state, no offline cache.
-        self.update_single_device(self.headphone1_ui, lambda: results.get('headphone1'), use_offline_cache=False)
-
-        # 4. Second headphone slot
-        self.update_single_device(self.headphone2_ui, lambda: results.get('headphone2'), use_offline_cache=False)
-
-        # 5. Update Claude Code section
+        # Update Claude Code section
         self.update_claude_section(results.get('claude_usage'))
 
         self.setToolTip(f"Last updated: {self.format_time()}")

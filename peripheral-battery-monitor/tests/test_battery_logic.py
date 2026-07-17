@@ -1170,6 +1170,74 @@ class TestHeadphoneSlotNameGuard(unittest.TestCase):
         self.assertEqual(display_info.level, 59)  # merged from same device's last good read
 
 
+class TestSlotConfiguration(unittest.TestCase):
+    """The top area is two user-configurable slots (mouse/keyboard/headphones)."""
+
+    def _monitor(self, settings=None):
+        pb.PeripheralMonitor.load_settings = MagicMock(return_value=settings or {})
+        return pb.PeripheralMonitor()
+
+    def test_defaults_are_mouse_and_headphone(self):
+        m = self._monitor({})
+        self.assertEqual(m.slot_left_ui['category'], 'mouse')
+        self.assertEqual(m.slot_right_ui['category'], 'headphone1')
+
+    def test_settings_override_slots(self):
+        m = self._monitor({'slot_left': 'kb', 'slot_right': 'headphone2'})
+        self.assertEqual(m.slot_left_ui['category'], 'kb')
+        self.assertEqual(m.slot_right_ui['category'], 'headphone2')
+
+    def test_valid_slot_rejects_unknown(self):
+        self.assertEqual(pb.PeripheralMonitor._valid_slot('bogus', 'mouse'), 'mouse')
+        self.assertEqual(pb.PeripheralMonitor._valid_slot('kb', 'mouse'), 'kb')
+
+    def test_unknown_configured_slot_falls_back_to_default(self):
+        m = self._monitor({'slot_left': 'garbage', 'slot_right': None})
+        self.assertEqual(m.slot_left_ui['category'], 'mouse')
+        self.assertEqual(m.slot_right_ui['category'], 'headphone1')
+
+    def test_on_data_ready_routes_each_slot_to_its_key(self):
+        m = self._monitor({'slot_left': 'mouse', 'slot_right': 'headphone1'})
+        captured = []
+        m.update_single_device = lambda ui, func, use_offline_cache=True: \
+            captured.append((ui['category'], func(), use_offline_cache))
+        m.update_claude_section = MagicMock()
+        m.setToolTip = MagicMock()
+        m.adjustSize = MagicMock()
+
+        results = {'mouse': {'m': 1}, 'headphone1': {'h': 1}, 'kb': {'k': 1}}
+        m.on_data_ready(results)
+
+        # Mouse uses the offline cache; headphone slots do not.
+        self.assertIn(('mouse', {'m': 1}, True), captured)
+        self.assertIn(('headphone1', {'h': 1}, False), captured)
+        # The keyboard result is not consumed by any slot in this configuration.
+        self.assertTrue(all(cat != 'kb' for cat, _val, _cache in captured))
+
+    def test_set_slot_updates_settings_and_reassigns(self):
+        m = self._monitor({})
+        m.save_settings = MagicMock()
+        m.update_status = MagicMock()
+        m.adjustSize = MagicMock()
+
+        m._set_slot('slot_left', 'kb')
+
+        self.assertEqual(m.settings['slot_left'], 'kb')
+        self.assertEqual(m.slot_left_ui['category'], 'kb')
+        m.save_settings.assert_called_once()
+        m.update_status.assert_called_once()
+
+    def test_set_slot_ignores_unknown_value(self):
+        m = self._monitor({})
+        m.save_settings = MagicMock()
+        before = m.slot_left_ui['category']
+
+        m._set_slot('slot_left', 'not-a-device')
+
+        self.assertEqual(m.slot_left_ui['category'], before)
+        m.save_settings.assert_not_called()
+
+
 def tearDownModule():
     # Undo the global sys.modules mocking so real-Qt test modules that run after
     # this one (e.g. test_kwin_window_position) see the real modules again.
