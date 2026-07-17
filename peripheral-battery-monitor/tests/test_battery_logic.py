@@ -87,6 +87,14 @@ class MockQProgressBar(MockQWidget):
     def setFixedHeight(self, h): pass
 
 # 2. Inject Mocks into sys.modules
+# Save the real modules we are about to shadow so tearDownModule can restore them
+# for real-Qt test modules that run afterward (e.g. test_kwin_window_position).
+# Re-importing a shadowed Qt C-extension is unsafe, so we restore the original
+# objects rather than deleting the entries.
+_SHADOWED = ('PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui',
+             'PyQt6.QtDBus', 'kwin_window_position', 'bandwidth_section', 'pb')
+_ORIG_MODULES = {name: sys.modules.get(name) for name in _SHADOWED}
+
 mock_qt_widgets = MagicMock()
 mock_qt_widgets.QWidget = MockQWidget
 mock_qt_widgets.QFrame = MockQFrame
@@ -107,6 +115,11 @@ sys.modules['PyQt6'] = MagicMock()
 sys.modules['PyQt6.QtWidgets'] = mock_qt_widgets
 sys.modules['PyQt6.QtCore'] = MagicMock()
 sys.modules['PyQt6.QtGui'] = MagicMock()
+sys.modules['PyQt6.QtDBus'] = MagicMock()
+# peripheral-battery.py imports the KWinWindowPosition helper, which subclasses
+# QObject and talks to D-Bus. Stub the whole module so the monitor constructs
+# cleanly under the mocked Qt namespace (mirrors the QtWidgets stubbing above).
+sys.modules['kwin_window_position'] = MagicMock()
 
 # If bandwidth_section was already imported by another test file (which imports
 # real PyQt6), drop its cached reference so peripheral-battery.py re-imports it
@@ -1155,6 +1168,17 @@ class TestHeadphoneSlotNameGuard(unittest.TestCase):
 
         display_info = monitor._update_label_block.call_args[0][4]
         self.assertEqual(display_info.level, 59)  # merged from same device's last good read
+
+
+def tearDownModule():
+    # Undo the global sys.modules mocking so real-Qt test modules that run after
+    # this one (e.g. test_kwin_window_position) see the real modules again.
+    for name in _SHADOWED:
+        orig = _ORIG_MODULES.get(name)
+        if orig is not None:
+            sys.modules[name] = orig
+        else:
+            sys.modules.pop(name, None)
 
 
 if __name__ == '__main__':

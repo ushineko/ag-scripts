@@ -21,11 +21,12 @@ from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
 import battery_reader
 from bandwidth_section import BandwidthSection
+from kwin_window_position import KWinWindowPosition
 import structlog
 import logging.config
 import logging
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -425,6 +426,21 @@ class PeripheralMonitor(QWidget):
         self.initUI()
         self.setup_timer()
 
+        # Window position save/restore via KWin (Wayland-safe). See
+        # kwin_window_position.py for why move()/Qt geometry/moveEvent cannot be
+        # used here.
+        self._initial_restore_done = False
+        self.pos_mgr = KWinWindowPosition("peripheral-battery-monitor", parent=self)
+        self.pos_mgr.geometryReported.connect(self._on_geometry_reported)
+        # After a drag, poll KWin a few times for the settled position (Qt's
+        # moveEvent does not fire for compositor-driven moves). No idle polling.
+        self._settle_polls_left = 0
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setInterval(500)
+        self._settle_timer.timeout.connect(self._settle_tick)
+        # Restore shortly after the compositor maps the window.
+        QTimer.singleShot(350, self._restore_window_position)
+
         # Delay initial update so window shows up first
         QTimer.singleShot(100, self.update_status)
 
@@ -437,6 +453,8 @@ class PeripheralMonitor(QWidget):
             "bandwidth_section_enabled": True,
             "bandwidth_interfaces": [],
             "bandwidth_cumulative": {},
+            "window_x": None,  # last on-screen position (KWin-reported); None => default
+            "window_y": None,
         }
         if os.path.exists(CONFIG_PATH):
             try:
@@ -798,6 +816,49 @@ class PeripheralMonitor(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.windowHandle():
                 self.windowHandle().startSystemMove()
+            # A left-press may begin a drag; poll for the resting position after.
+            self._begin_position_settle()
+
+    def _begin_position_settle(self):
+        """After a drag, poll KWin for the settled position and persist it.
+
+        moveEvent does not fire for compositor-driven moves on Wayland, so the
+        position is captured by polling for a few seconds after the drag starts.
+        save-if-changed makes redundant polls (e.g. a plain click) harmless.
+        """
+        if not self._initial_restore_done:
+            return
+        self._settle_polls_left = 6  # ~3s at 500ms
+        if not self._settle_timer.isActive():
+            self._settle_timer.start()
+
+    def _settle_tick(self):
+        if self._settle_polls_left <= 0:
+            self._settle_timer.stop()
+            return
+        self._settle_polls_left -= 1
+        self.pos_mgr.request_report()
+
+    def _restore_window_position(self):
+        """Move the window to its last saved on-screen position, if any."""
+        x = self.settings.get("window_x")
+        y = self.settings.get("window_y")
+        if x is not None and y is not None:
+            self.pos_mgr.restore(x, y)
+            # Let the programmatic move settle before enabling drag-triggered saves.
+            QTimer.singleShot(800, self._finish_initial_restore)
+        else:
+            self._finish_initial_restore()
+
+    def _finish_initial_restore(self):
+        self._initial_restore_done = True
+
+    def _on_geometry_reported(self, x, y):
+        """Persist the window's true position as reported by KWin."""
+        if self.settings.get("window_x") != x or self.settings.get("window_y") != y:
+            self.settings["window_x"] = x
+            self.settings["window_y"] = y
+            self.save_settings()
 
     def contextMenuEvent(self, event):
         contextMenu = QMenu(self)
