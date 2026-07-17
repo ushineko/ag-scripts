@@ -91,15 +91,17 @@ def install_rule():
     # Optional: Force it to not have a titlebar if the user really wanted that visually,
     # but for now sticking to "above" only as requested.
 
-    rule['noborder'] = 'true' 
+    rule['noborder'] = 'true'
     rule['noborderrule'] = '2'
 
-    # Attempt to enable "Remember" for Position (4), Size (4), and Screen (4)
-    # This tells KWin to save and restore these properties for this window class.
-    rule['positionrule'] = '4'
-    rule['sizerule'] = '4'
-    rule['screenrule'] = '4'
-    
+    # Window position is managed by the app itself via the KWin Scripting D-Bus
+    # API (see kwin_window_position.py). KWin "Remember" position rules only snap
+    # to the screen origin on Wayland and are intentionally NOT set here. Clear
+    # any stale position/size/screen rules a previous version installed.
+    for stale in ('positionrule', 'sizerule', 'screenrule',
+                  'position', 'size', 'screen'):
+        rule.pop(stale, None)
+
     # Translucency (95% default) - "Apply Initially" (4) allows app to override
     rule['opacityactive'] = '95'
     rule['opacityactiverule'] = '4'

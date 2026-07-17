@@ -236,6 +236,40 @@ Reference implementations: `peripheral-battery-monitor/install_kwin_rule.py`, `a
 
 `xdotool`, `wmctrl`, `xprop`, `xwininfo` - all X11 only. Use KWin rules or D-Bus instead.
 
+### Window Position Save/Restore
+
+Restoring a window to its last on-screen position is the **repo-wide default
+approach for all custom apps** until native Wayland session restore is usable.
+Use the KWin Scripting D-Bus API, driven in-process via `PyQt6.QtDBus`. Reference
+implementation: `peripheral-battery-monitor/kwin_window_position.py` (the
+`KWinWindowPosition` helper is written to be copied into other apps).
+
+None of the obvious approaches work on KDE Plasma 6.7 Wayland:
+
+- `QWidget.move()` is ignored by KWin — clients cannot self-position.
+- `QWidget.pos()` / `windowHandle().geometry()` return a bogus value (a
+  screen-origin-ish number, not the true position). The compositor is the only
+  source of truth for a window's real coordinates.
+- `QMoveEvent` does not fire for compositor-driven moves — including interactive
+  drags via `startSystemMove()` — so it cannot be used as a save trigger.
+- KWin `position` window rules (`positionrule` Remember/Force) only select the
+  screen and snap to its origin; they do not honor exact intra-screen coordinates.
+- Native session restore (`xx-session-management-v1`) needs **Qt 6.12+** (Arch
+  ships 6.11.1 as of 2026-07), is opt-in, and is still experimental (`xx-`
+  prefix). Revisit once Qt 6.12 is packaged.
+
+The working mechanism:
+
+- **Restore** (startup): load a one-shot KWin script that sets the window's
+  `frameGeometry` to the saved x/y. Match the window by `resourceClass`, i.e. the
+  Wayland `app_id` set via `app.setDesktopFileName(app_id)`.
+- **Save**: a KWin script reads the true `frameGeometry` and calls back into the
+  app over D-Bus (`callDBus`) with the coordinates. A loaded KWin script executes
+  **only once**, so each report is a fresh load/run/unload cycle.
+- **Save trigger**: since `moveEvent` is unavailable, poll for the resting
+  position for a few seconds after a drag begins (keyed off `mousePressEvent` /
+  `startSystemMove`). This has no idle cost. Persist only on change.
+
 ---
 
 ## System Integration: Prefer Stable Contracts

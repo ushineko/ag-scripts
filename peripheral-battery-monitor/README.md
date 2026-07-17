@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.7.0
+Version 1.8.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that displays the battery levels of your Logitech and Keychron peripherals and connected Bluetooth headphones, real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -27,7 +27,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
-- **Auto-Remember**: KWin remembers the window position and screen between sessions.
+- **Position Restore**: Reappears at its last on-screen position on the next launch. On KDE Wayland this is done via the KWin Scripting D-Bus API (`kwin_window_position.py`), because `move()`, Qt geometry, and KWin "Remember" position rules do not work reliably on Wayland. See the [Changelog](#changelog) for details.
 - **Compact UI**: Clean, dark-mode 2x2 grid dashboard showing all 4 devices.
 
 ## Requirements
@@ -97,6 +97,17 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.8.0
+
+- **Window position save/restore on KDE Wayland.** The window now reappears at its last on-screen position on the next launch. This is implemented in a new reusable helper, `kwin_window_position.py`, that drives the KWin Scripting D-Bus API, because none of the usual approaches work on Wayland:
+  - `QWidget.move()` is ignored by the compositor — a client cannot position itself.
+  - `QWidget.pos()` / `windowHandle().geometry()` return a bogus value (a screen-origin-ish number, not the real position); the compositor is the only source of truth.
+  - `QMoveEvent` does not fire for compositor-driven moves (including `startSystemMove()` drags), so it cannot be used as a save trigger.
+  - KWin "Remember"/"Force" position rules only pick the screen and snap to its origin; they do not honor exact intra-screen coordinates. The previous `positionrule=4` rule never actually restored the position.
+  - Native session restore (`xx-session-management-v1`) needs Qt 6.12+, which is not yet packaged.
+- **How it works**: on startup a one-shot KWin script sets the window's `frameGeometry` to the saved coordinates; after a drag, a KWin script reads the true geometry and reports it back over D-Bus, which is persisted to the config (`window_x` / `window_y`). Degrades to a no-op off KDE.
+- The `install_kwin_rule.py` installer no longer sets the dead `positionrule`/`sizerule`/`screenrule` remember rules and clears any a previous version left behind.
 
 ### v1.7.0
 
