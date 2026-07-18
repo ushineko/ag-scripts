@@ -26,7 +26,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.9.0"
+__version__ = "1.9.1"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -1126,10 +1126,14 @@ class PeripheralMonitor(QWidget):
         self.adjustSize()
 
     def setup_timer(self):
-        # Full refresh every 10 minutes
+        # Full refresh every 15 seconds so the configurable slots pick up device
+        # connect/disconnect (e.g. plugging in headphones) promptly. A poll takes
+        # ~1.5s in a worker thread and update_status() skips overlapping runs; the
+        # only costly path (AirPods BLE scan) runs only when AirPods are connected
+        # without a D-Bus battery level.
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_status)
-        self.timer.start(600000)
+        self.timer.start(15000)
 
         # Staleness label update every 60 seconds (updates "Xm ago" while in backoff)
         self.staleness_timer = QTimer(self)

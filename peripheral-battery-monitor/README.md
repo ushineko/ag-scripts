@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.9.0
+Version 1.9.1
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -98,6 +98,10 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.9.1
+
+- Reduced the full device-refresh interval from 10 minutes to 15 seconds so the configurable slots pick up device connect/disconnect (e.g. plugging in headphones, switching from one headset to another) promptly instead of after up to 10 minutes. A poll runs in a worker thread (~1.5s) and overlapping polls are skipped; the only costly path (AirPods BLE scan) still runs only when AirPods are connected without a D-Bus battery level.
 
 ### v1.9.0
 
