@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.9.1
+Version 1.9.2
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -22,7 +22,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Wired**: Detects USB connection and shows "Wired" status.
   - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
 - **Headphones (vendor-neutral)**: The Headphone slot shows the current, most-recently-connected active headphone, switching automatically as you connect/disconnect devices. Any headset that reports battery over BlueZ `org.bluez.Battery1` (e.g. Sony WH-1000XM6) appears automatically — no per-vendor code. AirPods and SteelSeries Arctis remain as enrichment sources:
-  - **AirPods**: BLE scanning for granular Left, Right, and Case levels, merged in and de-duplicated by MAC.
+  - **AirPods**: presence is detected via BlueZ (the slot switches to the AirPods when connected). Granular Left/Right/Case levels are attempted via a BLE advertisement scan, but modern AirPods Pro obfuscate this, so a battery level is often unavailable — the slot then shows "Connected" without a percentage. (Reliable AirPods battery on Linux needs BlueZ HFP handled by ofono, or a dedicated AAP daemon such as LibrePods; PipeWire's native HFP backend prevents BlueZ from exposing it.)
   - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
@@ -98,6 +98,13 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.9.2
+
+- Fixed the Headphone slot not switching to AirPods. The AirPods L/R/case BLE scan (~5s) intermittently hung, and with the 15s refresh (v1.9.1) it ran on every poll; a hang exceeded the reader's 25s worker timeout, so the app got no data and the slot fell back to "Disconnected" (a hung scan could also degrade the BT adapter and cascade). Now:
+  - The BLE scan is hard-bounded (a stuck `scanner.stop()` can no longer wedge the reader; total scan capped ~9s), so a poll never hangs.
+  - The scan result is cached on disk for 120s (the reader is a fresh process per poll), so the scan runs at most once every 2 minutes instead of every 15s. The slot still switches to the AirPods immediately from the fast BlueZ presence check.
+- Note: AirPods battery level is frequently unavailable on Linux (see the AirPods note under Features); this change fixes the slot switching and reliability, not the AirPods battery readout.
 
 ### v1.9.1
 
