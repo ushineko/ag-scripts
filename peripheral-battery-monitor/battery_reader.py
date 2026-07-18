@@ -10,6 +10,7 @@ from typing import Optional
 import subprocess
 import os
 import re
+import time
 import asyncio
 
 log = structlog.get_logger()
@@ -426,8 +427,15 @@ async def _ble_scan_for_airpods():
 
         scanner = BleakScanner(detection_callback=callback)
         await scanner.start()
-        await asyncio.sleep(5.0)
-        await scanner.stop()
+        try:
+            await asyncio.sleep(4.0)
+        finally:
+            # scanner.stop() can hang on a busy/degraded BlueZ adapter; bound it
+            # so a stuck stop cannot wedge the whole reader.
+            try:
+                await asyncio.wait_for(scanner.stop(), timeout=3.0)
+            except Exception:
+                pass
 
         log.debug("scan_finished", result=found_info)
         return found_info
@@ -478,8 +486,48 @@ def _find_airpods_via_dbus():
     return None, "AirPods", False, None
 
 
+# The BLE advertisement scan for AirPods L/R/case battery is slow (~5s) and can
+# hang on a busy adapter. It must not run on every poll or block the reader, so
+# its result is cached briefly on disk (the reader is a fresh process per poll,
+# so an in-memory cache would not survive). The slot switches to the AirPods
+# immediately from the fast D-Bus presence check regardless of the scan.
+_AIRPODS_BLE_CACHE = os.path.expanduser(
+    "~/.cache/peripheral-battery-monitor/airpods_ble.json"
+)
+_AIRPODS_BLE_TTL = 120  # seconds between BLE scans while connected
+_AIRPODS_BLE_HARD_TIMEOUT = 9.0  # absolute cap on a single BLE scan
+
+
+def _read_airpods_ble_cache(mac: str) -> Optional[BatteryInfo]:
+    try:
+        with open(_AIRPODS_BLE_CACHE) as f:
+            d = json.load(f)
+        if d.get("mac") == mac and (time.time() - d.get("ts", 0)) < _AIRPODS_BLE_TTL:
+            return BatteryInfo(
+                level=d["level"], status=d["status"], voltage=None,
+                device_name=d["device_name"], details=d.get("details"),
+                ids={'mac': mac},
+            )
+    except Exception:
+        pass
+    return None
+
+
+def _write_airpods_ble_cache(mac: str, info: BatteryInfo) -> None:
+    try:
+        os.makedirs(os.path.dirname(_AIRPODS_BLE_CACHE), exist_ok=True)
+        with open(_AIRPODS_BLE_CACHE, "w") as f:
+            json.dump({
+                "mac": mac, "ts": time.time(), "level": info.level,
+                "status": info.status, "details": info.details,
+                "device_name": info.device_name,
+            }, f)
+    except Exception:
+        pass
+
+
 def get_airpods_battery() -> Optional[BatteryInfo]:
-    """Retrieves battery for AirPods via D-Bus connection check + BLE advertisement scan."""
+    """Retrieves battery for AirPods via D-Bus connection check + cached BLE scan."""
     # 1. Check connection status via D-Bus (fast, stable)
     mac, name, is_connected, dbus_battery = _find_airpods_via_dbus()
 
@@ -490,22 +538,36 @@ def get_airpods_battery() -> Optional[BatteryInfo]:
 
     log.debug("airpods_logic", mac=mac, dbus_connected=is_connected)
 
-    # 2. Try BLE advertisement scan for granular L/R/Case battery
-    if is_connected:
-        try:
-            ble_info = asyncio.run(_ble_scan_for_airpods())
-            if ble_info:
-                ble_info.device_name = name
-                ble_info.ids = {'mac': mac}
-                if ble_info.status == "Connected":
-                    ble_info.status = "BLE-Visible"
-                return ble_info
-        except Exception:
-            pass
+    if not is_connected:
+        return None
 
-        # Fallback: connected but no battery data available
-        return BatteryInfo(level=-1, status="Connected", voltage=None,
-                           device_name=name, ids={'mac': mac})
+    # 2. Connected but no D-Bus battery: reuse a recent BLE result if we have one,
+    #    otherwise run a single bounded scan for granular L/R/case battery.
+    cached = _read_airpods_ble_cache(mac)
+    if cached is not None:
+        return cached
+
+    ble_info = None
+    try:
+        ble_info = asyncio.run(
+            asyncio.wait_for(_ble_scan_for_airpods(), timeout=_AIRPODS_BLE_HARD_TIMEOUT)
+        )
+    except Exception:
+        ble_info = None
+
+    if ble_info:
+        ble_info.device_name = name
+        ble_info.ids = {'mac': mac}
+        if ble_info.status == "Connected":
+            ble_info.status = "BLE-Visible"
+        result = ble_info
+    else:
+        # Connected but no battery data available.
+        result = BatteryInfo(level=-1, status="Connected", voltage=None,
+                             device_name=name, ids={'mac': mac})
+
+    _write_airpods_ble_cache(mac, result)
+    return result
 
     return None
 
