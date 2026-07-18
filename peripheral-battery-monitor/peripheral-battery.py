@@ -26,7 +26,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.9.2"
+__version__ = "1.10.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 

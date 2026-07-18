@@ -11,6 +11,8 @@ import subprocess
 import os
 import re
 import time
+import socket
+import select
 import asyncio
 
 log = structlog.get_logger()
@@ -486,23 +488,39 @@ def _find_airpods_via_dbus():
     return None, "AirPods", False, None
 
 
-# The BLE advertisement scan for AirPods L/R/case battery is slow (~5s) and can
-# hang on a busy adapter. It must not run on every poll or block the reader, so
-# its result is cached briefly on disk (the reader is a fresh process per poll,
-# so an in-memory cache would not survive). The slot switches to the AirPods
-# immediately from the fast D-Bus presence check regardless of the scan.
-_AIRPODS_BLE_CACHE = os.path.expanduser(
-    "~/.cache/peripheral-battery-monitor/airpods_ble.json"
+# AirPods battery is read over Apple's Accessory Protocol (AAP) on an L2CAP
+# channel (PSM 0x1001) — the same mechanism LibrePods uses — which gives reliable
+# live L/R/Case levels. (The older BLE advertisement scan only yields data when
+# the AirPods happen to be broadcasting battery, so it is kept only as a fallback.)
+# Opening the AAP channel is more involved than a passive scan, so the result is
+# cached briefly on disk (the reader is a fresh process per poll, so an in-memory
+# cache would not survive). The slot still switches to the AirPods immediately from
+# the fast D-Bus presence check.
+_AIRPODS_CACHE = os.path.expanduser(
+    "~/.cache/peripheral-battery-monitor/airpods_battery.json"
 )
-_AIRPODS_BLE_TTL = 120  # seconds between BLE scans while connected
-_AIRPODS_BLE_HARD_TIMEOUT = 9.0  # absolute cap on a single BLE scan
+_AIRPODS_CACHE_TTL = 120        # seconds to reuse a battery read while connected
+_AIRPODS_AAP_TIMEOUT = 8.0      # absolute cap on an AAP read
+_AIRPODS_BLE_HARD_TIMEOUT = 9.0  # absolute cap on the fallback BLE scan
+
+# AAP L2CAP protocol constants (see LibrePods / docs "AAP Definitions").
+_AAP_PSM = 0x1001
+_AAP_HANDSHAKE = bytes.fromhex("00000400010002000000000000000000")
+_AAP_SET_FEATURES = bytes.fromhex("040004004d00d700000000000000")
+_AAP_REQUEST_NOTIFICATIONS = bytes.fromhex("040004000f00ffffffffff")
+_AAP_HANDSHAKE_ACK = bytes.fromhex("01000400")
+_AAP_FEATURES_ACK = bytes.fromhex("040004002b00")
+_AAP_BATTERY_PREFIX = bytes.fromhex("040004000400")
+_AAP_COMPONENT = {0x01: "headset", 0x02: "right", 0x04: "left", 0x08: "case"}
+_AAP_STATUS_CHARGING = 0x01
+_AAP_STATUS_DISCONNECTED = 0x04
 
 
-def _read_airpods_ble_cache(mac: str) -> Optional[BatteryInfo]:
+def _read_airpods_cache(mac: str) -> Optional[BatteryInfo]:
     try:
-        with open(_AIRPODS_BLE_CACHE) as f:
+        with open(_AIRPODS_CACHE) as f:
             d = json.load(f)
-        if d.get("mac") == mac and (time.time() - d.get("ts", 0)) < _AIRPODS_BLE_TTL:
+        if d.get("mac") == mac and (time.time() - d.get("ts", 0)) < _AIRPODS_CACHE_TTL:
             return BatteryInfo(
                 level=d["level"], status=d["status"], voltage=None,
                 device_name=d["device_name"], details=d.get("details"),
@@ -513,10 +531,10 @@ def _read_airpods_ble_cache(mac: str) -> Optional[BatteryInfo]:
     return None
 
 
-def _write_airpods_ble_cache(mac: str, info: BatteryInfo) -> None:
+def _write_airpods_cache(mac: str, info: BatteryInfo) -> None:
     try:
-        os.makedirs(os.path.dirname(_AIRPODS_BLE_CACHE), exist_ok=True)
-        with open(_AIRPODS_BLE_CACHE, "w") as f:
+        os.makedirs(os.path.dirname(_AIRPODS_CACHE), exist_ok=True)
+        with open(_AIRPODS_CACHE, "w") as f:
             json.dump({
                 "mac": mac, "ts": time.time(), "level": info.level,
                 "status": info.status, "details": info.details,
@@ -526,12 +544,109 @@ def _write_airpods_ble_cache(mac: str, info: BatteryInfo) -> None:
         pass
 
 
+def _parse_aap_battery(pkt: bytes) -> dict:
+    """Parse an AAP battery packet into {component: (level, charging)}.
+
+    Layout: 6-byte prefix, a count byte, then count x 5-byte records
+    (component, 0x01, level 0-100, status, 0x01). Disconnected records are dropped.
+    """
+    if not pkt.startswith(_AAP_BATTERY_PREFIX) or len(pkt) < 7:
+        return {}
+    count = pkt[6]
+    pods = {}
+    for i in range(count):
+        rec = pkt[7 + 5 * i: 7 + 5 * i + 5]
+        if len(rec) < 5 or rec[1] != 0x01 or rec[4] != 0x01:
+            continue
+        comp = _AAP_COMPONENT.get(rec[0])
+        level, status = rec[2], rec[3]
+        if comp is None or status == _AAP_STATUS_DISCONNECTED or not 0 <= level <= 100:
+            continue
+        pods[comp] = (level, status == _AAP_STATUS_CHARGING)
+    return pods
+
+
+def _aap_pods_to_info(mac: str, pods: dict) -> Optional[BatteryInfo]:
+    details = {c: pods[c][0] for c in ("left", "right", "case") if c in pods}
+    if not details:
+        return None
+    ear_levels = [pods[c][0] for c in ("left", "right") if c in pods]
+    level = min(ear_levels) if ear_levels else details.get("case", -1)
+    charging = any(chg for _lvl, chg in pods.values())
+    return BatteryInfo(
+        level=level,
+        status="Charging" if charging else "Discharging",
+        voltage=None, device_name=None, details=details, ids={'mac': mac},
+    )
+
+
+def _read_airpods_aap(mac: str, deadline_s: float = _AIRPODS_AAP_TIMEOUT) -> Optional[BatteryInfo]:
+    """Read live AirPods battery over AAP/L2CAP. Returns BatteryInfo or None.
+
+    Bounded and best-effort: connects PSM 0x1001, runs handshake -> set-features ->
+    request-notifications, parses the first battery packet, and always closes the
+    channel. Requires the AirPods to be bonded and connected.
+    """
+    s = None
+    try:
+        s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET,
+                          socket.BTPROTO_L2CAP)
+        s.settimeout(3.0)
+        s.connect((mac, _AAP_PSM))
+        s.send(_AAP_HANDSHAKE)
+        s.setblocking(False)
+        t0 = time.monotonic()
+        deadline = t0 + deadline_s
+        features_sent = notif_sent = resent = False
+        notif_time = None
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([s], [], [], 0.3)
+            now = time.monotonic()
+            if ready:
+                try:
+                    data = s.recv(1024)
+                except (BlockingIOError, InterruptedError):
+                    data = b""
+                if data:
+                    if data.startswith(_AAP_BATTERY_PREFIX):
+                        info = _aap_pods_to_info(mac, _parse_aap_battery(data))
+                        if info is not None:
+                            return info
+                    elif data.startswith(_AAP_HANDSHAKE_ACK) and not features_sent:
+                        s.send(_AAP_SET_FEATURES)
+                        features_sent = True
+                    elif data.startswith(_AAP_FEATURES_ACK) and not notif_sent:
+                        s.send(_AAP_REQUEST_NOTIFICATIONS)
+                        notif_sent = True
+                        notif_time = now
+            # Time-based fallbacks in case ACK prefixes vary across firmware.
+            if not features_sent and now - t0 > 1.0:
+                s.send(_AAP_SET_FEATURES)
+                features_sent = True
+            if features_sent and not notif_sent and now - t0 > 2.0:
+                s.send(_AAP_REQUEST_NOTIFICATIONS)
+                notif_sent = True
+                notif_time = now
+            if notif_sent and not resent and notif_time and now - notif_time > 2.5:
+                s.send(_AAP_REQUEST_NOTIFICATIONS)
+                resent = True
+        return None
+    except (OSError, ValueError):
+        return None
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
 def get_airpods_battery() -> Optional[BatteryInfo]:
-    """Retrieves battery for AirPods via D-Bus connection check + cached BLE scan."""
+    """AirPods battery via D-Bus presence + cached AAP read (BLE scan fallback)."""
     # 1. Check connection status via D-Bus (fast, stable)
     mac, name, is_connected, dbus_battery = _find_airpods_via_dbus()
 
-    # If D-Bus has battery level directly (Battery1 interface), use it
+    # If D-Bus exposes a battery level directly (Battery1 interface), use it.
     if dbus_battery is not None and dbus_battery >= 0:
         return BatteryInfo(level=dbus_battery, status="Discharging", voltage=None,
                            device_name=name, ids={'mac': mac})
@@ -541,35 +656,39 @@ def get_airpods_battery() -> Optional[BatteryInfo]:
     if not is_connected:
         return None
 
-    # 2. Connected but no D-Bus battery: reuse a recent BLE result if we have one,
-    #    otherwise run a single bounded scan for granular L/R/case battery.
-    cached = _read_airpods_ble_cache(mac)
+    # 2. Reuse a recent battery read (keeps the AAP channel from being opened on
+    #    every poll).
+    cached = _read_airpods_cache(mac)
     if cached is not None:
         return cached
 
-    ble_info = None
-    try:
-        ble_info = asyncio.run(
-            asyncio.wait_for(_ble_scan_for_airpods(), timeout=_AIRPODS_BLE_HARD_TIMEOUT)
-        )
-    except Exception:
-        ble_info = None
-
-    if ble_info:
-        ble_info.device_name = name
-        ble_info.ids = {'mac': mac}
-        if ble_info.status == "Connected":
-            ble_info.status = "BLE-Visible"
-        result = ble_info
+    # 3. Preferred: live L/R/Case battery over AAP/L2CAP.
+    info = _read_airpods_aap(mac)
+    if info is not None:
+        info.device_name = name
     else:
-        # Connected but no battery data available.
-        result = BatteryInfo(level=-1, status="Connected", voltage=None,
-                             device_name=name, ids={'mac': mac})
+        # 4. Fallback: BLE advertisement scan (only yields data when the AirPods
+        #    happen to be broadcasting battery).
+        try:
+            ble = asyncio.run(
+                asyncio.wait_for(_ble_scan_for_airpods(), timeout=_AIRPODS_BLE_HARD_TIMEOUT)
+            )
+        except Exception:
+            ble = None
+        if ble:
+            ble.device_name = name
+            ble.ids = {'mac': mac}
+            if ble.status == "Connected":
+                ble.status = "BLE-Visible"
+            info = ble
 
-    _write_airpods_ble_cache(mac, result)
-    return result
+    # 5. Presence-only fallback when no battery source produced data.
+    if info is None:
+        info = BatteryInfo(level=-1, status="Connected", voltage=None,
+                           device_name=name, ids={'mac': mac})
 
-    return None
+    _write_airpods_cache(mac, info)
+    return info
 
 _AUDIO_UUIDS = {
     '0000110b-0000-1000-8000-00805f9b34fb',  # Audio Sink
