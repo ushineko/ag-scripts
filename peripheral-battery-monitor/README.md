@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.9.2
+Version 1.10.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -22,7 +22,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Wired**: Detects USB connection and shows "Wired" status.
   - **Wireless (2.4G)**: Detects 2.4G receiver connection and shows "Wireless" status (battery level unavailable over 2.4G).
 - **Headphones (vendor-neutral)**: The Headphone slot shows the current, most-recently-connected active headphone, switching automatically as you connect/disconnect devices. Any headset that reports battery over BlueZ `org.bluez.Battery1` (e.g. Sony WH-1000XM6) appears automatically — no per-vendor code. AirPods and SteelSeries Arctis remain as enrichment sources:
-  - **AirPods**: presence is detected via BlueZ (the slot switches to the AirPods when connected). Granular Left/Right/Case levels are attempted via a BLE advertisement scan, but modern AirPods Pro obfuscate this, so a battery level is often unavailable — the slot then shows "Connected" without a percentage. (Reliable AirPods battery on Linux needs BlueZ HFP handled by ofono, or a dedicated AAP daemon such as LibrePods; PipeWire's native HFP backend prevents BlueZ from exposing it.)
+  - **AirPods**: live Left/Right/Case battery is read directly over Apple's Accessory Protocol (AAP) on an L2CAP channel (PSM 0x1001) — the same mechanism [LibrePods](https://github.com/librepods-org/librepods) uses — so a real percentage shows even though BlueZ does not expose one. Requires the AirPods to be paired and connected; no root or BlueZ experimental mode needed. Falls back to a BLE advertisement scan, then to presence-only ("Connected") if neither yields data.
   - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
@@ -98,6 +98,12 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.10.0
+
+- **Live AirPods battery via Apple's Accessory Protocol (AAP).** The AirPods now show a real Left/Right/Case percentage. Battery is read directly over an L2CAP channel (PSM 0x1001) using AAP — connect, handshake, request notifications, parse the battery packet — the same approach [LibrePods](https://github.com/librepods-org/librepods) uses. This works where BlueZ can't help (BlueZ never exposes `Battery1` for AirPods because PipeWire owns the HFP profile), and needs no root or experimental mode — only that the AirPods are paired and connected.
+  - Preferred over the old BLE advertisement scan (which only returned data when the AirPods happened to be broadcasting battery). The BLE scan is kept as a fallback, then presence-only ("Connected") if neither yields data.
+  - The read is bounded (~8s cap) and cached on disk for 120s, so the AAP channel is opened at most once every 2 minutes rather than on every poll.
 
 ### v1.9.2
 
