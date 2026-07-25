@@ -106,5 +106,12 @@ def pane_process_info(session: str, pane_id: str) -> dict:
 
 
 def pane_run(session: str, pane_id: str, command: str) -> None:
-    """Type `command` + Enter into an existing pane's shell."""
-    _run([*_session_args(session), "pane", "run", pane_id, command])
+    """Type `command` + Enter into an existing pane's shell.
+
+    Sent with a leading space: because the command is typed into an interactive
+    shell it would otherwise be recorded in shell history, so a restore would
+    bury the user's real history under replayed argv. The space suppresses that
+    under zsh's hist_ignore_space / bash's HISTCONTROL=ignorespace, and is
+    ignored by the shell otherwise.
+    """
+    _run([*_session_args(session), "pane", "run", pane_id, f" {command}"])
