@@ -17,6 +17,10 @@ delivery = "system"
 [ui]
 show_agent_labels_on_pane_borders = true
 agent_panel_scope = "all"
+# Horizontal spaces bar (custom build only). Ignored by the stock binary, which
+# predates strict unknown-key reporting. prefix+shift+b toggles placement live.
+# See sysadmin/runbooks/herdr-custom-horizontal-spaces-bar.md.
+sidebar_layout = "horizontal"
 
 [session]
 # Re-open supported AI-agent panes into their native conversations after a
