@@ -33,6 +33,10 @@ A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to ma
 - **System Tray**:
     - Minimizes to tray on close.
     - Notifications on auto-switch (via `notify-send`).
+- **Switchable Indicators**: The volume OSD and the device-switch notification can
+  each be turned off from **Settings**, so they can be left to the desktop
+  environment when it already reports them correctly. Failure notifications are
+  always delivered.
 
 ## Audio Routing & JamesDSP Integration
 
@@ -191,7 +195,35 @@ real hardware volume change is what the app's OSD reports.
 
 Device priority and settings are saved to `~/.config/audio-source-switcher/config.json`.
 
+Keys that have no UI control elsewhere:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `osd_enabled` | `true` | Show this app's own volume OSD. Also gates the `notify-send` volume popup the CLI falls back to when no instance is running. Toggle: **Settings → Show volume OSD**. |
+| `switch_notifications` | `true` | Show informational notifications ("Audio Switched", "Connecting..."). Failure notifications are sent regardless. Toggle: **Settings → Notify on device switch**. |
+
+Both default to enabled, and a config file written by an earlier version is
+backfilled with them on load.
+
 ## Changelog
+
+### v13.1
+
+- **Toggles for the OSD and switch notifications**: "Show volume OSD" and "Notify on
+  device switch" checkboxes in the Settings group, persisted to `config.json` as
+  `osd_enabled` and `switch_notifications`. Both default to enabled, so upgrading
+  changes nothing until a box is unticked.
+- **Why**: KDE Plasma 6.7's `plasma-pa` now drives the stock volume OSD for volume
+  changes originating from *any* source — including this app's own `pactl` writes —
+  and reports the physical sink rather than the pinned-at-100% `jamesdsp_sink` it
+  used to read. That produced two stacked OSDs per keypress. Rather than removing
+  this app's indicators (the stock one may regress again), each is now switchable.
+- **Failures are never silenced**: `send_notification` gained an `informational` flag;
+  "Switch Failed", "Connection Failed", and "Connection Timeout" bypass the toggle so
+  a switch that did not work is never silent.
+- **Config defaults centralized**: `ConfigManager` now merges the persisted file over
+  a single `DEFAULTS` map (deep-copied per load), replacing a default dict literal
+  that was duplicated in two places and an ad hoc `mic_links` backfill.
 
 ### v13.0
 

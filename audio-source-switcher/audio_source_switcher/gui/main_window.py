@@ -163,6 +163,24 @@ class MainWindow(QMainWindow):
         self.loopback_cb.clicked.connect(self.on_loopback_toggled)
         controls_layout.addWidget(self.loopback_cb)
 
+        self.osd_cb = QCheckBox("Show volume OSD")
+        self.osd_cb.setToolTip(
+            "Show this app's own on-screen volume indicator.\n"
+            "Turn off if your desktop already shows a correct volume OSD."
+        )
+        self.osd_cb.setChecked(self.config.get("osd_enabled", True))
+        self.osd_cb.toggled.connect(self.on_osd_toggled)
+        controls_layout.addWidget(self.osd_cb)
+
+        self.notify_cb = QCheckBox("Notify on device switch")
+        self.notify_cb.setToolTip(
+            "Show a notification when the output device changes.\n"
+            "Failures are always reported, even when this is off."
+        )
+        self.notify_cb.setChecked(self.config.get("switch_notifications", True))
+        self.notify_cb.toggled.connect(self.on_notifications_toggled)
+        controls_layout.addWidget(self.notify_cb)
+
         self.status_label = QLabel("Ready")
         controls_layout.addWidget(self.status_label)
 
@@ -344,7 +362,11 @@ class MainWindow(QMainWindow):
         self._show_osd(vol, muted)
 
     def _show_osd(self, volume: int, muted: bool):
+        # Record the state even when suppressed, so the subscribe dedup stays
+        # accurate and re-enabling mid-session does not replay a stale value.
         self._last_osd_volume = (volume, muted)
+        if not self.config.get("osd_enabled", True):
+            return
         self.osd.show_volume(volume, muted)
 
     # ── System Tray ──────────────────────────────────────────────────
@@ -402,7 +424,7 @@ class MainWindow(QMainWindow):
         return """
         <div align="center">
             <h1>Audio Source Switcher</h1>
-            <p><b>Version 13.0</b></p>
+            <p><b>Version 13.1</b></p>
             <p>A power-user utility for managing audio outputs on Linux (PulseAudio/PipeWire).</p>
             <p>Copyright (c) 2026 ushineko</p>
         </div>
@@ -492,6 +514,14 @@ class MainWindow(QMainWindow):
 
     def on_auto_switch_toggled(self, checked: bool):
         self.config["auto_switch"] = checked
+        self.config_mgr.save_config(self.config)
+
+    def on_osd_toggled(self, checked: bool):
+        self.config["osd_enabled"] = checked
+        self.config_mgr.save_config(self.config)
+
+    def on_notifications_toggled(self, checked: bool):
+        self.config["switch_notifications"] = checked
         self.config_mgr.save_config(self.config)
 
     def on_list_reordered(self):
@@ -926,7 +956,15 @@ class MainWindow(QMainWindow):
     # ── Notifications ────────────────────────────────────────────────
 
     def send_notification(self, title: str, message: str, icon: str = "audio-card",
-                          sound: str = "message-new-instant"):
+                          sound: str = "message-new-instant", informational: bool = True):
+        """Send a desktop notification.
+
+        Informational notifications (switched, connecting) are suppressed when the
+        user turns off "Notify on device switch". Failures pass informational=False
+        so a switch that did not work is never silent.
+        """
+        if informational and not self.config.get("switch_notifications", True):
+            return
         try:
             subprocess.run([
                 'notify-send',
@@ -1130,18 +1168,18 @@ class MainWindow(QMainWindow):
                 else:
                     msg = "Error - Device is offline and not Bluetooth."
                     print(f"CLI: {msg}")
-                    self.send_notification("Switch Failed", msg, "dialog-error")
+                    self.send_notification("Switch Failed", msg, "dialog-error", informational=False)
                     sys.exit(1)
         else:
             msg = f"Error - Device '{target}' not found."
             print(f"CLI: {msg}")
-            self.send_notification("Switch Failed", msg, "dialog-error")
+            self.send_notification("Switch Failed", msg, "dialog-error", informational=False)
             sys.exit(1)
 
     def on_cli_connect_finished(self, success: bool, msg: str, priority_id: str):
         if not success:
             print(f"CLI: Connection Failed: {msg}")
-            self.send_notification("Connection Failed", msg, "dialog-error")
+            self.send_notification("Connection Failed", msg, "dialog-error", informational=False)
             sys.exit(1)
 
         print("CLI: Connected. Waiting for sink...")
@@ -1172,7 +1210,7 @@ class MainWindow(QMainWindow):
         elif self.poll_attempts >= self.max_poll_attempts:
             msg = "Timeout waiting for sink."
             print(f"CLI: {msg}")
-            self.send_notification("Connection Timeout", msg, "dialog-error")
+            self.send_notification("Connection Timeout", msg, "dialog-error", informational=False)
             sys.exit(1)
 
     # ── Context Menu ─────────────────────────────────────────────────

@@ -6,12 +6,18 @@ from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
+from audio_source_switcher.config import ConfigManager
 from audio_source_switcher.controllers.audio import AudioController
 from audio_source_switcher.controllers.pipewire import PipeWireController
 from audio_source_switcher.gui.main_window import MainWindow
 from audio_source_switcher.volume import adjust_volume
 
 SOCKET_NAME = "ag_audio_source_switcher"
+
+
+def _osd_enabled() -> bool:
+    """Whether the user wants a volume indicator at all (shared with the GUI OSD)."""
+    return ConfigManager().load_config().get("osd_enabled", True)
 
 
 def _forward_to_instance(message: bytes) -> bool:
@@ -33,7 +39,8 @@ def handle_volume_command(direction: str):
     """direction: 'up' or 'down'.
 
     Prefers the running instance (which shows the OSD). Falls back to an inline
-    smart volume change + notify-send when no instance is running.
+    smart volume change + notify-send when no instance is running. The fallback
+    notification stands in for the OSD, so it honors the same "osd_enabled" setting.
     """
     # QCoreApplication is required for QLocalSocket; lighter than a GUI QApplication.
     _app = QCoreApplication(sys.argv)
@@ -47,7 +54,7 @@ def handle_volume_command(direction: str):
     pw = PipeWireController()
     _target, new_vol, _muted = adjust_volume(audio, pw, direction)
 
-    if new_vol is not None:
+    if new_vol is not None and _osd_enabled():
         subprocess.run([
             'notify-send',
             '-h', f'int:value:{new_vol}',
