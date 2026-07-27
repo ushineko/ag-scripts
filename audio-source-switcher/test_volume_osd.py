@@ -97,6 +97,7 @@ def _bare_main_window():
     win = MainWindow.__new__(MainWindow)
     win.audio = MagicMock()
     win.osd = MagicMock()
+    win.config = {}  # empty: both spec-010 toggles fall back to enabled
     win._last_osd_volume = None
     return win
 
@@ -150,6 +151,7 @@ def test_cli_falls_back_to_notify_when_no_instance():
     from audio_source_switcher import cli
     with patch.object(cli, "QCoreApplication"), \
          patch.object(cli, "_forward_to_instance", return_value=False), \
+         patch.object(cli, "_osd_enabled", return_value=True), \
          patch.object(cli, "adjust_volume",
                       return_value=("sinkX", 33, False)) as adj, \
          patch.object(cli.subprocess, "run") as run:
