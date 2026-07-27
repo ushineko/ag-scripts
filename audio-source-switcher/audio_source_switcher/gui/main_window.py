@@ -285,42 +285,6 @@ class MainWindow(QMainWindow):
             print(f"Setting volume of {target_name} to {val}%")
             self.audio.set_sink_volume(target_name, val)
 
-    def check_and_sync_volume(self):
-        """Polls JamesDSP volume. If != 100%, syncs to hardware."""
-        try:
-            jdsp_vol = self.audio.get_sink_volume("jamesdsp_sink")
-
-            if jdsp_vol is None or jdsp_vol == 100:
-                return
-
-            pw = PipeWireController()
-            jdsp_outs = pw.get_jamesdsp_outputs()
-
-            if not jdsp_outs:
-                print("DEBUG: JamesDSP is active but has no outputs. Cannot sync volume.")
-                return
-
-            found_target = pw.find_linked_sink(jdsp_outs[0])
-
-            if not found_target:
-                print("DEBUG: JamesDSP is active but floating. Cannot sync volume.")
-                return
-
-            current_target_vol = self.audio.get_sink_volume(found_target)
-            if current_target_vol is None:
-                return
-
-            factor = jdsp_vol / 100.0
-            new_vol = int(current_target_vol * factor)
-
-            print(f"Volume Sync: JDSP={jdsp_vol}%, Target={current_target_vol}% -> {new_vol}%")
-
-            self.audio.set_sink_volume(found_target, new_vol)
-            self.audio.set_sink_volume("jamesdsp_sink", 100)
-
-        except Exception as e:
-            print(f"Error in volume sync: {e}")
-
     # ── Volume OSD ───────────────────────────────────────────────────
 
     def setup_volume_osd(self):
