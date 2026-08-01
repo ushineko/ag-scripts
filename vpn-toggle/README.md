@@ -234,7 +234,10 @@ Located at `~/.config/vpn-toggle/config.json`:
     "enabled": true,
     "check_interval_seconds": 120,
     "grace_period_seconds": 15,
-    "failure_threshold": 3
+    "failure_threshold": 3,
+    "auto_recovery": true,
+    "recovery_backoff_initial_seconds": 30,
+    "recovery_backoff_max_seconds": 600
   },
   "vpns": [
     {
@@ -257,6 +260,47 @@ Located at `~/.config/vpn-toggle/config.json`:
       ]
     }
   ]
+}
+```
+
+#### Monitor Settings
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `enabled` | `false` | Master switch for monitor mode |
+| `check_interval_seconds` | `120` | How often each VPN is checked |
+| `grace_period_seconds` | `15` | Quiet window after a connect before asserts run |
+| `failure_threshold` | `3` | Consecutive assert failures on a *live* tunnel before the VPN is disconnected and disabled |
+| `auto_recovery` | `true` | Reconnect a monitored VPN that is unexpectedly down |
+| `recovery_backoff_initial_seconds` | `30` | First retry interval after a failed reconnect |
+| `recovery_backoff_max_seconds` | `600` | Ceiling for the exponential retry interval |
+
+**Auto-recovery** (spec 010) covers the case where a tunnel is fully down rather
+than merely failing its asserts. Retries use bounded exponential backoff
+(30s → 60s → 120s → … capped at `recovery_backoff_max_seconds`), and each
+interval is logged so a long backoff is visible rather than looking like the
+monitor gave up.
+
+Three behaviors are deliberate:
+
+- **Recovery restores tunnels that drop; it never opens new ones.** A VPN that
+  is already down when the monitor starts is left alone. It becomes eligible for
+  recovery once the monitor has observed it connected, or once you connect it.
+  So restarting the app never connects VPNs for you.
+
+- **An outage never disables a VPN.** `failure_threshold` applies only to assert
+  failures on a connected tunnel. Connectivity loss stays self-healing.
+- **A manual disconnect is never overridden.** Disconnecting from the GUI
+  suppresses auto-recovery for that VPN until you reconnect it.
+
+`auto_recovery` may also be set per-VPN, which overrides the global value:
+
+```json
+{
+  "name": "us_las_vegas-aes-128-cbc-udp-dns",
+  "enabled": true,
+  "auto_recovery": false,
+  "asserts": []
 }
 ```
 
@@ -304,6 +348,22 @@ The original bash script is still available as `toggle_vpn.sh` for backward comp
 Bind to a global hotkey (e.g., Meta+V) in your desktop environment
 
 ## Changelog
+
+### v4.4.0
+
+- **Auto-recovery for a fully-down VPN** ([`specs/010-monitor-recover-down-vpn.md`](specs/010-monitor-recover-down-vpn.md)). The monitor previously only health-checked VPNs that were already connected: a failed bounce left the tunnel disconnected, and every later tick hit `if not is_connected: state = IDLE; return`, so the VPN was silently orphaned-down (a ~15h outage on 2026-06-16). An enabled VPN reported not-connected now enters a new `RECOVERING` state and is reconnected with bounded exponential backoff, and `_on_bounce_done`'s failure path schedules the next attempt instead of only logging
+- Auto-recovery is opt-out globally (`monitor.auto_recovery`) or per-VPN; the retry ceiling is `monitor.recovery_backoff_max_seconds`. Both are exposed in the Settings dialog
+- A connectivity-driven outage never increments `failure_threshold` and never disables a VPN — that path stays scoped to assert failure on a live tunnel
+- A manual disconnect from the GUI suppresses auto-recovery for that VPN until the user reconnects, so the monitor never fights a deliberate disconnect. A down/recovering card now reads "Reconnecting" with the attempt number rather than looking idle
+- **Recovery only restores tunnels that were up.** A VPN that is already down when the monitor starts is never auto-connected — the suppression flag is in-memory, so without this a restart would connect every configured-and-enabled VPN that happened to be down. A VPN becomes recovery-eligible once the monitor observes it connected (or the user connects it)
+- **Connection-time counter fixes.** The 5s status sweep ran one blocking `nmcli`/`openvpn3` call per card and then a second round for the tray tooltip — measured at ~100ms of frozen event loop every 5s, which stalled the 1s counter and made the seconds digit stutter. The sweep is now a single async probe per VPN feeding both the card and the tooltip: blocking GUI-thread probes over 95s dropped from 117 to 3, and off-cadence counter updates from 41/95 to 1/94
+- The 1s counter timer is now a `PreciseTimer` (Qt's default `CoarseTimer` drifts the interval by up to 5%), and the sweep no longer re-writes the label in the steady state, leaving the 1s tick as the sole writer
+- **Counter render artifact fixed.** The uptime counter intermittently rendered coarse and un-antialiased (same glyphs and positions, blocky edges), which read as garbled digits. Cause: forcing `QT_WAYLAND_DISABLE_FRACTIONAL_SCALE=1`, which makes Qt render at integer 2x and the compositor downscale to a 1.5x output — resampling the label's small per-second partial repaint. Rendering natively at the output scale removes it: 0/60 lossless frames artifacted versus 6/60 with the variable set
+- The counter label was hardened regardless: a real fixed-pitch `QFont` at a *point* size instead of a stylesheet `font-size: 10px`, an opaque background, a fixed width so the painted rect never depends on text metrics, and `PlainText` format
+- `VPNWidget` no longer re-applies identical stylesheets on every status pass. `setStyleSheet()` forces a full style repolish, and the 5s sweep was repolishing every card 12 times a minute for no visual change. This did not change the artifact rate, but it removes pointless repaint work
+- **A failed activeness probe is no longer rendered as a disconnect.** `is_vpn_active` returns `False` both when a VPN is down and when `nmcli`/`openvpn3` errors or times out; treating the latter as a disconnect blanked the card and discarded the connect time, restarting the uptime counter from zero. Backend ops now carry a `probe_ok` flag so the GUI can tell the two apart
+- **OpenVPN3 sessions now report a real connection time.** `OpenVPN3Backend.get_connection_timestamp()` returned `None`, so the GUI stamped `datetime.now()` and every openvpn3 card's uptime counted from when the GUI happened to notice it. It now parses the session's `Created:` field from `sessions-list` (verified against live openvpn3 output; an unrecognised format degrades to the previous behavior rather than erroring)
+- **Tests**: 239 total (+44), covering auto-recovery backoff/suppression/no-disable, probe-failure resilience, the async sweep, and openvpn3 session timestamps
 
 ### v4.3.1
 

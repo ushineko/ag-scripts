@@ -10,8 +10,8 @@ from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QDialog,
 )
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QPalette
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
 from .config import ConfigManager
 from .vpn_manager import VPNManager
@@ -40,10 +40,43 @@ class VPNWidget(QFrame):
         self.backend_type = backend_type
 
         self._connected_since: Optional[datetime] = None
+        # Last activeness result actually applied to the card. Survives a failed
+        # probe so callers (e.g. the tray tooltip) don't see a phantom drop.
+        self.is_active: bool = False
 
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setup_ui()
         self.update_status()
+
+    @staticmethod
+    def _counter_font() -> QFont:
+        """A genuinely fixed-pitch font sized in points, for the uptime counter.
+
+        `setFixedPitch(True)` plus the Monospace style hint makes fontconfig pick
+        a real monospace face; a stylesheet `font-family: monospace` leaves Qt
+        reporting `fixedPitch: False` and can fall back to a proportional face.
+        """
+        font = QFont()
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setFamily("monospace")
+        font.setFixedPitch(True)
+        base = font.pointSizeF()
+        # Slightly smaller than body text, but scale-aware unlike a px size.
+        font.setPointSizeF(max(7.0, (base if base > 0 else 10.0) - 1.5))
+        return font
+
+    @staticmethod
+    def _set_style(widget, sheet: str) -> None:
+        """Apply a stylesheet only when it actually changes.
+
+        setStyleSheet() forces a full style repolish and repaint of the widget.
+        The 5s status sweep re-applied identical stylesheets on every pass, so
+        every card was repolished 12 times a minute for no visual change. When
+        one of those repolishes lands on the same frame as the 1s uptime
+        counter's repaint, the counter renders coarse/aliased for that frame.
+        """
+        if widget.styleSheet() != sheet:
+            widget.setStyleSheet(sheet)
 
     def setup_ui(self):
         """Setup the widget UI"""
@@ -79,10 +112,39 @@ class VPNWidget(QFrame):
         self.status_label = QLabel("Disconnected")
         header_layout.addWidget(self.status_label)
 
-        # Connection time counter (DD:HH:MM:SS)
+        # Connection time counter (DD:HH:MM:SS).
+        #
+        # This is the only label in the card that repaints every second, so it is
+        # the one that shows text-rendering artifacts. Three things keep its
+        # repaint stable, which the original stylesheet did not give us:
+        #
+        #  - The font is a real QFont at a *point* size. A stylesheet
+        #    "font-size: 10px" is a device-independent pixel size that rasterises
+        #    badly under fractional display scaling (this host runs every output
+        #    at 1.5x), which garbles glyphs on repaint.
+        #  - An opaque background, so each repaint overwrites the previous
+        #    second's glyphs instead of compositing over them.
+        #  - A fixed width plus right alignment keeps the painted rect identical
+        #    from tick to tick instead of depending on text metrics.
         self.connection_time_label = QLabel("")
+        # An explicit opaque background, not autoFillBackground: Qt ignores
+        # autoFillBackground once a stylesheet is set on the widget. Without an
+        # opaque rect the label composites as a transparent overlay, and under
+        # fractional scaling the damage region rounds to non-integer physical
+        # pixels — leaving the previous frame's glyphs visible underneath the
+        # new ones, so the counter renders doubled for a frame. The colour is
+        # taken from the palette so it still follows the desktop theme.
         self.connection_time_label.setStyleSheet(
-            "color: #aaaaaa; font-size: 10px; font-family: monospace;"
+            f"color: #aaaaaa; background-color: "
+            f"{self.palette().color(QPalette.ColorRole.Window).name()};"
+        )
+        self.connection_time_label.setFont(self._counter_font())
+        self.connection_time_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.connection_time_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        # Widest value the counter can render, plus a little slack.
+        self.connection_time_label.setFixedWidth(
+            self.connection_time_label.fontMetrics().horizontalAdvance("00:00:00:00") + 6
         )
         header_layout.addWidget(self.connection_time_label)
 
@@ -145,18 +207,42 @@ class VPNWidget(QFrame):
         self.setLayout(layout)
 
     def update_status(self):
-        """Update the VPN status display"""
-        is_active = self.vpn_manager.is_vpn_active(self.vpn_name)
+        """Probe the backend synchronously and update the display.
+
+        Used by the user-initiated paths (button handlers, monitor signals).
+        The periodic 5s sweep uses `apply_status()` with an async probe result
+        so the GUI thread never blocks on nmcli/openvpn3.
+        """
+        self.apply_status(self.vpn_manager.is_vpn_active(self.vpn_name))
+
+    def apply_status(self, is_active: bool, probe_ok: bool = True):
+        """Render the card for an already-obtained activeness result.
+
+        Args:
+            is_active: whether the backend reports the VPN as connected.
+            probe_ok: False when the backend probe itself failed (nmcli/openvpn3
+                errored or timed out) rather than reporting a genuine
+                disconnect. A failed probe must not be read as "disconnected":
+                doing so blanks the card and discards `_connected_since`, which
+                restarts the uptime counter from zero on the next good probe.
+        """
+        if not probe_ok:
+            logger.debug(
+                f"{self.vpn_name}: activeness probe failed, keeping last known state"
+            )
+            return
+
+        self.is_active = is_active
 
         if is_active:
-            self.status_indicator.setStyleSheet("color: green; font-size: 16px;")
+            self._set_style(self.status_indicator, "color: green; font-size: 16px;")
             self.status_label.setText("Connected")
             self.connect_btn.setEnabled(False)
             self.disconnect_btn.setEnabled(True)
             self.bounce_btn.setEnabled(True)
             self.details_btn.setEnabled(True)
 
-            # Track connection start time (fetch from NM once, then cache)
+            # Track connection start time (fetch from the backend once, then cache)
             if self._connected_since is None:
                 self._connected_since = (
                     self.vpn_manager.get_connection_timestamp(self.vpn_name)
@@ -164,7 +250,11 @@ class VPNWidget(QFrame):
                 )
                 # Track as active in restore list
                 self.config_manager.add_restore_vpn(self.vpn_name)
-            self.update_connection_time()
+                # Paint the counter immediately on the connect transition. In the
+                # steady state the 1s timer is the sole writer: refreshing here
+                # too would advance the display off-cadence on every 5s sweep,
+                # making the seconds digit visibly stutter.
+                self.update_connection_time()
 
             # Get assert status if monitor is running
             if self.monitor_thread:
@@ -182,13 +272,13 @@ class VPNWidget(QFrame):
 
                     if failure_count > 0:
                         self.info_label.setText(f"⚠ {failure_count} failures | Last check: {time_str}")
-                        self.info_label.setStyleSheet("color: orange; font-size: 10px;")
+                        self._set_style(self.info_label, "color: orange; font-size: 10px;")
                     else:
                         self.info_label.setText(f"✓ All checks passing | Last check: {time_str}")
-                        self.info_label.setStyleSheet("color: green; font-size: 10px;")
+                        self._set_style(self.info_label, "color: green; font-size: 10px;")
                 else:
                     self.info_label.setText("Monitoring active")
-                    self.info_label.setStyleSheet("color: gray; font-size: 10px;")
+                    self._set_style(self.info_label, "color: gray; font-size: 10px;")
 
             # Update stats from metrics collector
             if self.metrics_collector:
@@ -204,16 +294,36 @@ class VPNWidget(QFrame):
             else:
                 self.stats_label.setText("")
         else:
-            self.status_indicator.setStyleSheet("color: gray; font-size: 16px;")
-            self.status_label.setText("Disconnected")
+            recovering = self._recovery_status()
+            self._set_style(
+                self.status_indicator,
+                "color: orange; font-size: 16px;" if recovering
+                else "color: gray; font-size: 16px;"
+            )
+            self.status_label.setText("Reconnecting" if recovering else "Disconnected")
             self.connect_btn.setEnabled(True)
             self.disconnect_btn.setEnabled(False)
             self.bounce_btn.setEnabled(False)
             self.details_btn.setEnabled(False)
-            self.info_label.setText("")
+            # Surface auto-recovery so a down VPN reads as "being worked on"
+            # rather than silently idle.
+            self.info_label.setText(recovering or "")
+            self._set_style(self.info_label, "color: orange; font-size: 10px;")
             self.stats_label.setText("")
             self._connected_since = None
             self.connection_time_label.setText("")
+
+    def _recovery_status(self) -> str:
+        """Describe an in-progress auto-recovery, or '' when not recovering."""
+        if not self.monitor_thread:
+            return ""
+        status = self.monitor_thread.get_vpn_status(self.vpn_name)
+        if status.get('state') != 'recovering':
+            return ""
+        attempts = status.get('recovery_attempts', 0)
+        if attempts:
+            return f"↻ Auto-reconnecting (attempt {attempts + 1})"
+        return "↻ Auto-reconnecting"
 
     def update_connection_time(self):
         """Update the connection time counter display (DD:HH:MM:SS)."""
@@ -271,6 +381,10 @@ class VPNWidget(QFrame):
     def on_disconnect(self):
         """Handle disconnect button click"""
         logger.info(f"Disconnecting from {self.vpn_name}")
+        # Tell the monitor this is deliberate before the VPN actually goes down,
+        # so auto-recovery does not race the user and bring it straight back up.
+        if self.monitor_thread:
+            self.monitor_thread.notify_user_disconnected(self.vpn_name)
         self.vpn_manager.disconnect_vpn(self.vpn_name)
         self.config_manager.remove_restore_vpn(self.vpn_name)
         self.update_status()

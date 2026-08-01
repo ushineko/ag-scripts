@@ -2,7 +2,7 @@
 
 > **Ticket**: No associated ticket — this is a personal public repo with no issue tracker (per project `.claude/CLAUDE.md`).
 
-**Status: INCOMPLETE**
+**Status: COMPLETE**
 
 ## Context
 
@@ -33,17 +33,19 @@ Make the monitor treat an **enabled VPN that is unexpectedly disconnected** as a
 
 ## Acceptance Criteria
 
-- [ ] A new or extended `MonitorState` distinguishes "down / recovering" from `IDLE` and `DISABLED`.
-- [ ] On a tick, an enabled VPN reported not-connected (and not user-disconnected) transitions to the recovering state and triggers a connect attempt, instead of returning silently in `IDLE` (`monitor.py:199-201`).
-- [ ] `_on_bounce_done` failure path schedules the next recovery attempt (backoff) instead of only logging (`monitor.py:313-315`).
-- [ ] Recovery uses bounded exponential backoff with a configurable cap; the backoff interval is logged on each attempt so the gap is observable in the journal (no silent stalls).
-- [ ] A connectivity-driven down/recovering state does not increment toward `failure_threshold` and never calls `_disconnect_and_disable`.
-- [ ] A successful reconnect resets the backoff counter and restores the connected → grace → monitoring flow.
-- [ ] Config exposes an auto-recovery toggle (default enabled) honored by the monitor; documented in README monitor settings.
-- [ ] A user-initiated disconnect (via the tray/GUI) suppresses auto-recovery for that VPN until the user reconnects or re-enables it — the monitor must not fight a deliberate manual disconnect. (See Risks & Assumptions for the chosen mechanism.)
-- [ ] `tests/test_monitor_controller.py` gains coverage for: (a) enabled-but-down VPN → reconnect attempt; (b) repeated failed reconnects follow backoff (interval grows, capped); (c) successful reconnect resets backoff; (d) outage-down does not disable the VPN; (e) user-disconnected VPN is not auto-reconnected. Async/backend primitives are faked at the existing seams (fake `QProcess`/backend), consistent with spec 009.
-- [ ] All existing tests across the suite continue to pass; `pytest tests/` is clean.
-- [ ] **Manual end-to-end verification** (documented in the validation report, not CI — a real tunnel cannot run in CI): with `infra_pc` connected, manually disconnect it (`nmcli connection down infra_pc`) and confirm the monitor auto-reconnects it within the backoff window, restoring the internal `git.attackiq.com` (`100.80.0.0/12`) resolution. This exercises the real NetworkManager/openvpn3 downstream that the unit tests fake.
+- [x] A new or extended `MonitorState` distinguishes "down / recovering" from `IDLE` and `DISABLED`. — `MonitorState.RECOVERING` (`monitor.py`).
+- [x] On a tick, an enabled VPN reported not-connected (and not user-disconnected) transitions to the recovering state and triggers a connect attempt, instead of returning silently in `IDLE` (`monitor.py:199-201`). — `_on_is_active` now calls `_handle_down()`.
+- [x] `_on_bounce_done` failure path schedules the next recovery attempt (backoff) instead of only logging (`monitor.py:313-315`). — failure path calls `_schedule_recovery_retry()`.
+- [x] Recovery uses bounded exponential backoff with a configurable cap; the backoff interval is logged on each attempt so the gap is observable in the journal (no silent stalls). — `_recovery_delay_seconds()` / `_schedule_recovery_retry()`; exponent capped at 30 so a long outage cannot build an unbounded int.
+- [x] A connectivity-driven down/recovering state does not increment toward `failure_threshold` and never calls `_disconnect_and_disable`. — `_handle_down()` returns before the assert session; covered by `test_outage_does_not_increment_failure_count` and `test_outage_never_disables_the_vpn`.
+- [x] A successful reconnect resets the backoff counter and restores the connected → grace → monitoring flow. — `_on_recovery_done()` success path.
+- [x] Config exposes an auto-recovery toggle (default enabled) honored by the monitor; documented in README monitor settings. — `monitor.auto_recovery` (global) and per-VPN `auto_recovery`; Settings dialog checkbox + max-interval spinbox; README "Monitor Settings" table.
+- [x] Recovery is scoped to tunnels the monitor has observed connected: a VPN already down at startup is never auto-connected. The suppression flag is in-memory, so without this a restart would connect every configured-and-enabled VPN that happened to be down — the monitor picking connections for the user. Covered by `TestRecoveryOnlyRestoresWhatWasUp`. (Refinement of requirement 1's "not user-initiated" for the cold-start case, found while reinstalling over the running instance.)
+- [x] A user-initiated disconnect (via the tray/GUI) suppresses auto-recovery for that VPN until the user reconnects or re-enables it — the monitor must not fight a deliberate manual disconnect. — implemented as the per-VPN suppression flag proposed in Risks & Assumptions (`notify_user_disconnected()` / `_user_disconnected`), cleared by `reset_vpn_state()` and by observing the VPN connected.
+- [x] `tests/test_monitor_controller.py` gains coverage for: (a) enabled-but-down VPN → reconnect attempt; (b) repeated failed reconnects follow backoff (interval grows, capped); (c) successful reconnect resets backoff; (d) outage-down does not disable the VPN; (e) user-disconnected VPN is not auto-reconnected. — `TestAutoRecovery` (18 tests) using the spec 009 fake-op seams, plus a new `FakeConnectOp`.
+- [x] All existing tests across the suite continue to pass; `pytest tests/` is clean. — 239 passed. `test_sets_idle_when_not_connected` was rewritten to the new contract (down → RECOVERING) and re-added as `test_sets_idle_when_not_connected_and_recovery_disabled` for the opt-out path.
+- [x] **Manual end-to-end verification** (documented in the validation report, not CI — a real tunnel cannot run in CI): with `infra_pc` connected, manually disconnect it (`nmcli connection down infra_pc`) and confirm the monitor auto-reconnects it within the backoff window, restoring the internal `git.attackiq.com` (`100.80.0.0/12`) resolution. This exercises the real NetworkManager/openvpn3 downstream that the unit tests fake.
+  - **PASSED** 2026-07-31 17:52, run attended with the user's approval. Dropped `infra_pc` via `nmcli connection down infra_pc`; the monitor logged "VPN is down, starting auto-recovery" at 17:52:30 (within one 30s check interval), reconnected on attempt 1 at 17:52:32, `git.attackiq.com` returned to `100.x`, and assert cycles resumed at 17:53:00.
 
 ## Risks & Assumptions
 
@@ -67,8 +69,32 @@ Make the monitor treat an **enabled VPN that is unexpectedly disconnected** as a
 - The GUI/tray should reflect the recovering state (existing `status_changed` signal) so a down/recovering VPN is visible rather than silently idle.
 - Version bump (currently 4.3) + README monitor-settings + changelog update belong to the finalization pass, not this spec draft.
 
+## Manual E2E (completed 2026-07-31)
+
+Procedure used, for future re-verification:
+
+```bash
+cd ~/git/ag-scripts/vpn-toggle && ./install.sh   # installs v4.4.0, restarts the app
+nmcli connection down infra_pc                   # simulate the outage
+journalctl --user -u vpn-toggle -f               # expect: "VPN is down, starting auto-recovery"
+getent hosts git.attackiq.com                    # expect a 100.x answer once recovered
+```
+
+Also worth exercising while attended: disconnect `infra_pc` from the GUI button
+and confirm the monitor does **not** bring it back (manual-disconnect
+suppression), then reconnect and confirm auto-recovery is armed again.
+
 ## Executive Summary
 
-<!-- POPULATE LAST, at PR time (Phase 6.5). -->
+The monitor now treats an enabled-but-disconnected VPN as a recoverable
+condition rather than ignoring it. `_on_is_active`'s not-connected branch enters
+a new `RECOVERING` state and reconnects under bounded exponential backoff, and
+`_on_bounce_done`'s failure path schedules the next attempt instead of only
+logging — the two gaps that combined to orphan `infra_pc` down for ~15 hours on
+2026-06-16. Outage recovery stays distinct from assert-failure disabling (an
+outage never trips `failure_threshold`), and a manual disconnect suppresses
+recovery so the monitor never fights the user. Reviewers should look first at
+`_handle_down()` / `_on_recovery_done()` in `monitor.py` and at the
+suppression-flag lifecycle (`notify_user_disconnected` → `reset_vpn_state`).
 
-## Status: INCOMPLETE
+## Status: COMPLETE

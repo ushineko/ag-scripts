@@ -19,7 +19,12 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "check_interval_seconds": 120,
         "grace_period_seconds": 15,
-        "failure_threshold": 3
+        "failure_threshold": 3,
+        # Auto-recovery of a fully-down VPN (spec 010). Per-VPN configs may
+        # override "auto_recovery"; the backoff settings are global.
+        "auto_recovery": True,
+        "recovery_backoff_initial_seconds": 30,
+        "recovery_backoff_max_seconds": 600
     },
     "vpns": [],
     "window": {

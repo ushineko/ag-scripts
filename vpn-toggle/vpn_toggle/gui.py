@@ -54,13 +54,20 @@ class VPNToggleMainWindow(QMainWindow):
         self.restore_geometry()
         self._restore_vpn_connections()
 
+        # In-flight activeness probes for the periodic sweep, keyed by vpn_name.
+        # Strong references keep the QProcess-backed ops alive until they finish.
+        self._status_probes: dict = {}
+
         # Setup status update timer
-        self.status_timer = QTimer()
+        self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.update_all_vpn_status)
         self.status_timer.start(5000)
 
-        # 1-second timer for real-time connection time counters
-        self.connection_time_timer = QTimer()
+        # 1-second timer for real-time connection time counters.
+        # PreciseTimer: Qt's default CoarseTimer may drift the interval by up to
+        # 5%, which makes the seconds digit visibly stall and then skip.
+        self.connection_time_timer = QTimer(self)
+        self.connection_time_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.connection_time_timer.timeout.connect(self._update_connection_times)
         self.connection_time_timer.start(1000)
 
@@ -369,10 +376,45 @@ class VPNToggleMainWindow(QMainWindow):
             widget.update_connection_time()
 
     def update_all_vpn_status(self):
-        """Update status for all VPN widgets"""
-        for widget in self.vpn_widgets.values():
-            widget.update_status()
-        self.tray.update_tooltip(self.vpn_widgets)
+        """Refresh every VPN card from a single async activeness sweep.
+
+        Each VPN is probed once, off the GUI thread, and the result feeds both
+        the card and the tray tooltip. The previous implementation ran one
+        blocking nmcli/openvpn3 call per card and then a second round for the
+        tooltip — measured at ~100ms of frozen event loop every 5s, which
+        stalled the 1s connection-time counter.
+        """
+        for vpn_name, widget in self.vpn_widgets.items():
+            if vpn_name in self._status_probes:
+                # Previous probe for this VPN is still running; skip this round.
+                continue
+            op = self.vpn_manager.is_vpn_active_async(vpn_name, parent=self)
+            self._status_probes[vpn_name] = op
+            op.finished.connect(
+                lambda active, _n=vpn_name: self._on_status_probe(_n, active)
+            )
+            op.start()
+
+    def _on_status_probe(self, vpn_name: str, is_active: bool):
+        """Apply one async activeness result to its card and refresh the tooltip."""
+        op = self._status_probes.pop(vpn_name, None)
+        probe_ok = True
+        if op is not None:
+            # Backends set probe_ok=False when the command itself failed, so a
+            # transient nmcli/openvpn3 error is not mistaken for a disconnect.
+            probe_ok = getattr(op, 'probe_ok', True)
+            op.deleteLater()
+
+        widget = self.vpn_widgets.get(vpn_name)
+        if widget is None:
+            return
+        widget.apply_status(is_active, probe_ok=probe_ok)
+
+        if not self._status_probes:
+            active_count = sum(
+                1 for w in self.vpn_widgets.values() if w.is_active
+            )
+            self.tray.update_tooltip(self.vpn_widgets, active_count=active_count)
 
     def append_log(self, message: str):
         """Append message to activity log, pruning oldest lines beyond MAX_LOG_LINES"""

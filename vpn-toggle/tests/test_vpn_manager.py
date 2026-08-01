@@ -290,3 +290,82 @@ class TestVPNManagerFacade:
 
         manager.connect_vpn('aiqlabs')
         mock_ov3.connect_vpn.assert_called_once_with('aiqlabs', auth_timeout=90)
+
+
+class TestActivenessProbeOk:
+    """Activeness ops must distinguish "VPN is down" from "the probe broke".
+
+    Both emit finished(False); only the probe_ok flag tells them apart, and the
+    GUI needs that to avoid rendering an nmcli hiccup as a disconnect.
+    """
+
+    def test_nm_probe_ok_true_when_command_succeeds(self):
+        from vpn_toggle.backends.nm import _NmActiveCheckOp
+        op = _NmActiveCheckOp('infra_pc')
+        results = []
+        op.finished.connect(results.append)
+
+        op._emit(True, "infra_pc  uuid  vpn  eno2\n")
+
+        assert op.probe_ok is True
+        assert results == [True]
+
+    def test_nm_probe_ok_true_when_vpn_genuinely_absent(self):
+        from vpn_toggle.backends.nm import _NmActiveCheckOp
+        op = _NmActiveCheckOp('infra_pc')
+        results = []
+        op.finished.connect(results.append)
+
+        op._emit(True, "Wired connection 1  uuid  ethernet  eno2\n")
+
+        assert op.probe_ok is True
+        assert results == [False]
+
+    def test_nm_probe_ok_false_when_command_fails(self):
+        from vpn_toggle.backends.nm import _NmActiveCheckOp
+        op = _NmActiveCheckOp('infra_pc')
+        results = []
+        op.finished.connect(results.append)
+
+        op._emit(False, "Command timed out after 30s")
+
+        assert op.probe_ok is False
+        assert results == [False]
+
+    def test_ov3_probe_ok_false_when_command_fails(self):
+        from vpn_toggle.backends.openvpn3 import _Ov3IsActiveOp
+        op = _Ov3IsActiveOp('aiqlabs')
+        results = []
+        op.finished.connect(results.append)
+
+        op._on_list(False, "Command timed out after 30s")
+
+        assert op.probe_ok is False
+        assert results == [False]
+
+    def test_ov3_probe_ok_true_when_no_sessions(self):
+        """"No sessions available" is a real answer, not a probe failure."""
+        from vpn_toggle.backends.openvpn3 import _Ov3IsActiveOp
+        op = _Ov3IsActiveOp('aiqlabs')
+        results = []
+        op.finished.connect(results.append)
+
+        op._on_list(True, "No sessions available")
+
+        assert op.probe_ok is True
+        assert results == [False]
+
+    def test_ov3_probe_ok_true_when_connected(self):
+        from vpn_toggle.backends.openvpn3 import _Ov3IsActiveOp
+        op = _Ov3IsActiveOp('aiqlabs')
+        results = []
+        op.finished.connect(results.append)
+
+        op._on_list(True,
+                    "        Path: /net/openvpn/v3/sessions/abc\n"
+                    "     Created: 2026-03-27 12:53:06\n"
+                    " Config name: aiqlabs\n"
+                    "      Status: Connection, Client connected\n")
+
+        assert op.probe_ok is True
+        assert results == [True]

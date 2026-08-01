@@ -91,14 +91,20 @@ class TrayManager:
         if self._show_action:
             self._show_action.setText("Hide" if visible else "Show")
 
-    def update_tooltip(self, vpn_widgets: dict):
-        """Update the tray icon tooltip with current active VPN count."""
+    def update_tooltip(self, vpn_widgets: dict, active_count: Optional[int] = None):
+        """Update the tray icon tooltip with the current active VPN count.
+
+        `active_count` lets the caller pass a count it has already determined,
+        avoiding a second round of blocking `is_vpn_active` calls for VPNs the
+        status sweep just probed.
+        """
         if not self._available:
             return
-        active_count = sum(
-            1 for w in vpn_widgets.values()
-            if self.vpn_manager.is_vpn_active(w.vpn_name)
-        )
+        if active_count is None:
+            active_count = sum(
+                1 for w in vpn_widgets.values()
+                if self.vpn_manager.is_vpn_active(w.vpn_name)
+            )
         self.tray_icon.setToolTip(f"VPN Monitor - {active_count} VPN(s) active")
 
     def hide(self):

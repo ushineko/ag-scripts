@@ -298,9 +298,16 @@ class _NmActiveCheckOp(_NmCmdOp):
     def __init__(self, vpn_name: str, parent: Optional[QObject] = None):
         super().__init__(['connection', 'show', '--active'], parent=parent)
         self._vpn_name = vpn_name
+        # False once the nmcli invocation itself fails (error or timeout).
+        # Callers read this to tell "probe broke" from "VPN is down"; without it
+        # a transient nmcli failure reads as a disconnect.
+        self.probe_ok: bool = True
 
     def _emit(self, success: bool, output: str) -> None:
+        self.probe_ok = success
         if not success:
+            logger.warning(
+                f"Activeness probe for {self._vpn_name} failed: {output}")
             self.finished.emit(False)
             return
         active = any(self._vpn_name in line for line in output.split('\n'))

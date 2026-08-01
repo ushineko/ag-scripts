@@ -2,6 +2,7 @@
 Tests for OpenVPN3Backend
 """
 import pytest
+from datetime import datetime
 from unittest.mock import patch, MagicMock
 from vpn_toggle.backends.openvpn3 import OpenVPN3Backend
 
@@ -257,3 +258,57 @@ class TestOpenVPN3Backend:
         assert sessions[0]['status'] == 'Client connected'
         assert sessions[1]['path'] == '/net/openvpn/v3/sessions/def456'
         assert sessions[1]['status'] == 'Web authentication required to connect'
+
+
+class TestSessionCreatedTimestamp:
+    """Session start time must come from the backend, not from `datetime.now()`.
+
+    Returning None here makes the GUI stamp `_connected_since = datetime.now()`,
+    so the connection-time counter restarts at 00:00:00:00 whenever the card is
+    re-rendered from a cleared state.
+    """
+
+    @pytest.fixture
+    def backend(self):
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='/usr/bin/openvpn3\n')
+            return OpenVPN3Backend()
+
+    def test_parse_sessions_extracts_created(self, backend):
+        sessions = backend._parse_sessions(SESSIONS_CONNECTED)
+        assert sessions[0]['created'] == datetime(2026, 3, 27, 12, 53, 6)
+
+    def test_parse_sessions_created_with_trailing_pid_column(self, backend):
+        output = (
+            "        Path: /net/openvpn/v3/sessions/abc123\n"
+            "     Created: Fri Mar 27 12:53:06 2026                  PID: 21455\n"
+            "       Owner: user                                   Device: tun0\n"
+            " Config name: aiqlabs\n"
+            "      Status: Connection, Client connected\n"
+        )
+        sessions = backend._parse_sessions(output)
+        assert sessions[0]['created'] == datetime(2026, 3, 27, 12, 53, 6)
+        assert sessions[0]['device'] == 'tun0'
+
+    def test_parse_sessions_unknown_created_format_is_none(self, backend):
+        output = (
+            "        Path: /net/openvpn/v3/sessions/abc123\n"
+            "     Created: sometime last Tuesday\n"
+            " Config name: aiqlabs\n"
+            "      Status: Connection, Client connected\n"
+        )
+        sessions = backend._parse_sessions(output)
+        assert sessions[0]['created'] is None
+        # Parsing must still yield a usable session record.
+        assert sessions[0]['status'] == 'Connection, Client connected'
+
+    @patch('subprocess.run')
+    def test_get_connection_timestamp_returns_session_created(self, mock_run, backend):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=SESSIONS_CONNECTED, stderr='')
+        assert backend.get_connection_timestamp('aiqlabs') == datetime(2026, 3, 27, 12, 53, 6)
+
+    @patch('subprocess.run')
+    def test_get_connection_timestamp_none_without_session(self, mock_run, backend):
+        mock_run.return_value = MagicMock(returncode=0, stdout=NO_SESSIONS, stderr='')
+        assert backend.get_connection_timestamp('aiqlabs') is None

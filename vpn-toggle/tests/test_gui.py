@@ -468,3 +468,274 @@ class TestTrayIcon:
     def test_icon_path_defaults_to_none(self, main_window):
         """icon_path defaults to None when not provided."""
         assert main_window._icon_path is None
+
+
+class TestStatusProbeResilience:
+    """A failed backend probe must not be rendered as a disconnect.
+
+    `is_vpn_active` returns plain False both when the VPN is genuinely down and
+    when nmcli/openvpn3 itself errored or timed out. Treating the latter as a
+    disconnect blanks the card and drops `_connected_since`, so the connection
+    timer restarts from zero on the next good probe.
+    """
+
+    @pytest.fixture
+    def vpn_widget(self, qapp, config_manager):
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='/usr/bin/nmcli\n')
+            from vpn_toggle.vpn_manager import VPNManager
+            vm = VPNManager()
+        with patch.object(vm, 'is_vpn_active', return_value=False):
+            with patch.object(vm, 'get_connection_timestamp', return_value=None):
+                return VPNWidget("test-vpn", "Test VPN", vm, config_manager)
+
+    def _connect(self, widget, since):
+        widget._connected_since = since
+        widget.is_active = True
+        widget.update_connection_time()
+
+    def test_failed_probe_keeps_connected_since(self, vpn_widget):
+        since = datetime.now() - timedelta(hours=3)
+        self._connect(vpn_widget, since)
+        before = vpn_widget.connection_time_label.text()
+
+        vpn_widget.apply_status(False, probe_ok=False)
+
+        assert vpn_widget._connected_since == since
+        assert vpn_widget.connection_time_label.text() == before
+        assert vpn_widget.is_active is True
+
+    def test_confirmed_disconnect_clears_connected_since(self, vpn_widget):
+        self._connect(vpn_widget, datetime.now() - timedelta(hours=3))
+
+        vpn_widget.apply_status(False, probe_ok=True)
+
+        assert vpn_widget._connected_since is None
+        assert vpn_widget.connection_time_label.text() == ""
+        assert vpn_widget.is_active is False
+
+    def test_uptime_survives_a_failed_probe_between_good_ones(self, vpn_widget):
+        """The counter must keep counting from the original connect time."""
+        since = datetime.now() - timedelta(hours=3)
+        self._connect(vpn_widget, since)
+
+        vpn_widget.apply_status(False, probe_ok=False)
+        with patch.object(vpn_widget.vpn_manager, 'get_connection_timestamp',
+                          return_value=None):
+            vpn_widget.apply_status(True, probe_ok=True)
+
+        assert vpn_widget._connected_since == since
+        assert vpn_widget.connection_time_label.text().startswith("00:03:")
+
+
+class TestAsyncStatusSweep:
+    """The 5s status sweep must not block the GUI thread.
+
+    It previously ran one blocking is_vpn_active per card and then a second
+    round for the tray tooltip — measured at ~100ms of frozen event loop every
+    5s, which stalled the 1s connection-time counter.
+    """
+
+    @pytest.fixture
+    def window(self, qapp, config_manager, vpn_manager):
+        vpns = [MagicMock(name='vpn', connection_type='vpn')]
+        vpns[0].name = 'test-vpn'
+        with patch.object(vpn_manager, 'list_vpns', return_value=vpns):
+            with patch.object(vpn_manager, 'is_vpn_active', return_value=False):
+                with patch.object(vpn_manager, 'get_connection_timestamp',
+                                  return_value=None):
+                    w = VPNToggleMainWindow(config_manager, vpn_manager)
+        yield w
+        w.close()
+
+    def test_sweep_uses_async_probe_not_blocking_call(self, window):
+        op = MagicMock()
+        with patch.object(window.vpn_manager, 'is_vpn_active') as sync_probe:
+            with patch.object(window.vpn_manager, 'is_vpn_active_async',
+                              return_value=op) as async_probe:
+                window.update_all_vpn_status()
+
+        async_probe.assert_called_once()
+        op.start.assert_called_once()
+        sync_probe.assert_not_called()
+
+    def test_sweep_skips_vpn_with_probe_still_in_flight(self, window):
+        op = MagicMock()
+        with patch.object(window.vpn_manager, 'is_vpn_active_async',
+                          return_value=op) as async_probe:
+            window.update_all_vpn_status()
+            window.update_all_vpn_status()
+
+        assert async_probe.call_count == 1
+
+    def test_tooltip_uses_swept_result_without_reprobing(self, window):
+        widget = window.vpn_widgets['test-vpn']
+        widget.is_active = True
+        window._status_probes['test-vpn'] = None
+
+        with patch.object(window.vpn_manager, 'is_vpn_active') as sync_probe:
+            with patch.object(window.tray, 'update_tooltip') as tooltip:
+                with patch.object(widget, 'apply_status'):
+                    window._on_status_probe('test-vpn', True)
+
+        sync_probe.assert_not_called()
+        assert tooltip.call_args.kwargs['active_count'] == 1
+
+    def test_probe_failure_is_forwarded_to_the_card(self, window):
+        widget = window.vpn_widgets['test-vpn']
+        op = MagicMock()
+        op.probe_ok = False
+        window._status_probes['test-vpn'] = op
+
+        with patch.object(widget, 'apply_status') as apply_status:
+            window._on_status_probe('test-vpn', False)
+
+        apply_status.assert_called_once_with(False, probe_ok=False)
+
+
+class TestConnectionTimerPrecision:
+    """Qt's default CoarseTimer drifts the 1s interval by up to 5%, which makes
+    the seconds digit visibly stall and then skip."""
+
+    def test_connection_time_timer_is_precise(self, main_window):
+        from PyQt6.QtCore import Qt
+        assert main_window.connection_time_timer.timerType() == Qt.TimerType.PreciseTimer
+        assert main_window.connection_time_timer.interval() == 1000
+
+
+class TestAutoRecoverySettings:
+    """The auto-recovery toggle must reach the monitor via config."""
+
+    def test_settings_dialog_defaults_to_enabled(self, qapp, config_manager):
+        dialog = SettingsDialog(config_manager)
+        assert dialog.auto_recovery_checkbox.isChecked() is True
+        assert dialog.get_settings()['auto_recovery'] is True
+
+    def test_settings_dialog_roundtrips_toggle(self, qapp, config_manager):
+        dialog = SettingsDialog(config_manager)
+        dialog.auto_recovery_checkbox.setChecked(False)
+        dialog.backoff_max_spinbox.setValue(300)
+
+        settings = dialog.get_settings()
+        assert settings['auto_recovery'] is False
+        assert settings['recovery_backoff_max_seconds'] == 300
+
+        config_manager.update_monitor_settings(**settings)
+        stored = config_manager.get_monitor_settings()
+        assert stored['auto_recovery'] is False
+        assert stored['recovery_backoff_max_seconds'] == 300
+
+    def test_backoff_field_disabled_when_recovery_off(self, qapp, config_manager):
+        dialog = SettingsDialog(config_manager)
+        dialog.auto_recovery_checkbox.setChecked(False)
+        assert dialog.backoff_max_spinbox.isEnabled() is False
+
+
+class TestRecoveringCardDisplay:
+    """A down VPN under auto-recovery must not look silently idle."""
+
+    @pytest.fixture
+    def vpn_widget(self, qapp, config_manager):
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='/usr/bin/nmcli\n')
+            from vpn_toggle.vpn_manager import VPNManager
+            vm = VPNManager()
+        with patch.object(vm, 'is_vpn_active', return_value=False):
+            with patch.object(vm, 'get_connection_timestamp', return_value=None):
+                return VPNWidget("test-vpn", "Test VPN", vm, config_manager)
+
+    def test_down_card_shows_reconnecting_while_recovering(self, vpn_widget):
+        vpn_widget.monitor_thread = MagicMock()
+        vpn_widget.monitor_thread.get_vpn_status.return_value = {
+            'state': 'recovering', 'failure_count': 0, 'last_check': None,
+            'connection_time': None, 'recovery_attempts': 2,
+        }
+
+        vpn_widget.apply_status(False)
+
+        assert vpn_widget.status_label.text() == "Reconnecting"
+        assert "attempt 3" in vpn_widget.info_label.text()
+
+    def test_down_card_shows_disconnected_when_not_recovering(self, vpn_widget):
+        vpn_widget.monitor_thread = MagicMock()
+        vpn_widget.monitor_thread.get_vpn_status.return_value = {
+            'state': 'idle', 'failure_count': 0, 'last_check': None,
+            'connection_time': None, 'recovery_attempts': 0,
+        }
+
+        vpn_widget.apply_status(False)
+
+        assert vpn_widget.status_label.text() == "Disconnected"
+        assert vpn_widget.info_label.text() == ""
+
+    def test_manual_disconnect_notifies_the_monitor(self, vpn_widget):
+        """Auto-recovery must not race the user's own disconnect."""
+        vpn_widget.monitor_thread = MagicMock()
+        vpn_widget.monitor_thread.get_vpn_status.return_value = {
+            'state': 'idle', 'failure_count': 0, 'last_check': None,
+            'connection_time': None, 'recovery_attempts': 0,
+        }
+        with patch.object(vpn_widget.vpn_manager, 'disconnect_vpn',
+                          return_value=(True, "ok")):
+            with patch.object(vpn_widget.vpn_manager, 'is_vpn_active',
+                              return_value=False):
+                vpn_widget.on_disconnect()
+
+        vpn_widget.monitor_thread.notify_user_disconnected.assert_called_once_with(
+            'test-vpn')
+
+
+class TestCounterRenderStability:
+    """The uptime counter is the only label that repaints every second, so its
+    paint rect and font must not vary between ticks.
+
+    This host runs every output at 1.5x fractional scaling, where a stylesheet
+    `font-size: 10px` (a device-independent pixel size) rasterises badly.
+    """
+
+    @pytest.fixture
+    def vpn_widget(self, qapp, config_manager):
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='/usr/bin/nmcli\n')
+            from vpn_toggle.vpn_manager import VPNManager
+            vm = VPNManager()
+        with patch.object(vm, 'is_vpn_active', return_value=False):
+            with patch.object(vm, 'get_connection_timestamp', return_value=None):
+                return VPNWidget("test-vpn", "Test VPN", vm, config_manager)
+
+    def test_counter_font_is_point_sized_not_pixel_sized(self, vpn_widget):
+        font = vpn_widget.connection_time_label.font()
+        assert font.pointSizeF() > 0, "a px-sized font does not survive fractional scaling"
+        assert font.pixelSize() == -1
+
+    def test_counter_digits_are_equal_width(self, vpn_widget):
+        fm = vpn_widget.connection_time_label.fontMetrics()
+        advances = {fm.horizontalAdvance(d) for d in "0123456789"}
+        assert len(advances) == 1, "proportional digits resize the label every tick"
+
+    def test_counter_width_is_fixed_across_values(self, vpn_widget):
+        label = vpn_widget.connection_time_label
+        widths = set()
+        for value in ("00:00:00:00", "22:22:22:22", "01:22:33:44", "99:23:59:59"):
+            label.setText(value)
+            widths.add(label.width())
+        assert len(widths) == 1
+
+    def test_counter_has_an_opaque_background(self, vpn_widget):
+        """Without an opaque rect the previous second's glyphs composite through
+        the new ones under fractional scaling, rendering the counter doubled.
+
+        Note this must be done via the stylesheet: Qt ignores
+        setAutoFillBackground() once a stylesheet is set on the widget.
+        """
+        sheet = vpn_widget.connection_time_label.styleSheet()
+        assert "background-color" in sheet, sheet
+        # And the colour must be a real one, not "transparent"/empty.
+        from PyQt6.QtGui import QColor
+        value = sheet.split("background-color:")[1].split(";")[0].strip()
+        assert QColor(value).isValid() and QColor(value).alpha() == 255, value
+
+    def test_counter_is_plain_text(self, vpn_widget):
+        from PyQt6.QtCore import Qt
+        assert (vpn_widget.connection_time_label.textFormat()
+                == Qt.TextFormat.PlainText)

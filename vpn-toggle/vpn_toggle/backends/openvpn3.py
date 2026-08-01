@@ -142,33 +142,9 @@ class OpenVPN3Backend(VPNBackend):
         """
         Parse openvpn3 sessions-list output into a list of session dicts.
 
-        Each dict has keys: path, config_name, status, device
+        Each dict may have keys: path, config_name, status, device, created.
         """
-        sessions = []
-        current = {}
-        for line in output.split('\n'):
-            path_match = re.match(r'\s*Path:\s*(.+)', line)
-            if path_match:
-                if current:
-                    sessions.append(current)
-                current = {'path': path_match.group(1).strip()}
-
-            config_match = re.match(r'\s*Config name:\s*(.+)', line)
-            if config_match and current:
-                current['config_name'] = config_match.group(1).strip()
-
-            status_match = re.match(r'\s*Status:\s*(.+)', line)
-            if status_match and current:
-                current['status'] = status_match.group(1).strip()
-
-            # Device is on the same line as Owner: "Owner: user   Device: tun1"
-            dev_match = re.search(r'Device:\s*(\S+)', line)
-            if dev_match and current:
-                current['device'] = dev_match.group(1).strip()
-
-        if current:
-            sessions.append(current)
-        return sessions
+        return _parse_sessions_output(output)
 
     def _get_sessions_for_config(self, config_name: str) -> list:
         """Get all sessions matching a config name."""
@@ -386,8 +362,16 @@ class OpenVPN3Backend(VPNBackend):
                 continue
 
     def get_connection_timestamp(self, vpn_name: str) -> Optional[datetime]:
-        # OpenVPN3 CLI doesn't expose session start time directly
-        return None
+        """Session start time, from the `Created:` field of sessions-list.
+
+        Returning None here makes the GUI fall back to `datetime.now()`, which
+        restarts the displayed uptime from zero every time the card is
+        re-rendered from a fresh state — so a real timestamp matters.
+        """
+        sessions = self._get_sessions_for_config(vpn_name)
+        if not sessions:
+            return None
+        return sessions[0].get('created')
 
     # -- Async variants (used by MonitorController) --
 
@@ -469,8 +453,35 @@ class _Ov3CmdOp(QObject):
         self.finished.emit(False, f"Command timed out after {self._timeout_ms // 1000}s")
 
 
+# Candidate formats for the `Created:` field of `openvpn3 sessions-list`.
+# openvpn3-linux renders it in asctime style; the others are accepted so a
+# build that formats it differently still yields a real connect time rather
+# than silently falling back to "now".
+_CREATED_FORMATS = (
+    "%a %b %d %H:%M:%S %Y",
+    "%a %b  %d %H:%M:%S %Y",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+)
+
+
+def _parse_created(value: str) -> Optional[datetime]:
+    """Parse a sessions-list `Created:` value, or None if no format matches."""
+    value = value.strip()
+    for fmt in _CREATED_FORMATS:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    logger.debug(f"Unrecognised openvpn3 Created timestamp: {value!r}")
+    return None
+
+
 def _parse_sessions_output(output: str) -> list:
-    """Stand-alone copy of OpenVPN3Backend._parse_sessions for async use."""
+    """Parse `openvpn3 sessions-list` output into a list of session dicts.
+
+    Each dict may carry: path, config_name, status, device, created.
+    """
     sessions = []
     current: dict = {}
     for line in output.split('\n'):
@@ -479,6 +490,10 @@ def _parse_sessions_output(output: str) -> list:
             if current:
                 sessions.append(current)
             current = {'path': path_match.group(1).strip()}
+        # "Created: <date>" may share its line with a trailing "PID: nnnn" column.
+        created_match = re.match(r'\s*Created:\s*(.+?)(?:\s\s+PID:.*)?\s*$', line)
+        if created_match and current:
+            current['created'] = _parse_created(created_match.group(1))
         cfg_match = re.match(r'\s*Config name:\s*(.+)', line)
         if cfg_match and current:
             current['config_name'] = cfg_match.group(1).strip()
@@ -502,6 +517,9 @@ class _Ov3IsActiveOp(QObject):
         super().__init__(parent)
         self._vpn_name = vpn_name
         self._list_op: Optional[_Ov3CmdOp] = None
+        # False once the openvpn3 invocation itself fails. "No sessions
+        # available" is a real answer, not a probe failure.
+        self.probe_ok: bool = True
 
     def start(self) -> None:
         self._list_op = _run_ov3_async(['sessions-list'], parent=self)
@@ -509,7 +527,13 @@ class _Ov3IsActiveOp(QObject):
         self._list_op.start()
 
     def _on_list(self, success: bool, output: str) -> None:
-        if not success or 'No sessions available' in output:
+        self.probe_ok = success
+        if not success:
+            logger.warning(
+                f"Activeness probe for {self._vpn_name} failed: {output}")
+            self.finished.emit(False)
+            return
+        if 'No sessions available' in output:
             self.finished.emit(False)
             return
         for s in _parse_sessions_output(output):

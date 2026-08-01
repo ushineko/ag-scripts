@@ -293,6 +293,25 @@ class SettingsDialog(QDialog):
         self.threshold_spinbox.setValue(monitor_settings.get('failure_threshold', 3))
         monitor_layout.addRow("Failure Threshold:", self.threshold_spinbox)
 
+        self.auto_recovery_checkbox = QCheckBox(
+            "Reconnect a VPN that is unexpectedly down")
+        self.auto_recovery_checkbox.setChecked(
+            monitor_settings.get('auto_recovery', True))
+        self.auto_recovery_checkbox.setToolTip(
+            "Retry with exponential backoff when a monitored VPN drops. "
+            "A manual disconnect is never overridden."
+        )
+        monitor_layout.addRow("Auto-Recovery:", self.auto_recovery_checkbox)
+
+        self.backoff_max_spinbox = QSpinBox()
+        self.backoff_max_spinbox.setRange(30, 3600)
+        self.backoff_max_spinbox.setValue(
+            monitor_settings.get('recovery_backoff_max_seconds', 600))
+        self.backoff_max_spinbox.setSuffix(" seconds")
+        self.backoff_max_spinbox.setEnabled(self.auto_recovery_checkbox.isChecked())
+        self.auto_recovery_checkbox.toggled.connect(self.backoff_max_spinbox.setEnabled)
+        monitor_layout.addRow("Max Retry Interval:", self.backoff_max_spinbox)
+
         monitor_group.setLayout(monitor_layout)
         layout.addWidget(monitor_group)
 
@@ -337,7 +356,9 @@ class SettingsDialog(QDialog):
         return {
             'check_interval_seconds': self.interval_spinbox.value(),
             'grace_period_seconds': self.grace_spinbox.value(),
-            'failure_threshold': self.threshold_spinbox.value()
+            'failure_threshold': self.threshold_spinbox.value(),
+            'auto_recovery': self.auto_recovery_checkbox.isChecked(),
+            'recovery_backoff_max_seconds': self.backoff_max_spinbox.value(),
         }
 
     def get_startup_settings(self) -> dict:

@@ -28,7 +28,14 @@ class MonitorState(Enum):
     MONITORING = "monitoring"
     GRACE_PERIOD = "grace_period"
     RECONNECTING = "reconnecting"
+    RECOVERING = "recovering"
     DISABLED = "disabled"
+
+
+# Auto-recovery defaults, used when a config predates spec 010.
+DEFAULT_AUTO_RECOVERY = True
+DEFAULT_RECOVERY_BACKOFF_INITIAL_SECONDS = 30
+DEFAULT_RECOVERY_BACKOFF_MAX_SECONDS = 600
 
 
 class MonitorController(QObject):
@@ -69,6 +76,20 @@ class MonitorController(QObject):
         self._active_bounces: Dict[str, QObject] = {}
         self._active_is_active_ops: Dict[str, QObject] = {}
 
+        # Auto-recovery of a fully-down VPN (spec 010).
+        self.recovery_attempts: Dict[str, int] = {}
+        self._active_recoveries: Dict[str, QObject] = {}
+        self._recovery_timers: Dict[str, QTimer] = {}
+        # VPNs the user deliberately took down. Auto-recovery must not fight a
+        # manual disconnect, so it stays suppressed until the user brings the
+        # VPN back up (or the monitor observes it connected again).
+        self._user_disconnected: set = set()
+        # VPNs this monitor has actually observed connected. Auto-recovery only
+        # restores a tunnel that went down on its watch — a VPN that was already
+        # down at startup is one the user chose to leave down, and connecting it
+        # on launch would be the monitor picking connections for the user.
+        self._seen_connected: set = set()
+
         self._timer = QTimer(self)
         self._timer.setSingleShot(False)
         self._timer.timeout.connect(self._tick)
@@ -96,6 +117,13 @@ class MonitorController(QObject):
         for op in list(self._active_is_active_ops.values()):
             op.deleteLater()
         self._active_is_active_ops.clear()
+        for op in list(self._active_recoveries.values()):
+            op.deleteLater()
+        self._active_recoveries.clear()
+        for timer in list(self._recovery_timers.values()):
+            timer.stop()
+            timer.deleteLater()
+        self._recovery_timers.clear()
         logger.info("Monitor thread stopped")
         self.log_message.emit("Monitor thread stopped")
 
@@ -126,6 +154,23 @@ class MonitorController(QObject):
         self.failure_counts[vpn_name] = 0
         self.connection_times[vpn_name] = datetime.now()
         self.vpn_states[vpn_name] = MonitorState.GRACE_PERIOD
+        # A user-initiated (re)connect lifts the auto-recovery suppression and
+        # makes the VPN eligible for recovery if it drops later.
+        self._seen_connected.add(vpn_name)
+        self._clear_recovery_state(vpn_name)
+
+    def notify_user_disconnected(self, vpn_name: str) -> None:
+        """Record that the user deliberately disconnected a VPN.
+
+        Auto-recovery is suppressed for it until the user reconnects, so the
+        monitor never fights a manual disconnect.
+        """
+        logger.info(f"{vpn_name}: user-initiated disconnect, auto-recovery suppressed")
+        self.log_message.emit(f"{vpn_name}: manual disconnect, auto-recovery suppressed")
+        self._user_disconnected.add(vpn_name)
+        self._cancel_pending_recovery(vpn_name)
+        self.recovery_attempts.pop(vpn_name, None)
+        self.vpn_states[vpn_name] = MonitorState.IDLE
 
     def get_vpn_status(self, vpn_name: str) -> Dict:
         """Get current status for a VPN (shape matches the old MonitorThread)."""
@@ -134,6 +179,7 @@ class MonitorController(QObject):
             'failure_count': self.failure_counts.get(vpn_name, 0),
             'last_check': self.last_check_times.get(vpn_name),
             'connection_time': self.connection_times.get(vpn_name),
+            'recovery_attempts': self.recovery_attempts.get(vpn_name, 0),
         }
 
     # -- Compatibility with the old QThread-based API --
@@ -197,8 +243,15 @@ class MonitorController(QObject):
             return
 
         if not is_connected:
-            self.vpn_states[vpn_name] = MonitorState.IDLE
+            # A VPN that should be up but is down is a recoverable condition,
+            # not something to ignore until a human notices (spec 010).
+            self._handle_down(vpn_name, vpn_config, monitor_settings)
             return
+
+        # Connected: any recovery campaign for this VPN is over, and it is now
+        # eligible for recovery if it drops later.
+        self._seen_connected.add(vpn_name)
+        self._clear_recovery_state(vpn_name)
 
         if vpn_name not in self.connection_times:
             self.connection_times[vpn_name] = datetime.now()
@@ -285,6 +338,148 @@ class MonitorController(QObject):
         self._emit_data_point(vpn_name, cycle_elapsed_ms, all_passed,
                               bounce_triggered, assert_details)
 
+    # -- Auto-recovery of a fully-down VPN (spec 010) --
+
+    def _auto_recovery_enabled(self, vpn_config: Dict, monitor_settings: Dict) -> bool:
+        """Per-VPN setting wins; otherwise fall back to the global toggle."""
+        if 'auto_recovery' in vpn_config:
+            return bool(vpn_config['auto_recovery'])
+        return bool(monitor_settings.get('auto_recovery', DEFAULT_AUTO_RECOVERY))
+
+    def _handle_down(self, vpn_name: str, vpn_config: Dict,
+                     monitor_settings: Dict) -> None:
+        """React to an enabled VPN that is reported not connected."""
+        if vpn_name in self._user_disconnected:
+            logger.debug(f"{vpn_name}: down by user request, not auto-recovering")
+            self.vpn_states[vpn_name] = MonitorState.IDLE
+            return
+
+        if vpn_name not in self._seen_connected:
+            # Never seen up on this run: the user left it down on purpose.
+            # Recovery restores tunnels that drop, it does not open new ones.
+            logger.debug(
+                f"{vpn_name}: down since startup, not auto-recovering "
+                f"(never observed connected)")
+            self.vpn_states[vpn_name] = MonitorState.IDLE
+            return
+
+        if not self._auto_recovery_enabled(vpn_config, monitor_settings):
+            logger.debug(f"{vpn_name}: down, auto-recovery disabled")
+            self.vpn_states[vpn_name] = MonitorState.IDLE
+            return
+
+        # A retry is already scheduled or running — let the backoff run its course
+        # rather than launching a fresh connect on every tick.
+        if vpn_name in self._recovery_timers or vpn_name in self._active_recoveries:
+            logger.debug(f"{vpn_name}: recovery already in progress")
+            return
+
+        # A bounce is mid-flight; its own completion path drives recovery.
+        if vpn_name in self._active_bounces:
+            return
+
+        logger.warning(f"{vpn_name}: VPN is down, starting auto-recovery")
+        self.log_message.emit(f"{vpn_name}: VPN is down, attempting to reconnect")
+        self._start_recovery(vpn_name, monitor_settings)
+
+    def _start_recovery(self, vpn_name: str, monitor_settings: Dict) -> None:
+        """Launch one reconnect attempt for a down VPN."""
+        if vpn_name in self._active_recoveries:
+            return
+        self.vpn_states[vpn_name] = MonitorState.RECOVERING
+        attempt = self.recovery_attempts.get(vpn_name, 0) + 1
+        logger.info(f"{vpn_name}: recovery attempt {attempt}")
+        self.status_changed.emit(vpn_name, "recovering")
+
+        op = self.vpn_manager.connect_vpn_async(vpn_name, parent=self)
+        self._active_recoveries[vpn_name] = op
+        op.finished.connect(
+            lambda success, message, _vn=vpn_name, _ms=monitor_settings:
+            self._on_recovery_done(_vn, success, message, _ms)
+        )
+        op.start()
+
+    def _on_recovery_done(self, vpn_name: str, success: bool, message: str,
+                          monitor_settings: Dict) -> None:
+        op = self._active_recoveries.pop(vpn_name, None)
+        if op is not None:
+            op.deleteLater()
+
+        if not self.monitoring_enabled:
+            return
+
+        if success:
+            logger.info(f"{vpn_name}: auto-recovery succeeded")
+            self.log_message.emit(f"{vpn_name}: reconnected by auto-recovery")
+            self.recovery_attempts.pop(vpn_name, None)
+            self.connection_times[vpn_name] = datetime.now()
+            self.vpn_states[vpn_name] = MonitorState.GRACE_PERIOD
+            return
+
+        # A failed recovery must schedule the next attempt, never stop trying.
+        self.recovery_attempts[vpn_name] = self.recovery_attempts.get(vpn_name, 0) + 1
+        logger.error(f"{vpn_name}: auto-recovery failed: {message}")
+        self._schedule_recovery_retry(vpn_name, monitor_settings)
+
+    def _recovery_delay_seconds(self, vpn_name: str, monitor_settings: Dict) -> int:
+        """Bounded exponential backoff: initial, 2x, 4x, … capped at the max."""
+        initial = max(1, int(monitor_settings.get(
+            'recovery_backoff_initial_seconds',
+            DEFAULT_RECOVERY_BACKOFF_INITIAL_SECONDS)))
+        maximum = max(initial, int(monitor_settings.get(
+            'recovery_backoff_max_seconds',
+            DEFAULT_RECOVERY_BACKOFF_MAX_SECONDS)))
+        attempts = max(1, self.recovery_attempts.get(vpn_name, 1))
+        # Cap the exponent before shifting so a long outage can't build a huge int.
+        exponent = min(attempts - 1, 30)
+        return min(initial * (2 ** exponent), maximum)
+
+    def _schedule_recovery_retry(self, vpn_name: str,
+                                 monitor_settings: Dict) -> None:
+        """Queue the next recovery attempt under the backoff policy."""
+        if vpn_name in self._user_disconnected:
+            return
+        self._cancel_pending_recovery(vpn_name)
+
+        delay = self._recovery_delay_seconds(vpn_name, monitor_settings)
+        attempts = self.recovery_attempts.get(vpn_name, 0)
+        # Log the interval so a long backoff is visible in the journal rather
+        # than looking like the monitor silently gave up.
+        logger.info(
+            f"{vpn_name}: next recovery attempt in {delay}s "
+            f"(failed attempts: {attempts})")
+        self.log_message.emit(
+            f"{vpn_name}: retrying connection in {delay}s (attempt {attempts + 1})")
+
+        self.vpn_states[vpn_name] = MonitorState.RECOVERING
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(
+            lambda _vn=vpn_name, _ms=monitor_settings: self._on_retry_timer(_vn, _ms)
+        )
+        self._recovery_timers[vpn_name] = timer
+        timer.start(delay * 1000)
+
+    def _on_retry_timer(self, vpn_name: str, monitor_settings: Dict) -> None:
+        timer = self._recovery_timers.pop(vpn_name, None)
+        if timer is not None:
+            timer.deleteLater()
+        if not self.monitoring_enabled or vpn_name in self._user_disconnected:
+            return
+        self._start_recovery(vpn_name, monitor_settings)
+
+    def _cancel_pending_recovery(self, vpn_name: str) -> None:
+        timer = self._recovery_timers.pop(vpn_name, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+
+    def _clear_recovery_state(self, vpn_name: str) -> None:
+        """Drop backoff and suppression once the VPN is up again."""
+        self._cancel_pending_recovery(vpn_name)
+        self.recovery_attempts.pop(vpn_name, None)
+        self._user_disconnected.discard(vpn_name)
+
     def _start_bounce(self, vpn_name: str) -> None:
         if vpn_name in self._active_bounces:
             return
@@ -293,6 +488,8 @@ class MonitorController(QObject):
             f"(attempt {self.failure_counts[vpn_name]})")
         self.log_message.emit(f"{vpn_name}: Attempting auto-reconnect...")
         self.vpn_states[vpn_name] = MonitorState.RECONNECTING
+        # A bounce only runs on a live tunnel, so it is recovery-eligible.
+        self._seen_connected.add(vpn_name)
         bounce = self.vpn_manager.bounce_vpn_async(vpn_name, parent=self)
         self._active_bounces[vpn_name] = bounce
         bounce.finished.connect(
@@ -310,9 +507,23 @@ class MonitorController(QObject):
             logger.info(f"{vpn_name}: Reconnect successful")
             self.log_message.emit(f"{vpn_name}: Reconnected successfully")
             self.connection_times[vpn_name] = datetime.now()
-        else:
-            logger.error(f"{vpn_name}: Reconnect failed: {message}")
-            self.log_message.emit(f"{vpn_name}: Reconnect failed: {message}")
+            self._clear_recovery_state(vpn_name)
+            return
+
+        logger.error(f"{vpn_name}: Reconnect failed: {message}")
+        self.log_message.emit(f"{vpn_name}: Reconnect failed: {message}")
+
+        # The bounce disconnected the tunnel and failed to bring it back, so the
+        # VPN is now down. Without this the monitor stops here: every later tick
+        # sees "not connected" and the tunnel stays orphaned-down indefinitely.
+        vpn_config = self.config_manager.get_vpn_config(vpn_name) or {}
+        monitor_settings = self.config_manager.get_monitor_settings()
+        if vpn_name in self._user_disconnected:
+            return
+        if not self._auto_recovery_enabled(vpn_config, monitor_settings):
+            return
+        self.recovery_attempts[vpn_name] = self.recovery_attempts.get(vpn_name, 0) + 1
+        self._schedule_recovery_retry(vpn_name, monitor_settings)
 
     def _disconnect_and_disable(self, vpn_name: str, failure_count: int) -> None:
         """Disconnect the VPN and mark it disabled in config after threshold."""

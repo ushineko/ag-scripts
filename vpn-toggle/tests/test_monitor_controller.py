@@ -91,6 +91,19 @@ class FakeDisconnectOp(QObject):
         QTimer.singleShot(0, lambda: self.finished.emit(True, "Disconnected"))
 
 
+class FakeConnectOp(QObject):
+    """Fake VPNManager.connect_vpn_async op."""
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, success: bool, message: str, parent=None):
+        super().__init__(parent)
+        self._success = success
+        self._message = message
+
+    def start(self):
+        QTimer.singleShot(0, lambda: self.finished.emit(self._success, self._message))
+
+
 class FakeAssert(QObject):
     """Fake AsyncAssert that emits a preset result."""
     completed = pyqtSignal(object)
@@ -172,6 +185,8 @@ class TestTickFlow:
         mc.monitoring_enabled = True
         # Set connection time past the grace window so asserts run.
         mc.connection_times['test_vpn'] = datetime.now() - timedelta(seconds=grace + 30)
+        # This fixture models an established tunnel, so it is recovery-eligible.
+        mc._seen_connected.add('test_vpn')
 
         vpn_manager.is_vpn_active_async = lambda name, parent=None: FakeIsActiveOp(
             active, parent=parent)
@@ -179,10 +194,27 @@ class TestTickFlow:
             True, "Reconnected", parent=parent)
         vpn_manager.disconnect_vpn_async = lambda name, parent=None: FakeDisconnectOp(
             parent=parent)
+        vpn_manager.connect_vpn_async = lambda name, parent=None: FakeConnectOp(
+            True, "Connected", parent=parent)
         return mc
 
-    def test_sets_idle_when_not_connected(self, qapp, config_manager, vpn_manager):
+    def test_down_vpn_enters_recovery_not_idle(self, qapp, config_manager, vpn_manager):
+        """Spec 010: a down VPN is a recoverable condition, not a silent IDLE."""
         mc = self._build_controller(config_manager, vpn_manager, active=False)
+        config_manager.update_vpn_config('test_vpn', {
+            'name': 'test_vpn', 'enabled': True,
+            'asserts': [{'type': 'dns_lookup', 'hostname': 'x', 'expected_prefix': '1.'}]
+        })
+        mc._tick()
+        pump_events(
+            predicate=lambda: mc.vpn_states.get('test_vpn') == MonitorState.GRACE_PERIOD)
+        # The reconnect succeeded, so the VPN lands back in the normal flow.
+        assert mc.vpn_states['test_vpn'] == MonitorState.GRACE_PERIOD
+
+    def test_sets_idle_when_not_connected_and_recovery_disabled(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build_controller(config_manager, vpn_manager, active=False)
+        config_manager.update_monitor_settings(auto_recovery=False)
         config_manager.update_vpn_config('test_vpn', {
             'name': 'test_vpn', 'enabled': True,
             'asserts': [{'type': 'dns_lookup', 'hostname': 'x', 'expected_prefix': '1.'}]
@@ -384,3 +416,301 @@ class TestVPNCheckSession:
 
         # Session must not emit finished after cancel
         assert results == []
+
+
+class TestAutoRecovery:
+    """Spec 010: an enabled VPN that is unexpectedly down must be reconnected.
+
+    Before this, a failed bounce left the tunnel disconnected and every later
+    tick hit `if not is_connected: state = IDLE; return` — the VPN was silently
+    orphaned-down until a human noticed (the ~15h 2026-06-16 outage).
+    """
+
+    def _build(self, config_manager, vpn_manager, connect_ok: bool,
+               vpn_config: Optional[dict] = None,
+               monitor_settings: Optional[dict] = None):
+        mc = MonitorController(config_manager, vpn_manager)
+        mc.monitoring_enabled = True
+        config_manager.update_vpn_config('test_vpn', vpn_config or {
+            'name': 'test_vpn', 'enabled': True, 'asserts': []
+        })
+        if monitor_settings:
+            config_manager.update_monitor_settings(**monitor_settings)
+
+        self.connect_calls = []
+
+        def fake_connect(name, parent=None):
+            self.connect_calls.append(name)
+            return FakeConnectOp(connect_ok, "ok" if connect_ok else "timed out",
+                                 parent=parent)
+
+        vpn_manager.is_vpn_active_async = lambda name, parent=None: FakeIsActiveOp(
+            False, parent=parent)
+        vpn_manager.connect_vpn_async = fake_connect
+        # These tests model a tunnel that dropped on the monitor's watch.
+        mc._seen_connected.add('test_vpn')
+        vpn_manager.disconnect_vpn_async = lambda name, parent=None: FakeDisconnectOp(
+            parent=parent)
+        return mc
+
+    # (a) enabled-but-down VPN triggers a reconnect attempt
+
+    def test_down_vpn_triggers_connect(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True)
+        mc._tick()
+        pump_events(predicate=lambda: self.connect_calls)
+        assert self.connect_calls == ['test_vpn']
+
+    def test_successful_recovery_restores_normal_flow(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True)
+        mc._tick()
+        pump_events(
+            predicate=lambda: mc.vpn_states.get('test_vpn') == MonitorState.GRACE_PERIOD)
+        assert mc.vpn_states['test_vpn'] == MonitorState.GRACE_PERIOD
+        assert 'test_vpn' in mc.connection_times
+
+    # (b) repeated failures follow a growing, capped backoff
+
+    def test_failed_recovery_schedules_a_retry(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False)
+        mc._tick()
+        pump_events(predicate=lambda: 'test_vpn' in mc._recovery_timers)
+        assert 'test_vpn' in mc._recovery_timers, "a failed recovery must retry"
+        assert mc.vpn_states['test_vpn'] == MonitorState.RECOVERING
+        mc.stop()
+
+    def test_backoff_grows_and_is_capped(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False,
+                         monitor_settings={'recovery_backoff_initial_seconds': 30,
+                                           'recovery_backoff_max_seconds': 120})
+        settings = config_manager.get_monitor_settings()
+        delays = []
+        for attempt in range(1, 7):
+            mc.recovery_attempts['test_vpn'] = attempt
+            delays.append(mc._recovery_delay_seconds('test_vpn', settings))
+        assert delays == [30, 60, 120, 120, 120, 120]
+
+    def test_backoff_uses_configured_initial_value(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False,
+                         monitor_settings={'recovery_backoff_initial_seconds': 5,
+                                           'recovery_backoff_max_seconds': 600})
+        settings = config_manager.get_monitor_settings()
+        mc.recovery_attempts['test_vpn'] = 1
+        assert mc._recovery_delay_seconds('test_vpn', settings) == 5
+
+    def test_long_outage_does_not_overflow_backoff(
+            self, qapp, config_manager, vpn_manager):
+        """A multi-day outage must not build an astronomically large interval."""
+        mc = self._build(config_manager, vpn_manager, connect_ok=False)
+        settings = config_manager.get_monitor_settings()
+        mc.recovery_attempts['test_vpn'] = 500
+        assert mc._recovery_delay_seconds('test_vpn', settings) == 600
+
+    # (c) a successful reconnect resets the backoff
+
+    def test_success_resets_backoff(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True)
+        mc.recovery_attempts['test_vpn'] = 4
+        mc._tick()
+        pump_events(predicate=lambda: 'test_vpn' not in mc.recovery_attempts)
+        assert 'test_vpn' not in mc.recovery_attempts
+
+    def test_observing_vpn_connected_clears_backoff(
+            self, qapp, config_manager, vpn_manager):
+        """Recovery resumes cleanly once connectivity returns on its own."""
+        mc = self._build(config_manager, vpn_manager, connect_ok=True)
+        mc.recovery_attempts['test_vpn'] = 3
+        vpn_manager.is_vpn_active_async = lambda name, parent=None: FakeIsActiveOp(
+            True, parent=parent)
+        mc._tick()
+        pump_events(predicate=lambda: 'test_vpn' not in mc.recovery_attempts)
+        assert 'test_vpn' not in mc.recovery_attempts
+
+    # (d) an outage must never trip the failure_threshold "disable VPN" path
+
+    def test_outage_does_not_increment_failure_count(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False)
+        for _ in range(5):
+            mc._tick()
+            pump_events(timeout_ms=50)
+        assert mc.failure_counts.get('test_vpn', 0) == 0
+        mc.stop()
+
+    def test_outage_never_disables_the_vpn(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False)
+        disabled = []
+        mc.vpn_disabled.connect(lambda name, reason: disabled.append(name))
+        for _ in range(5):
+            mc._tick()
+            pump_events(timeout_ms=50)
+        assert disabled == []
+        assert mc.vpn_states['test_vpn'] != MonitorState.DISABLED
+        assert config_manager.get_vpn_config('test_vpn')['enabled'] is True
+        mc.stop()
+
+    # (e) a user-initiated disconnect is not auto-reconnected
+
+    def test_user_disconnect_suppresses_recovery(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True)
+        mc.notify_user_disconnected('test_vpn')
+        mc._tick()
+        pump_events(timeout_ms=100)
+        assert self.connect_calls == []
+        assert mc.vpn_states['test_vpn'] == MonitorState.IDLE
+
+    def test_user_reconnect_lifts_suppression(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True)
+        mc.notify_user_disconnected('test_vpn')
+        mc.reset_vpn_state('test_vpn')  # emitted when the user reconnects
+        mc._tick()
+        pump_events(predicate=lambda: self.connect_calls)
+        assert self.connect_calls == ['test_vpn']
+
+    # per-VPN and global opt-out
+
+    def test_per_vpn_opt_out_wins_over_global(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True, vpn_config={
+            'name': 'test_vpn', 'enabled': True, 'asserts': [], 'auto_recovery': False,
+        })
+        mc._tick()
+        pump_events(timeout_ms=100)
+        assert self.connect_calls == []
+        assert mc.vpn_states['test_vpn'] == MonitorState.IDLE
+
+    def test_per_vpn_opt_in_wins_over_global_off(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True, vpn_config={
+            'name': 'test_vpn', 'enabled': True, 'asserts': [], 'auto_recovery': True,
+        }, monitor_settings={'auto_recovery': False})
+        mc._tick()
+        pump_events(predicate=lambda: self.connect_calls)
+        assert self.connect_calls == ['test_vpn']
+
+    # the tick loop must not bypass the backoff
+
+    def test_tick_does_not_launch_a_second_connect_during_backoff(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False)
+        mc._tick()
+        pump_events(predicate=lambda: 'test_vpn' in mc._recovery_timers)
+        for _ in range(3):
+            mc._tick()
+            pump_events(timeout_ms=50)
+        assert len(self.connect_calls) == 1, "backoff must not be reset by ticks"
+        mc.stop()
+
+    # a failed bounce hands off to recovery instead of stopping
+
+    def test_failed_bounce_schedules_recovery(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False)
+        mc._on_bounce_done('test_vpn', False, "reconnect timed out")
+        assert 'test_vpn' in mc._recovery_timers, (
+            "a failed bounce left the VPN down; recovery must continue")
+        assert mc.recovery_attempts['test_vpn'] == 1
+        mc.stop()
+
+    def test_successful_bounce_clears_recovery_state(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=True)
+        mc.recovery_attempts['test_vpn'] = 2
+        mc._on_bounce_done('test_vpn', True, "ok")
+        assert 'test_vpn' not in mc.recovery_attempts
+        assert 'test_vpn' not in mc._recovery_timers
+
+    # lifecycle
+
+    def test_stop_cancels_pending_recovery(self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager, connect_ok=False)
+        mc._tick()
+        pump_events(predicate=lambda: 'test_vpn' in mc._recovery_timers)
+        mc.stop()
+        assert mc._recovery_timers == {}
+        assert mc._active_recoveries == {}
+
+
+class TestRecoveryOnlyRestoresWhatWasUp:
+    """Auto-recovery restores tunnels that drop; it never opens new ones.
+
+    On a fresh start the in-memory user-disconnect suppression set is empty, so
+    without this guard every configured-and-enabled VPN that happens to be down
+    would be connected at launch — the monitor picking connections for the user.
+    """
+
+    def _build(self, config_manager, vpn_manager):
+        mc = MonitorController(config_manager, vpn_manager)
+        mc.monitoring_enabled = True
+        config_manager.update_vpn_config('test_vpn', {
+            'name': 'test_vpn', 'enabled': True, 'asserts': []
+        })
+        self.connect_calls = []
+
+        def fake_connect(name, parent=None):
+            self.connect_calls.append(name)
+            return FakeConnectOp(True, "ok", parent=parent)
+
+        vpn_manager.connect_vpn_async = fake_connect
+        vpn_manager.disconnect_vpn_async = lambda name, parent=None: FakeDisconnectOp(
+            parent=parent)
+        return mc
+
+    def test_vpn_down_since_startup_is_not_connected(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager)
+        vpn_manager.is_vpn_active_async = lambda name, parent=None: FakeIsActiveOp(
+            False, parent=parent)
+
+        for _ in range(3):
+            mc._tick()
+            pump_events(timeout_ms=50)
+
+        assert self.connect_calls == [], (
+            "a VPN that was already down at startup must be left alone")
+        assert mc.vpn_states['test_vpn'] == MonitorState.IDLE
+
+    def test_vpn_that_drops_after_being_seen_up_is_recovered(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager)
+
+        # First tick: observed connected.
+        vpn_manager.is_vpn_active_async = lambda name, parent=None: FakeIsActiveOp(
+            True, parent=parent)
+        mc._tick()
+        pump_events(predicate=lambda: 'test_vpn' in mc._seen_connected)
+        assert 'test_vpn' in mc._seen_connected
+
+        # Then it drops.
+        vpn_manager.is_vpn_active_async = lambda name, parent=None: FakeIsActiveOp(
+            False, parent=parent)
+        mc._tick()
+        pump_events(predicate=lambda: self.connect_calls)
+
+        assert self.connect_calls == ['test_vpn']
+
+    def test_user_connect_makes_vpn_recovery_eligible(
+            self, qapp, config_manager, vpn_manager):
+        """reset_vpn_state() is emitted when the user connects from the GUI."""
+        mc = self._build(config_manager, vpn_manager)
+        vpn_manager.is_vpn_active_async = lambda name, parent=None: FakeIsActiveOp(
+            False, parent=parent)
+
+        mc.reset_vpn_state('test_vpn')
+        mc._tick()
+        pump_events(predicate=lambda: self.connect_calls)
+
+        assert self.connect_calls == ['test_vpn']
+
+    def test_bounce_marks_vpn_recovery_eligible(
+            self, qapp, config_manager, vpn_manager):
+        mc = self._build(config_manager, vpn_manager)
+        vpn_manager.bounce_vpn_async = lambda name, parent=None: FakeBounceOp(
+            False, "failed", parent=parent)
+        mc.failure_counts['test_vpn'] = 1
+
+        mc._start_bounce('test_vpn')
+
+        assert 'test_vpn' in mc._seen_connected
+        mc.stop()
