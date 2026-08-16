@@ -64,12 +64,17 @@ class DeriveError(Exception):
     """Raised when key recovery cannot proceed (bad paths, unknown metadata)."""
 
 
-def find_game_dir() -> str | None:
-    """Locate the Megabonk install by walking Steam's library folders."""
+def steam_library_roots() -> list[str]:
+    """Every Steam library root on this machine.
+
+    Reads libraryfolders.vdf rather than assuming ~/.steam, because games and
+    their compatdata prefixes are frequently on secondary drives.
+    """
     roots = []
     for root in _DEFAULT_STEAM_ROOTS:
         expanded = os.path.expanduser(root)
-        roots.append(expanded)
+        if expanded not in roots:
+            roots.append(expanded)
         vdf = os.path.join(expanded, "steamapps", "libraryfolders.vdf")
         if not os.path.exists(vdf):
             continue
@@ -81,8 +86,15 @@ def find_game_dir() -> str | None:
         for line in text.splitlines():
             parts = [p for p in line.split('"') if p.strip()]
             if len(parts) >= 2 and parts[0].strip() == "path":
-                roots.append(parts[1].strip())
-    for root in roots:
+                candidate = parts[1].strip()
+                if candidate not in roots:
+                    roots.append(candidate)
+    return roots
+
+
+def find_game_dir() -> str | None:
+    """Locate the Megabonk install by walking Steam's library folders."""
+    for root in steam_library_roots():
         candidate = os.path.join(root, "steamapps", "common", GAME_INSTALLDIR)
         if os.path.isdir(os.path.join(candidate, "Megabonk_Data")):
             return candidate

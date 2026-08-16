@@ -15,7 +15,7 @@ from megabonker.crypto import DecryptError, encrypt, try_decrypt
 from megabonker.derive import DeriveError, derive, find_game_dir
 from megabonker.keys import SaveKey, load_keyring, save_key
 from megabonker.savefile import (ENCRYPTED_NAMES, SAVE_ROOT, SaveError,
-                                 find_profiles)
+                                 find_profiles, save_roots)
 
 
 def _resolve_profile(requested: str | None) -> str:
@@ -40,12 +40,13 @@ def cmd_list(args) -> int:
         print(f"No profiles found under {SAVE_ROOT}")
         return 1
     keyring = load_keyring()
-    print(f"Save root: {SAVE_ROOT}")
+    for origin, root in save_roots():
+        print(f"Save root ({origin}): {root}")
     print(f"Keys available: {len(keyring)}")
     game_dir = find_game_dir()
     print(f"Game install: {game_dir or 'not found'}")
-    for steamid, path in profiles:
-        print(f"\nProfile {steamid}")
+    for label, path in profiles:
+        print(f"\nProfile {label}")
         for name in ENCRYPTED_NAMES:
             full = os.path.join(path, name)
             if not os.path.exists(full):

@@ -21,6 +21,7 @@ if it ever changes — so the tool does not go stale after a patch.
   - [Command line](#command-line)
 - [Save file locations](#save-file-locations)
 - [Key recovery](#key-recovery)
+- [Cheat Engine / trainer setup](#cheat-engine--trainer-setup)
 - [Safety](#safety)
 - [Project layout](#project-layout)
 - [Testing](#testing)
@@ -166,6 +167,16 @@ game, and normally completes in under a second.
 **[docs/key-recovery.md](docs/key-recovery.md)** documents the format, the
 search method, and a full by-hand procedure for the case where the automated
 search fails — including what to do if the encryption scheme itself changes.
+
+## Cheat Engine / trainer setup
+
+Megabonk ships a native Linux build, so live memory editing needs the game
+switched to the Windows build under Proton. **[docs/cheat-engine-setup.md](docs/cheat-engine-setup.md)**
+covers the whole procedure, including the save-location move and the Wine DPI
+settings.
+
+megabonker finds saves in both the native root and any Proton prefix, and labels
+profiles by origin when both exist — so it keeps working across the switch.
 
 ## Safety
 

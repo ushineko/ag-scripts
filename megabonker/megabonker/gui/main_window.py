@@ -18,7 +18,7 @@ from megabonker.gui.json_editor import JsonTreeWidget
 from megabonker.keys import load_keyring
 from megabonker.savefile import (ENCRYPTED_NAMES, PLAIN_NAMES, SAVE_ROOT,
                                  SaveError, SaveFile, find_profiles,
-                                 game_is_running)
+                                 game_is_running, local_dir_for, save_roots)
 from megabonker.validate import (describe, touches_steam_achievements,
                                  unknown_additions)
 
@@ -207,7 +207,8 @@ class MainWindow(QMainWindow):
         self.profile_combo.blockSignals(False)
 
         if not profiles:
-            self.set_status(f"🔴 No Megabonk saves found under {SAVE_ROOT}")
+            roots = ", ".join(p for _, p in save_roots()) or SAVE_ROOT
+            self.set_status(f"🔴 No Megabonk saves found under {roots}")
             return
 
         target = self.requested_profile or self.config_data.get("last_profile", "")
@@ -224,8 +225,9 @@ class MainWindow(QMainWindow):
 
     def _candidate_files(self, profile_dir: str) -> list[str]:
         paths = [os.path.join(profile_dir, n) for n in ENCRYPTED_NAMES]
-        # LocalDir settings sit outside the per-profile folder but are worth editing.
-        paths += [os.path.join(SAVE_ROOT, "LocalDir", n) for n in PLAIN_NAMES]
+        # LocalDir sits beside CloudDir in the same save root - resolve it from
+        # the profile so a Proton profile reads that prefix's settings.
+        paths += [os.path.join(local_dir_for(profile_dir), n) for n in PLAIN_NAMES]
         return [p for p in paths if os.path.exists(p)]
 
     def load_profile(self):

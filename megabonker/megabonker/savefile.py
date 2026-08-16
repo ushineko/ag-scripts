@@ -20,7 +20,19 @@ import time
 from megabonker.crypto import DecryptError, encrypt, round_trip_ok, try_decrypt
 from megabonker.keys import SaveKey
 
-SAVE_ROOT = os.path.expanduser("~/.config/unity3d/Ved/Megabonk/Saves")
+from megabonker.derive import APPID_DEFAULT, steam_library_roots
+
+# Native Linux build: Unity's Linux persistent-data path.
+NATIVE_SAVE_ROOT = os.path.expanduser("~/.config/unity3d/Ved/Megabonk/Saves")
+# Windows build under Proton: Unity's Windows path inside the Wine prefix.
+PROTON_SAVE_RELPATH = os.path.join(
+    "pfx", "drive_c", "users", "steamuser", "AppData", "LocalLow",
+    "Ved", "Megabonk", "Saves",
+)
+
+# Kept as the default for callers that pass an explicit root.
+SAVE_ROOT = NATIVE_SAVE_ROOT
+
 ENCRYPTED_NAMES = ("progression.json", "stats.json")
 PLAIN_NAMES = ("config.json",)
 
@@ -29,18 +41,55 @@ class SaveError(Exception):
     """Raised when a save file cannot be loaded or written."""
 
 
-def find_profiles(save_root: str = SAVE_ROOT) -> list[tuple[str, str]]:
-    """Return (steamid, directory) for every CloudDir profile present."""
-    cloud = os.path.join(save_root, "CloudDir")
-    if not os.path.isdir(cloud):
-        return []
+def save_roots(appid: str = APPID_DEFAULT) -> list[tuple[str, str]]:
+    """Return (origin, path) for every Megabonk save root present.
+
+    The game ships a native Linux build, but forcing Proton swaps it for the
+    Windows one and the saves move into the Wine prefix. Both are reported so
+    the editor keeps working across that switch - and so both are visible at
+    once while migrating.
+    """
+    roots = []
+    if os.path.isdir(NATIVE_SAVE_ROOT):
+        roots.append(("native", NATIVE_SAVE_ROOT))
+    for library in steam_library_roots():
+        path = os.path.join(library, "steamapps", "compatdata", appid,
+                            PROTON_SAVE_RELPATH)
+        if os.path.isdir(path):
+            roots.append(("proton", path))
+    return roots
+
+
+def local_dir_for(profile_dir: str) -> str:
+    """LocalDir sibling of a CloudDir profile.
+
+    Derived from the profile rather than a global constant, so a profile found
+    in a Proton prefix reads that prefix's settings file, not the native one.
+    """
+    return os.path.join(os.path.dirname(os.path.dirname(profile_dir)), "LocalDir")
+
+
+def find_profiles(save_root: str | None = None) -> list[tuple[str, str]]:
+    """Return (label, directory) for every CloudDir profile present.
+
+    Searches every known save root unless one is given explicitly. When more
+    than one root has saves the label is suffixed with the origin, so a native
+    and a Proton copy of the same SteamID stay tellable apart.
+    """
+    roots = [("", save_root)] if save_root else save_roots()
+    show_origin = len(roots) > 1
     profiles = []
-    for entry in sorted(os.listdir(cloud)):
-        path = os.path.join(cloud, entry)
-        if os.path.isdir(path) and any(
-            os.path.exists(os.path.join(path, n)) for n in ENCRYPTED_NAMES
-        ):
-            profiles.append((entry, path))
+    for origin, root in roots:
+        cloud = os.path.join(root, "CloudDir")
+        if not os.path.isdir(cloud):
+            continue
+        for entry in sorted(os.listdir(cloud)):
+            path = os.path.join(cloud, entry)
+            if os.path.isdir(path) and any(
+                os.path.exists(os.path.join(path, n)) for n in ENCRYPTED_NAMES
+            ):
+                label = f"{entry} ({origin})" if show_origin and origin else entry
+                profiles.append((label, path))
     return profiles
 
 
