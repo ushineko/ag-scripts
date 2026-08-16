@@ -67,7 +67,15 @@ ce-megabonk-setup.sh
 
 Expects the installer at `~/Downloads/CheatEngine76.exe`. Click through it, and
 **uncheck any bundled extras** the installer offers. The script then sets the
-Wine DPI so the CE window is legible on a 4K display.
+Wine DPI so the CE window is legible on a 4K display, and prints the values it
+read back so a silent failure is visible.
+
+The installer throws an unhandled Wine exception (`0x0eedfade`) as it exits,
+*after* installing successfully. The script tolerates that and verifies by
+checking for the binary — an earlier version aborted on it and skipped the DPI
+step entirely.
+
+Cheat Engine reads DPI at startup, so if it is already open, restart it.
 
 ### 5. Verify the saves came across
 
@@ -112,7 +120,17 @@ Symlinked into `~/.local/bin` and `~/.local/share/applications`, matching
 ## DPI settings
 
 Cheat Engine's UI is not DPI-aware, so it renders unusably small on a 4K display
-without help. The setup script writes `HKCU\Control Panel\Desktop\LogPixels`.
+without help. The setup script writes `LogPixels` to **two** registry keys:
+
+```
+HKCU\Control Panel\Desktop     the Windows-standard location
+HKCU\Software\Wine\Fonts        where Wine actually reads font scaling
+```
+
+Both are required. `winecfg` writes both, and setting only the Windows-standard
+key leaves the UI at 100% — which looks exactly like the setting failing to
+apply. This was found the hard way: the first version of the script wrote only
+`Control Panel\Desktop` and Cheat Engine launched at original size.
 
 | Value | Hex | Scale |
 | ---: | :--- | :--- |
