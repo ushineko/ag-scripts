@@ -16,14 +16,22 @@ this handles live values during one.
 
 ## What the table contains
 
-| Entry | Type | Purpose |
-| :--- | :--- | :--- |
-| Infinite Health | Auto Assembler script | hooks both health write sites; blocks decreases, records the player object address |
-| Health | 4 Bytes, pointer `pPlayer` + `0x10` | live health, re-resolves every run |
+```
+Megabonk Trainer  -- ENABLE THIS FIRST, then jump once
+├── Godmode (block damage)
+├── Health                       pPlayer + 0x10
+├── Stats                        27 entries, pStats2 + 0x1C + id*0x10
+└── debug                        pPlayer / pStats2 raw pointers
+```
 
-Enable the script first — the `Health` entry reads through a symbol the script
-creates, so it is inert until the script is active and the game has written
-health at least once.
+The **activation** script installs all three hooks and publishes two symbols. It
+makes no gameplay change on its own — godmode is a separate child entry gated on
+a `gGodmode` flag byte, so stats can be edited without invincibility and vice
+versa.
+
+Order matters: enable activation, then **jump once**. `pStats2` is only populated
+when the stat getter runs with Jump Height's id, so every Stats entry reads `??`
+until you jump. `Health` works as soon as the game writes health.
 
 ## Loading it
 

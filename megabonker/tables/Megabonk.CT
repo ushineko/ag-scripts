@@ -3,9 +3,21 @@
   <CheatEntries>
     <CheatEntry>
       <ID>1</ID>
-      <Description>"Infinite Health"</Description>
+      <Description>"Megabonk Trainer  -- ENABLE THIS FIRST, then jump once"</Description>
       <VariableType>Auto Assembler Script</VariableType>
-      <AssemblerScript>[ENABLE]
+      <AssemblerScript>{ Megabonk trainer - activation
+
+  Installs the hooks and publishes two pointers:
+    pPlayer  -&gt; player object   (health at +10)
+    pStats2  -&gt; stat array base (stat id N at +1C + N*10)
+
+  This script makes NO gameplay change on its own. Godmode is a separate
+  entry underneath, gated on the gGodmode flag.
+
+  After enabling, JUMP ONCE so the stat getter runs and pStats2 populates.
+}
+
+[ENABLE]
 
 aobscanmodule(healthSet,GameAssembly.dll,89 7B 10 48 8B 05 46 47 B4 02)
 aobscanmodule(healthDmg,GameAssembly.dll,89 47 10 83 7F 10 00 0F 8F)
@@ -15,19 +27,26 @@ alloc(newmem2,$1000,healthDmg)
 alloc(newmem4,$1000,statAob)
 alloc(pPlayer,8)
 alloc(pStats2,8)
+alloc(gGodmode,4)
 
 label(code)   label(return)   label(skipwrite)
 label(code2)  label(return2)  label(skipwrite2)
 label(skip4)  label(return4)
 registersymbol(pPlayer)
+registersymbol(pStats2)
+registersymbol(gGodmode)
 registersymbol(healthSet)
 registersymbol(healthDmg)
 registersymbol(statAob)
-registersymbol(pStats2)
 
-// --- health: clamped setter ---
+gGodmode:
+  dd 0
+
+// --- health: clamped setter (heals / init) ---
 newmem:
   mov [pPlayer],rbx
+  cmp dword ptr [gGodmode],0
+  je code
   cmp edi,[rbx+10]
   jl skipwrite
 code:
@@ -41,9 +60,11 @@ healthSet:
   nop 5
 return:
 
-// --- health: damage apply ---
+// --- health: damage apply (death check follows) ---
 newmem2:
   mov [pPlayer],rdi
+  cmp dword ptr [gGodmode],0
+  je code2
   cmp eax,[rdi+10]
   jl skipwrite2
 code2:
@@ -57,7 +78,7 @@ healthDmg:
   nop 2
 return2:
 
-// --- stats: capture array base on a jump-height read ---
+// --- stats: capture array base when Jump Height (id 27) is read ---
 newmem4:
   pushfq
   cmp rax,34
@@ -86,309 +107,310 @@ unregistersymbol(healthSet)
 unregistersymbol(healthDmg)
 unregistersymbol(statAob)
 unregistersymbol(pPlayer)
-registersymbol(healthSet)
-registersymbol(healthDmg)
-registersymbol(statAob)
 unregistersymbol(pStats2)
+unregistersymbol(gGodmode)
 dealloc(newmem)
 dealloc(newmem2)
 dealloc(newmem4)
 dealloc(pPlayer)
 dealloc(pStats2)
+dealloc(gGodmode)
 </AssemblerScript>
-    </CheatEntry>
-    <CheatEntry>
-      <ID>2</ID>
-      <Description>"Health"</Description>
-      <ShowAsSigned>0</ShowAsSigned>
-      <VariableType>4 Bytes</VariableType>
-      <Address>pPlayer</Address>
-      <Offsets>
-        <Offset>10</Offset>
-      </Offsets>
-    </CheatEntry>
-    <CheatEntry>
-      <ID>4</ID>
-      <Description>"pStats2 (array base - debug)"</Description>
-      <ShowAsHex>1</ShowAsHex>
-      <ShowAsSigned>0</ShowAsSigned>
-      <VariableType>8 Bytes</VariableType>
-      <Address>pStats2</Address>
-    </CheatEntry>
-    <CheatEntry>
-      <ID>300</ID>
-      <Description>"Stats (enable script, then jump once)"</Description>
-      <GroupHeader>1</GroupHeader>
       <CheatEntries>
         <CheatEntry>
-          <ID>301</ID>
-          <Description>"Max HP (id 1)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
+          <ID>2</ID>
+          <Description>"Godmode (block damage)"</Description>
+          <VariableType>Auto Assembler Script</VariableType>
+          <AssemblerScript>{ Blocks any health write that would lower it.
+  Heals and max-HP increases still apply.
+  Requires the activation script above. }
+
+[ENABLE]
+gGodmode:
+  dd 1
+
+[DISABLE]
+gGodmode:
+  dd 0
+</AssemblerScript>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>3</ID>
+          <Description>"Health"</Description>
+          <VariableType>4 Bytes</VariableType>
+          <Address>pPlayer</Address>
           <Offsets>
-            <Offset>2C</Offset>
+            <Offset>10</Offset>
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>302</ID>
-          <Description>"HP Regen (id 2)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>3C</Offset>
-          </Offsets>
+          <ID>4</ID>
+          <Description>"Stats  (freeze the entry - values are recalculated)"</Description>
+          <GroupHeader>1</GroupHeader>
+          <CheatEntries>
+            <CheatEntry>
+              <ID>5</ID>
+              <Description>"Max HP  (id 1)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>2C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>6</ID>
+              <Description>"HP Regen  (id 2)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>3C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>7</ID>
+              <Description>"Shield  (id 3)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>4C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>8</ID>
+              <Description>"Armor  (id 5)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>6C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>9</ID>
+              <Description>"Evasion  (id 6)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>7C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>10</ID>
+              <Description>"Size  (id 10)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>BC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>11</ID>
+              <Description>"Duration  (id 11)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>CC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>12</ID>
+              <Description>"Projectile Speed  (id 12)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>DC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>13</ID>
+              <Description>"Damage  (id 13)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>EC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>14</ID>
+              <Description>"Attack Speed  (id 16)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>11C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>15</ID>
+              <Description>"Projectile Count  (id 17)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>12C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>16</ID>
+              <Description>"Lifesteal  (id 18)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>13C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>17</ID>
+              <Description>"Crit Chance  (id 19)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>14C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>18</ID>
+              <Description>"Damage to Elites  (id 24)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>19C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>19</ID>
+              <Description>"Knockback  (id 25)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>1AC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>20</ID>
+              <Description>"Movement Speed  (id 26)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>1BC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>21</ID>
+              <Description>"Jump Height  (id 27)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>1CC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>22</ID>
+              <Description>"Pickup Range  (id 30)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>1FC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>23</ID>
+              <Description>"Luck  (id 31)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>20C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>24</ID>
+              <Description>"Gold Gain  (id 32)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>21C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>25</ID>
+              <Description>"Difficulty  (id 39)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>28C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>26</ID>
+              <Description>"Crit Damage  (id 40)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>29C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>27</ID>
+              <Description>"Powerup Multiplier  (id 41)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>2AC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>28</ID>
+              <Description>"Powerup Drop Chance  (id 42)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>2BC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>29</ID>
+              <Description>"Projectile Bounces  (id 46)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>2FC</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>30</ID>
+              <Description>"Extra Jumps  (id 47)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>30C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>31</ID>
+              <Description>"Overheal  (id 48)"</Description>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>31C</Offset>
+              </Offsets>
+            </CheatEntry>
+          </CheatEntries>
         </CheatEntry>
         <CheatEntry>
-          <ID>303</ID>
-          <Description>"Shield (id 3)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>4C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>304</ID>
-          <Description>"Armor (id 5)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>6C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>305</ID>
-          <Description>"Evasion (id 6)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>7C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>306</ID>
-          <Description>"Size (id 10)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>BC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>307</ID>
-          <Description>"Duration (id 11)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>CC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>308</ID>
-          <Description>"Projectile Speed (id 12)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>DC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>309</ID>
-          <Description>"Damage (id 13)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>EC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>310</ID>
-          <Description>"Attack Speed (id 16)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>11C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>311</ID>
-          <Description>"Projectile Count (id 17)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>12C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>312</ID>
-          <Description>"Lifesteal (id 18)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>13C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>313</ID>
-          <Description>"Crit Chance (id 19)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>14C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>314</ID>
-          <Description>"Damage to Elites (id 24)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>19C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>315</ID>
-          <Description>"Knockback (id 25)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>1AC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>316</ID>
-          <Description>"Movement Speed (id 26)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>1BC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>317</ID>
-          <Description>"Jump Height (id 27)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>1CC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>318</ID>
-          <Description>"Pickup Range (id 30)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>1FC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>319</ID>
-          <Description>"Luck (id 31)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>20C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>320</ID>
-          <Description>"Gold Gain (id 32)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>21C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>321</ID>
-          <Description>"Difficulty (id 39)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>28C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>322</ID>
-          <Description>"Crit Damage (id 40)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>29C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>323</ID>
-          <Description>"Powerup Multiplier (id 41)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>2AC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>324</ID>
-          <Description>"Powerup Drop Chance (id 42)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>2BC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>325</ID>
-          <Description>"Projectile Bounces (id 46)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>2FC</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>326</ID>
-          <Description>"Extra Jumps (id 47)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>30C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>327</ID>
-          <Description>"Overheal (id 48)"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>31C</Offset>
-          </Offsets>
+          <ID>32</ID>
+          <Description>"debug"</Description>
+          <GroupHeader>1</GroupHeader>
+          <CheatEntries>
+            <CheatEntry>
+              <ID>33</ID>
+              <Description>"pPlayer (player object)"</Description>
+              <VariableType>8 Bytes</VariableType>
+              <Address>pPlayer</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>34</ID>
+              <Description>"pStats2 (stat array base)"</Description>
+              <VariableType>8 Bytes</VariableType>
+              <Address>pStats2</Address>
+            </CheatEntry>
+          </CheatEntries>
         </CheatEntry>
       </CheatEntries>
     </CheatEntry>
