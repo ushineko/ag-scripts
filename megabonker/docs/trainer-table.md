@@ -236,6 +236,42 @@ one copy, that copy no longer matches the pattern, so a scan run afterwards
 reports the AOB as unique when it is not. Compare the two copies using bytes
 that are unpatched in both.
 
+## Open items
+
+### Unmapped stats: XP Gain, Elite Spawn Increase, Thorns
+
+Three stats on the Stats screen have no confirmed id.
+
+**Thorns is probably id 4.** Immediately before the second probe, id 4 held
+`999` and the screen showed Thorns `999` - the only stat with that value. It was
+not confirmed because the probe write did not survive to be read.
+
+**XP Gain and Elite Spawn Increase** showed `10.0x` and `40.0x` during the first
+probe, colliding with Size (id 10) and Crit Damage (id 40). Either they are
+derived from those stats, or they read from somewhere outside this array.
+
+### How to finish it
+
+Probe the **source** array, not the computed one. The second probe failed
+because a recalculation rebuilt the computed array before the screen could be
+read; values written to the source survive that.
+
+Procedure:
+
+1. Locate both arrays by scanning for the id pattern (`value` float at +0, id
+   repeated at +4 and +C, stride `0x10`, 50 entries). The source array is the one
+   holding plausible game values; the computed one is where `pStats2` points and
+   where your edits land.
+2. Back up the source array first - a bad write there is more consequential than
+   to the computed copy, because everything is rebuilt from it.
+3. Write a distinctive value (e.g. `100 + id`) into ids 4, 7, 8, 9, 14, 15, 20-23,
+   28, 29, 33-38, 43-45, 49.
+4. Read the Stats screen, restore the backup.
+
+Do this on a throwaway run rather than one you care about. Writing many stats at
+once also triggers audible in-game feedback as thresholds fire - probe in small
+batches.
+
 ## Re-deriving after a game update
 
 A patch will eventually move these offsets. The AOB patterns survive small
