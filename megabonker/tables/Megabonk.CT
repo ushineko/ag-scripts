@@ -77,6 +77,61 @@ dealloc(pPlayer)
         <Offset>10</Offset>
       </Offsets>
     </CheatEntry>
+    <CheatEntry>
+      <ID>3</ID>
+      <Description>"Move speed (hardcoded)"</Description>
+      <VariableType>Float</VariableType>
+      <Address>6FA279BC</Address>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>4</ID>
+      <Description>"Register PStats"</Description>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+
+aobscanmodule(statWrite,GameAssembly.dll,F3 0F 11 74 C3 2C B0 01)
+alloc(newmem3,$1000,statWrite)
+alloc(pStats,8)
+
+label(code3)
+label(return3)
+registersymbol(pStats)
+registersymbol(statWrite)
+
+newmem3:
+  push rax                    // rax holds the stat index - must not clobber it
+  lea rax,[rbx+2C]            // arrayBase = rbx + 0x2C
+  mov [pStats],rax
+  pop rax
+code3:
+  movss [rbx+rax*8+2C],xmm6
+  jmp return3
+
+statWrite:
+  jmp newmem3
+  nop
+return3:
+
+[DISABLE]
+
+statWrite:
+  db F3 0F 11 74 C3 2C
+
+unregistersymbol(pStats)
+unregistersymbol(statWrite)
+dealloc(newmem3)
+dealloc(pStats)
+
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>5</ID>
+      <Description>"PStats"</Description>
+      <ShowAsHex>1</ShowAsHex>
+      <ShowAsSigned>0</ShowAsSigned>
+      <VariableType>8 Bytes</VariableType>
+      <Address>pStats</Address>
+    </CheatEntry>
   </CheatEntries>
   <UserdefinedSymbols/>
 </CheatTable>

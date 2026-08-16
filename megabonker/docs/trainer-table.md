@@ -79,6 +79,77 @@ taken.
 Enemies are unaffected — verified in game. `healthDmg` is the player's damage
 path, not a shared entity setter, so no class-pointer guard is needed.
 
+## Stats array (work in progress)
+
+Every stat on the in-game Stats screen lives in one flat array of 16-byte
+entries, indexed by a stat ID:
+
+```
+address = arrayBase + (id * 0x10)
+  +0x00  float   the value
+  +0x04  int     the stat id
+  +0x0C  int     the stat id again
+```
+
+Percentages are stored as **fractions** - crit chance `0.01` displays as 1%,
+evasion `0.0783` as 8%. Multipliers are stored as shown (`1.0` = 1.0x).
+
+### Confirmed IDs
+
+| id | offset | Stat |
+| ---: | ---: | :--- |
+| 1 | `0x010` | Max HP |
+| 2 | `0x020` | HP Regen |
+| 3 | `0x030` | Overheal |
+| 4 | `0x040` | Shield |
+| 5 | `0x050` | Armor |
+| 6 | `0x060` | Evasion |
+| 7 | `0x070` | Lifesteal |
+| 8 | `0x080` | Thorns |
+| 9 | `0x090` | Damage |
+| 19 | `0x130` | Crit Chance |
+| 26 | `0x1A0` | Movement Speed |
+| 27 | `0x1B0` | Jump Height |
+| 30 | `0x1E0` | Pickup Range |
+
+IDs 1-9 follow the on-screen order; after that they diverge, because the array
+holds internal stats that are not displayed. The remaining ~20 entries sit at
+`1.0` or `0` and cannot be told apart by value - mapping them needs a probe pass
+(write a unique value into each unknown id, then read the Stats screen).
+
+**Two arrays exist.** They are identical except for evasion, where one holds the
+raw sum and the other the post-diminishing-returns value. The array the game
+displays and uses for gameplay is the one holding the *computed* evasion -
+verified by editing movement speed and observing the character actually move
+faster. Recalculated stats (movement speed) are overwritten whenever an upgrade
+fires a recalculation, so freeze rather than set them.
+
+### The open problem: capturing the base
+
+The stat writer is at `GameAssembly.dll+DCFBE1`:
+
+```
+movss [rbx+rax*8+2C],xmm6        rax = id*2,  arrayBase = rbx + 0x2C
+```
+
+The arithmetic is right, but **this setter is generic across every entity**.
+Enemies spawn constantly and each gets a stats array, so a naive capture always
+ends up holding the most recently spawned enemy's array (observed: a
+freshly-allocated array of all zeros).
+
+Two routes not yet tried:
+
+1. **Hook a reader instead.** The player's movement code reads movement speed
+   every frame; nothing else reads *your* array. `Find out what accesses` the
+   movement-speed entry and hook a high-count reader.
+2. **Hook the pointer store.** A slot holding `arrayBase - 0x1C` was located by
+   scanning for pointers into the array region. Whatever writes that slot runs
+   during player setup and is inherently player-specific, but it fires only at
+   run start.
+
+Until one of those lands, the `Move speed (hardcoded)` entry in the table is a
+raw address and **only valid for the run it was found in**.
+
 ## Re-deriving after a game update
 
 A patch will eventually move these offsets. The AOB patterns survive small
