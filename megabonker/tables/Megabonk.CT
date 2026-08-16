@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <CheatTable CheatEngineTableVersion="46">
   <CheatEntries>
     <CheatEntry>
@@ -9,17 +9,20 @@
 
 aobscanmodule(healthSet,GameAssembly.dll,89 7B 10 48 8B 05 46 47 B4 02)
 aobscanmodule(healthDmg,GameAssembly.dll,89 47 10 83 7F 10 00 0F 8F)
+aobscanmodule(statAob,GameAssembly.dll,70 E8 71 62 49 FF 33 D2 48 8B C8 E8 47 C6 72 00 0F 57 C0 48 8B 5C 24 30 48 8B 74 24 40 48 83 C4 20 5F C3 48 8B 4B 18 48 85 C9 74 20 3B 41 18 73 21 48 8B 5C 24 30 48 8B 74 24 40 48 98 48 03 C0 F3 0F 10 44 C1 2C 48 83 C4 20 5F C3)
 alloc(newmem,$1000,healthSet)
 alloc(newmem2,$1000,healthDmg)
+alloc(newmem4,$1000,statAob)
 alloc(pPlayer,8)
+alloc(pStats2,8)
 
-label(code)     label(return)     label(skipwrite)
-label(code2)    label(return2)    label(skipwrite2)
+label(code)   label(return)   label(skipwrite)
+label(code2)  label(return2)  label(skipwrite2)
+label(skip4)  label(return4)
 registersymbol(pPlayer)
-registersymbol(healthSet)
-registersymbol(healthDmg)
+registersymbol(pStats2)
 
-// ---- site 1: clamped setter -- mov [rbx+10],edi ----
+// --- health: clamped setter ---
 newmem:
   mov [pPlayer],rbx
   cmp edi,[rbx+10]
@@ -35,7 +38,7 @@ healthSet:
   nop 5
 return:
 
-// ---- site 2: damage apply -- mov [rdi+10],eax ----
+// --- health: damage apply ---
 newmem2:
   mov [pPlayer],rdi
   cmp eax,[rdi+10]
@@ -51,20 +54,38 @@ healthDmg:
   nop 2
 return2:
 
+// --- stats: capture array base on a jump-height read ---
+newmem4:
+  pushfq
+  cmp rax,34
+  jne skip4
+  mov [pStats2],rcx
+skip4:
+  popfq
+  movss xmm0,[rcx+rax*8+2C]
+  jmp return4
+
+statAob+40:
+  jmp newmem4
+  nop
+return4:
+
 [DISABLE]
 
 healthSet:
   db 89 7B 10 48 8B 05 46 47 B4 02
 healthDmg:
   db 89 47 10 83 7F 10 00
+statAob+40:
+  db F3 0F 10 44 C1 2C
 
 unregistersymbol(pPlayer)
-unregistersymbol(healthSet)
-unregistersymbol(healthDmg)
+unregistersymbol(pStats2)
 dealloc(newmem)
 dealloc(newmem2)
+dealloc(newmem4)
 dealloc(pPlayer)
-
+dealloc(pStats2)
 </AssemblerScript>
     </CheatEntry>
     <CheatEntry>
@@ -78,60 +99,150 @@ dealloc(pPlayer)
       </Offsets>
     </CheatEntry>
     <CheatEntry>
-      <ID>3</ID>
-      <Description>"Move speed (hardcoded)"</Description>
-      <VariableType>Float</VariableType>
-      <Address>6FA279BC</Address>
-    </CheatEntry>
-    <CheatEntry>
       <ID>4</ID>
-      <Description>"Register PStats"</Description>
-      <VariableType>Auto Assembler Script</VariableType>
-      <AssemblerScript>[ENABLE]
-
-aobscanmodule(statWrite,GameAssembly.dll,F3 0F 11 74 C3 2C B0 01)
-alloc(newmem3,$1000,statWrite)
-alloc(pStats,8)
-
-label(code3)
-label(return3)
-registersymbol(pStats)
-registersymbol(statWrite)
-
-newmem3:
-  push rax                    // rax holds the stat index - must not clobber it
-  lea rax,[rbx+2C]            // arrayBase = rbx + 0x2C
-  mov [pStats],rax
-  pop rax
-code3:
-  movss [rbx+rax*8+2C],xmm6
-  jmp return3
-
-statWrite:
-  jmp newmem3
-  nop
-return3:
-
-[DISABLE]
-
-statWrite:
-  db F3 0F 11 74 C3 2C
-
-unregistersymbol(pStats)
-unregistersymbol(statWrite)
-dealloc(newmem3)
-dealloc(pStats)
-
-</AssemblerScript>
-    </CheatEntry>
-    <CheatEntry>
-      <ID>5</ID>
-      <Description>"PStats"</Description>
+      <Description>"pStats2 (array base - debug)"</Description>
       <ShowAsHex>1</ShowAsHex>
       <ShowAsSigned>0</ShowAsSigned>
       <VariableType>8 Bytes</VariableType>
-      <Address>pStats</Address>
+      <Address>pStats2</Address>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>200</ID>
+      <Description>"Stats (needs script enabled + one jump)"</Description>
+      <GroupHeader>1</GroupHeader>
+      <CheatEntries>
+        <CheatEntry>
+          <ID>201</ID>
+          <Description>"Max HP"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>2C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>202</ID>
+          <Description>"HP Regen"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>3C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>203</ID>
+          <Description>"Overheal"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>4C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>204</ID>
+          <Description>"Shield"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>5C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>205</ID>
+          <Description>"Armor"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>6C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>206</ID>
+          <Description>"Evasion"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>7C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>207</ID>
+          <Description>"Lifesteal"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>8C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>208</ID>
+          <Description>"Thorns"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>9C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>209</ID>
+          <Description>"Damage"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>AC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>210</ID>
+          <Description>"Crit Chance"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>14C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>211</ID>
+          <Description>"Movement Speed"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>1BC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>212</ID>
+          <Description>"Jump Height"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>1CC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>213</ID>
+          <Description>"Pickup Range"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>1FC</Offset>
+          </Offsets>
+        </CheatEntry>
+      </CheatEntries>
     </CheatEntry>
   </CheatEntries>
-  <UserdefinedSymbols/>
+  <UserdefinedSymbols />
 </CheatTable>

@@ -124,31 +124,76 @@ verified by editing movement speed and observing the character actually move
 faster. Recalculated stats (movement speed) are overwritten whenever an upgrade
 fires a recalculation, so freeze rather than set them.
 
-### The open problem: capturing the base
+### Capturing the base
 
-The stat writer is at `GameAssembly.dll+DCFBE1`:
+Solved by hooking the generic stat **getter** and filtering on which stat is
+being read.
 
 ```
-movss [rbx+rax*8+2C],xmm6        rax = id*2,  arrayBase = rbx + 0x2C
+GameAssembly.dll+DD28C9   movss xmm0,[rcx+rax*8+2C]
+
+arrayBase = rcx + 0x1C
+rax       = 2 * (id - 1)      the instruction before it is `add rax,rax`
 ```
 
-The arithmetic is right, but **this setter is generic across every entity**.
-Enemies spawn constantly and each gets a stats array, so a naive capture always
-ends up holding the most recently spawned enemy's array (observed: a
-freshly-allocated array of all zeros).
+Only the player reads Jump Height (id 27, so `rax = 0x34`), so filtering on that
+guarantees the capture is the player's array and never an enemy's. Enemies do
+get stats arrays through the same code, which is why the *writer* at
+`GameAssembly.dll+DCFBE1` is unusable for this - it latches onto whichever
+entity spawned last.
 
-Two routes not yet tried:
+Table entries are then `pStats2` + `0x1C + id*0x10`:
 
-1. **Hook a reader instead.** The player's movement code reads movement speed
-   every frame; nothing else reads *your* array. `Find out what accesses` the
-   movement-speed entry and hook a high-count reader.
-2. **Hook the pointer store.** A slot holding `arrayBase - 0x1C` was located by
-   scanning for pointers into the array region. Whatever writes that slot runs
-   during player setup and is inherently player-specific, but it fires only at
-   run start.
+| Stat | Offset | Stat | Offset |
+| :--- | ---: | :--- | ---: |
+| Max HP | `2C` | Damage | `AC` |
+| HP Regen | `3C` | Crit Chance | `14C` |
+| Overheal | `4C` | Movement Speed | `1BC` |
+| Shield | `5C` | Jump Height | `1CC` |
+| Armor | `6C` | Pickup Range | `1FC` |
+| Evasion | `7C` | | |
+| Lifesteal | `8C` | | |
+| Thorns | `9C` | | |
 
-Until one of those lands, the `Move speed (hardcoded)` entry in the table is a
-raw address and **only valid for the run it was found in**.
+Enable the script, then **jump once** to prime `pStats2` - the entries read `??`
+until the getter has been called with id 27.
+
+### The two identical getters - do not wildcard this AOB
+
+The module contains **two byte-identical copies** of that getter. They differ
+only in the `rel32` displacements of the two `call` instructions ~60 bytes
+earlier. Your code only ever runs one of them.
+
+A short AOB matches both, and Cheat Engine hooks the first - a function the
+player never calls, so the hook installs cleanly, reports success, and does
+nothing. This cost several hours to find.
+
+The AOB therefore starts 0x40 bytes before the injection point (to include the
+differing call displacements) and injects at `statAob+40`. **The displacements
+must be literal.** Wildcarding them - the usual practice for making a pattern
+survive updates - removes the only bytes that distinguish the two copies and
+reintroduces the bug.
+
+Consequence: this AOB will break on a game update and must be re-derived. That
+is the correct trade; a pattern that cannot tell the two functions apart is
+worse than one that needs maintenance.
+
+**Verify which copy got hooked** rather than trusting that it enabled:
+
+```bash
+pid=$(pgrep -x Megabonk.exe | head -1)
+base=$(grep -m1 GameAssembly.dll /proc/$pid/maps | cut -d- -f1)
+python3 -c "
+mem=open('/proc/$pid/mem','rb')
+for name,rva in (('right',0xDD28C9),('wrong',0xDAC239)):
+    mem.seek(0x$base+rva); d=mem.read(6)
+    print(name, d.hex(' '), 'HOOKED' if d[0]==0xE9 else '')"
+```
+
+Note the trap this creates for uniqueness checks: once Cheat Engine has patched
+one copy, that copy no longer matches the pattern, so a scan run afterwards
+reports the AOB as unique when it is not. Compare the two copies using bytes
+that are unpatched in both.
 
 ## Re-deriving after a game update
 
