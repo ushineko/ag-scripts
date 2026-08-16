@@ -51,6 +51,7 @@ METADATA_RELPATH = os.path.join("Megabonk_Data", "il2cpp_data", "Metadata", "glo
 
 
 GAME_INSTALLDIR = "Megabonk"
+APPID_DEFAULT = "3405340"
 
 # Steam library roots to probe before falling back to libraryfolders.vdf.
 _DEFAULT_STEAM_ROOTS = (

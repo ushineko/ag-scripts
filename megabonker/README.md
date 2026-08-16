@@ -35,6 +35,17 @@ if it ever changes — so the tool does not go stale after a patch.
 - **Round-trip verification** before any file is opened for editing: if
   re-encrypting the untouched contents does not reproduce the original bytes,
   the file is refused instead of risking corruption.
+- **Stale-save protection** — if the game writes to a save while it is open in
+  the editor, saving is blocked and a banner offers Reload or Keep mine. Without
+  this, saving a buffer that predates a play session silently reverts all of it.
+- **Identifier validation** — ids you add are checked against the game's own
+  vocabulary (metadata string literals plus Steam's achievement schema) and
+  highlighted if unrecognised. The game persists ids it does not know and
+  ignores them, so a typo otherwise looks exactly like a feature that does not
+  work. Only your additions are checked, so the game's own ids never false-alarm.
+- **Steam awareness** — warns when Steam is running (cloud sync can revert
+  edits) and before saving achievement edits, which propagate to your public
+  Steam profile.
 - **Automatic backups** — every write leaves a timestamped `.bak` beside the save.
 - **Key recovery** built in: if a game update changes the key, Tools → Recover
   Save Key searches the installed game and finds it, typically in under a second.
@@ -166,6 +177,9 @@ search fails — including what to do if the encryption scheme itself changes.
   refused rather than edited.
 - Megabonk reports to leaderboards. Edited progression may end up there; keep
   modified saves off them if that matters to you.
+- Editing `achievements` / `claimedAchievements` can put an achievement you did
+  not earn on your public Steam profile. This is observed behaviour, not a
+  theoretical risk. The editor warns before such a save.
 
 ## Project layout
 
@@ -179,6 +193,8 @@ megabonker/
 │   ├── keys.py              known keys and the user keyring
 │   ├── derive.py            blind key/IV recovery from the game files
 │   ├── savefile.py          discovery, loading, backups, atomic writes
+│   ├── gamedata.py          identifier vocabulary from game + Steam
+│   ├── validate.py          checks on user-added identifiers
 │   └── gui/
 │       ├── main_window.py   profile picker and tabs
 │       ├── json_editor.py   editable JSON tree

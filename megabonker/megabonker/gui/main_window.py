@@ -5,19 +5,22 @@ import os
 import subprocess
 import sys
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
                              QLineEdit, QMainWindow, QMessageBox, QPushButton,
                              QTabWidget, QVBoxLayout, QWidget)
 
 from megabonker.config import ConfigManager
+from megabonker.gamedata import known_ids, steam_is_running
 from megabonker.gui.derive_dialog import DeriveDialog
 from megabonker.gui.json_editor import JsonTreeWidget
 from megabonker.keys import load_keyring
 from megabonker.savefile import (ENCRYPTED_NAMES, PLAIN_NAMES, SAVE_ROOT,
                                  SaveError, SaveFile, find_profiles,
                                  game_is_running)
+from megabonker.validate import (describe, touches_steam_achievements,
+                                 unknown_additions)
 
 APP_NAME = "megabonker"
 DISPLAY_NAME = "Megabonker"
@@ -28,10 +31,14 @@ class SaveTab(QWidget):
 
     dirty_changed = pyqtSignal()
 
-    def __init__(self, save: SaveFile, parent=None):
+    validation_changed = pyqtSignal()
+
+    def __init__(self, save: SaveFile, vocabulary: set | None = None, parent=None):
         super().__init__(parent)
         self.save = save
+        self.vocabulary = vocabulary or set()
         self.dirty = False
+        self.suspects: dict = {}
         self.init_ui()
 
     def init_ui(self):
@@ -61,9 +68,22 @@ class SaveTab(QWidget):
         layout.addWidget(self.info_label)
 
     def on_data_changed(self):
+        self.revalidate()
         if not self.dirty:
             self.dirty = True
             self.dirty_changed.emit()
+
+    def revalidate(self):
+        """Flag ids this session added that the game does not recognise.
+
+        Only additions are checked: the game writes ids we cannot always find a
+        definition for (composite ones like "SantaHat_hat"), so validating the
+        whole file would cry wolf and get ignored.
+        """
+        self.suspects = unknown_additions(self.save.original, self.save.data,
+                                          self.vocabulary)
+        self.tree.mark_suspects(self.suspects)
+        self.validation_changed.emit()
 
     def mark_clean(self):
         self.dirty = False
@@ -79,6 +99,16 @@ class MainWindow(QMainWindow):
         self.config_data = self.config_manager.load_config()
         self.tabs_by_name: dict[str, SaveTab] = {}
         self.requested_profile = profile
+        self.vocabulary = known_ids()
+        self.stale = False
+
+        # The editor serialises its whole in-memory document on save, so writing
+        # a buffer that predates a play session silently reverts everything that
+        # happened in between. Poll for the file changing underneath us.
+        self.watch_timer = QTimer(self)
+        self.watch_timer.setInterval(2000)
+        self.watch_timer.timeout.connect(self.check_stale)
+        self.watch_timer.start()
 
         self.setWindowTitle(f"{DISPLAY_NAME} - Megabonk Save Editor")
         self.setWindowIcon(QIcon.fromTheme("applications-games"))
@@ -108,6 +138,25 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(False)
         top_layout.addWidget(self.save_btn)
         layout.addLayout(top_layout)
+
+        self.stale_bar = QWidget()
+        stale_layout = QHBoxLayout(self.stale_bar)
+        stale_layout.setContentsMargins(8, 6, 8, 6)
+        self.stale_label = QLabel(
+            "⚠️ These saves changed on disk since they were opened - the game has "
+            "written to them. Saving now would overwrite that progress."
+        )
+        self.stale_label.setWordWrap(True)
+        stale_layout.addWidget(self.stale_label, 1)
+        self.stale_reload_btn = QPushButton("Reload from disk")
+        self.stale_reload_btn.clicked.connect(self.on_stale_reload)
+        stale_layout.addWidget(self.stale_reload_btn)
+        self.stale_override_btn = QPushButton("Keep mine")
+        self.stale_override_btn.clicked.connect(self.on_stale_override)
+        stale_layout.addWidget(self.stale_override_btn)
+        self.stale_bar.setStyleSheet("background-color: #552222;")
+        self.stale_bar.setVisible(False)
+        layout.addWidget(self.stale_bar)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -186,6 +235,8 @@ class MainWindow(QMainWindow):
         if not self.confirm_discard():
             return
 
+        self.stale = False
+        self.stale_bar.setVisible(False)
         self.tabs.clear()
         self.tabs_by_name.clear()
         keyring = load_keyring()
@@ -198,8 +249,9 @@ class MainWindow(QMainWindow):
             except SaveError as e:
                 failures.append(f"{os.path.basename(path)}: {e}")
                 continue
-            tab = SaveTab(save)
+            tab = SaveTab(save, self.vocabulary)
             tab.dirty_changed.connect(self.refresh_dirty_state)
+            tab.validation_changed.connect(self.refresh_validation)
             self.tabs.addTab(tab, save.name)
             self.tabs_by_name[path] = tab
 
@@ -220,13 +272,75 @@ class MainWindow(QMainWindow):
         elif failures:
             self.set_status("🟡 Some files could not be opened: " + " | ".join(failures))
         else:
-            running = " · ⚠️ Megabonk is running" if game_is_running() else ""
-            self.set_status(f"🟢 Loaded {len(self.tabs_by_name)} file(s){running}")
+            notes = ""
+            if game_is_running():
+                notes += " · ⚠️ Megabonk is running"
+            if steam_is_running():
+                # CloudDir is Steam Cloud synced; the cloud copy can win.
+                notes += " · ⚠️ Steam is running (cloud sync may revert edits)"
+            self.set_status(f"🟢 Loaded {len(self.tabs_by_name)} file(s){notes}")
 
     def set_status(self, text: str):
         self.status_label.setText(text)
 
     # ------------------------------------------------------------- edit/save
+
+    def refresh_validation(self):
+        """Surface unrecognised ids added during this session."""
+        merged: dict[str, list[str]] = {}
+        for tab in self.tabs_by_name.values():
+            for field, values in tab.suspects.items():
+                merged.setdefault(field, []).extend(values)
+        if merged:
+            self.set_status(f"🟡 {describe(merged)} - the game ignores ids it "
+                            f"does not recognise, so check the spelling")
+        elif not self.stale:
+            self.set_status(f"🟢 {len(self.tabs_by_name)} file(s) loaded")
+
+    def check_stale(self):
+        """Detect the save file changing on disk behind the editor."""
+        if self.stale or not self.tabs_by_name:
+            return
+        changed = [t for t in self.tabs_by_name.values() if t.save.is_stale()]
+        if not changed:
+            return
+        self.stale = True
+        self.stale_bar.setVisible(True)
+        names = ", ".join(sorted(t.save.name for t in changed))
+        self.stale_label.setText(
+            f"⚠️ Changed on disk since opened: {names}. The game has written to "
+            f"these. Saving now would overwrite that progress."
+        )
+        self.refresh_dirty_state()
+
+    def on_stale_reload(self):
+        """Discard the in-memory copy and re-read what the game wrote."""
+        self.stale = False
+        self.stale_bar.setVisible(False)
+        for tab in self.tabs_by_name.values():
+            tab.dirty = False          # reloading is the user's answer to the prompt
+        self.load_profile()
+
+    def on_stale_override(self):
+        """Keep the in-memory edits and allow saving over the newer file."""
+        reply = QMessageBox.warning(
+            self,
+            "Overwrite newer save?",
+            "The file on disk is newer than what is open here - most likely the "
+            "game wrote it.\n\nKeeping your version will discard whatever the "
+            "game saved in the meantime, including any progress from that "
+            "session.\n\nKeep the in-memory version anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.stale = False
+        self.stale_bar.setVisible(False)
+        # Re-baseline so the same file does not trigger the warning again.
+        for tab in self.tabs_by_name.values():
+            tab.save.mtime = tab.save.disk_mtime()
+        self.refresh_dirty_state()
 
     def dirty_tabs(self) -> list[SaveTab]:
         return [t for t in self.tabs_by_name.values() if t.dirty]
@@ -235,7 +349,7 @@ class MainWindow(QMainWindow):
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             self.tabs.setTabText(index, tab.save.name + (" *" if tab.dirty else ""))
-        self.save_btn.setEnabled(bool(self.dirty_tabs()))
+        self.save_btn.setEnabled(bool(self.dirty_tabs()) and not self.stale)
 
     def confirm_discard(self) -> bool:
         """Ask before throwing away unsaved edits. True means proceed."""
@@ -254,6 +368,28 @@ class MainWindow(QMainWindow):
         dirty = self.dirty_tabs()
         if not dirty:
             return
+        if self.stale:
+            QMessageBox.warning(
+                self, "Save changed on disk",
+                "These files changed on disk after they were opened. Reload, or "
+                "choose 'Keep mine', before saving.",
+            )
+            return
+        achievement_edits = [t for t in dirty
+                             if touches_steam_achievements(t.save.original, t.save.data)]
+        if achievement_edits:
+            reply = QMessageBox.warning(
+                self,
+                "This edit may reach Steam",
+                "You are adding achievement ids.\n\nMegabonk mirrors its local "
+                "achievement list up to Steam, so an achievement you did not earn "
+                "can appear on your public Steam profile. This has been observed, "
+                "not merely assumed.\n\nContinue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         if self.config_data.get("warn_if_running", True) and game_is_running():
             reply = QMessageBox.warning(
                 self,

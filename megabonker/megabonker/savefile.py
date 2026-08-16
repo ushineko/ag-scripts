@@ -10,6 +10,7 @@ Only the CloudDir pair is encrypted; this module handles both and records which
 is which so the GUI can present them uniformly.
 """
 
+import copy
 import json
 import os
 import shutil
@@ -43,18 +44,47 @@ def find_profiles(save_root: str = SAVE_ROOT) -> list[tuple[str, str]]:
     return profiles
 
 
+GAME_PROCESS = "Megabonk.x86_64"
+GAME_INSTALL_MARKER = os.path.join("common", "Megabonk")
+
+
 def game_is_running() -> bool:
     """True if a Megabonk process is live.
 
     Editing underneath a running game is pointless - it holds state in memory
     and overwrites on exit - so callers warn before proceeding.
+
+    Matches the executable, not a command line. An earlier `pgrep -f Megabonk`
+    matched any process merely *mentioning* the game - a shell running a check,
+    a launcher passing the install path - and reported the game as running when
+    it was not.
     """
     try:
-        return subprocess.run(
-            ["pgrep", "-f", "Megabonk"], capture_output=True
-        ).returncode == 0
+        if subprocess.run(["pgrep", "-x", GAME_PROCESS],
+                          capture_output=True).returncode == 0:
+            return True
     except FileNotFoundError:
+        pass
+    return _proc_exe_in_install_dir()
+
+
+def _proc_exe_in_install_dir() -> bool:
+    """Fallback: any process whose executable lives in the game install dir.
+
+    Catches a renamed or differently-packaged binary that `pgrep -x` misses.
+    """
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
         return False
+    for pid in pids:
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            continue
+        if GAME_INSTALL_MARKER in exe:
+            return True
+    return False
 
 
 class SaveFile:
@@ -68,6 +98,28 @@ class SaveFile:
         self.plaintext: bytes = b""
         self.data: dict = {}
         self.key: SaveKey | None = None
+        # Snapshot of what was on disk, for staleness detection and for telling
+        # user-added ids apart from the game's own.
+        self.original: dict = {}
+        self.mtime: float | None = None
+
+    def disk_mtime(self) -> float | None:
+        try:
+            return os.path.getmtime(self.path)
+        except OSError:
+            return None
+
+    def is_stale(self) -> bool:
+        """True if the file changed on disk since we loaded it.
+
+        Writing a stale buffer silently reverts whatever happened in between -
+        a play session's worth of progress, currency and unlocks - because the
+        editor serialises its whole in-memory document, not a delta.
+        """
+        if self.mtime is None:
+            return False
+        current = self.disk_mtime()
+        return current is not None and current > self.mtime
 
     def load(self, keyring: list[SaveKey] | None = None):
         """Read and decrypt the file, leaving JSON in self.data."""
@@ -92,6 +144,8 @@ class SaveFile:
             self.data = json.loads(self.plaintext)
         except ValueError as e:
             raise SaveError(f"{self.name} did not contain valid JSON: {e}") from e
+        self.original = copy.deepcopy(self.data)
+        self.mtime = self.disk_mtime()
 
     def dumps(self) -> bytes:
         """Serialise self.data the way the game writes it (2-space indent)."""
@@ -128,4 +182,6 @@ class SaveFile:
                 os.unlink(tmp)
             raise SaveError(f"cannot write {self.path}: {e}") from e
         self.raw = payload
+        self.original = copy.deepcopy(self.data)
+        self.mtime = self.disk_mtime()
         return backup_path

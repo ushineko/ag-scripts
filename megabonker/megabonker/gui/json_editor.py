@@ -20,6 +20,8 @@ COL_TYPE = 2
 _PATH_ROLE = Qt.ItemDataRole.UserRole
 _TYPE_ROLE = Qt.ItemDataRole.UserRole + 1
 
+SUSPECT_COLOR = "#D9534F"
+
 # Containers are shown but not editable; only these leaf types can be changed.
 _EDITABLE = (str, int, float, bool)
 
@@ -143,6 +145,35 @@ class JsonTreeWidget(QTreeWidget):
         item.setText(COL_VALUE, format_value(new_value))
         self._loading = False
         self.data_changed.emit()
+
+    def mark_suspects(self, suspects: dict[str, list[str]]):
+        """Highlight leaf values flagged by validation.
+
+        `suspects` maps a top-level field name to the values under it that the
+        game does not appear to recognise. Previous marks are cleared first so
+        the highlighting always reflects the current edit state.
+        """
+        tooltip = ("Not found in the game's identifiers. Likely a typo - the game "
+                   "silently ignores ids it does not recognise.")
+        iterator = QTreeWidgetItemIterator(self)
+        while iterator.value():
+            item = iterator.value()
+            path = item.data(COL_KEY, _PATH_ROLE)
+            if item.childCount():
+                # Container row - keep its gray "{n}" / "[n]" styling.
+                iterator += 1
+                continue
+            suspect = (
+                path and len(path) == 2 and path[0] in suspects
+                and item.text(COL_VALUE) in suspects[path[0]]
+            )
+            if suspect:
+                item.setForeground(COL_VALUE, QBrush(QColor(SUSPECT_COLOR)))
+                item.setToolTip(COL_VALUE, tooltip)
+            else:
+                item.setData(COL_VALUE, Qt.ItemDataRole.ForegroundRole, None)
+                item.setToolTip(COL_VALUE, "")
+            iterator += 1
 
     def filter_items(self, text: str):
         """Hide rows whose key and value do not contain `text`.
