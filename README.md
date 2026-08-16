@@ -31,6 +31,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [foghorn-leghorn](foghorn-leghorn/) | Always-on-top countdown timer with system tray integration, desktop notifications, and attention-grabbing alarm sounds (foghorn, Wilhelm scream, air horn). |
 | [game-desktop-creator](game-desktop-creator/) | PyQt6 GUI for creating start menu launchers for Steam, Epic, and GOG games. Discovers games from Steam and Heroic Games Launcher. |
 | [kvm-setup](kvm-setup/) | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions. |
+| [megabonker](megabonker/) | PyQt6 save editor for the Steam game Megabonk. Decrypts the AES-256-CBC save files into an editable JSON tree with typed edits, backups and atomic writes, and can re-derive the game's baked-in encryption key from its own IL2CPP metadata when an update rotates it. |
 | [misc](misc/) | General utilities for NTFS mount fixing and fstab generation during Windows-to-Linux migration. |
 | [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring, plus configurable real-time/cumulative network bandwidth with Tailscale exit-node awareness. |
 | [pinball-fx](pinball-fx/) | Tiny gamescope wrapper for Heroic-launched Pinball FX. Heroic handles Wine/Proton + Epic auth + DLC; this adds gamescope, HDR, and KWin pinning to the portrait monitor. Configured in Heroic's per-game "Wrapper Command" setting. |
