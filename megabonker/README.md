@@ -178,6 +178,11 @@ settings.
 megabonker finds saves in both the native root and any Proton prefix, and labels
 profiles by origin when both exist — so it keeps working across the switch.
 
+A working table lives in [`tables/Megabonk.CT`](tables/Megabonk.CT) — health
+pointer plus godmode, hooking both of the game's health write sites.
+**[docs/trainer-table.md](docs/trainer-table.md)** explains how it works and how
+to re-derive the offsets after a game update.
+
 ## Safety
 
 - Every write is preceded by a timestamped backup:

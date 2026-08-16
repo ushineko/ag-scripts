@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="46">
+  <CheatEntries>
+    <CheatEntry>
+      <ID>1</ID>
+      <Description>"Infinite Health"</Description>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+
+aobscanmodule(healthSet,GameAssembly.dll,89 7B 10 48 8B 05 46 47 B4 02)
+aobscanmodule(healthDmg,GameAssembly.dll,89 47 10 83 7F 10 00 0F 8F)
+alloc(newmem,$1000,healthSet)
+alloc(newmem2,$1000,healthDmg)
+alloc(pPlayer,8)
+
+label(code)     label(return)     label(skipwrite)
+label(code2)    label(return2)    label(skipwrite2)
+registersymbol(pPlayer)
+registersymbol(healthSet)
+registersymbol(healthDmg)
+
+// ---- site 1: clamped setter -- mov [rbx+10],edi ----
+newmem:
+  mov [pPlayer],rbx
+  cmp edi,[rbx+10]
+  jl skipwrite
+code:
+  mov [rbx+10],edi
+skipwrite:
+  mov rax,[GameAssembly.dll+2F6D478]
+  jmp return
+
+healthSet:
+  jmp newmem
+  nop 5
+return:
+
+// ---- site 2: damage apply -- mov [rdi+10],eax ----
+newmem2:
+  mov [pPlayer],rdi
+  cmp eax,[rdi+10]
+  jl skipwrite2
+code2:
+  mov [rdi+10],eax
+skipwrite2:
+  cmp dword ptr [rdi+10],00
+  jmp return2
+
+healthDmg:
+  jmp newmem2
+  nop 2
+return2:
+
+[DISABLE]
+
+healthSet:
+  db 89 7B 10 48 8B 05 46 47 B4 02
+healthDmg:
+  db 89 47 10 83 7F 10 00
+
+unregistersymbol(pPlayer)
+unregistersymbol(healthSet)
+unregistersymbol(healthDmg)
+dealloc(newmem)
+dealloc(newmem2)
+dealloc(pPlayer)
+
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>2</ID>
+      <Description>"Health"</Description>
+      <ShowAsSigned>0</ShowAsSigned>
+      <VariableType>4 Bytes</VariableType>
+      <Address>pPlayer</Address>
+      <Offsets>
+        <Offset>10</Offset>
+      </Offsets>
+    </CheatEntry>
+  </CheatEntries>
+  <UserdefinedSymbols/>
+</CheatTable>
