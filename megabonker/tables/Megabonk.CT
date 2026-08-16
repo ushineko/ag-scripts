@@ -20,6 +20,9 @@ label(code)   label(return)   label(skipwrite)
 label(code2)  label(return2)  label(skipwrite2)
 label(skip4)  label(return4)
 registersymbol(pPlayer)
+registersymbol(healthSet)
+registersymbol(healthDmg)
+registersymbol(statAob)
 registersymbol(pStats2)
 
 // --- health: clamped setter ---
@@ -79,7 +82,13 @@ healthDmg:
 statAob+40:
   db F3 0F 10 44 C1 2C
 
+unregistersymbol(healthSet)
+unregistersymbol(healthDmg)
+unregistersymbol(statAob)
 unregistersymbol(pPlayer)
+registersymbol(healthSet)
+registersymbol(healthDmg)
+registersymbol(statAob)
 unregistersymbol(pStats2)
 dealloc(newmem)
 dealloc(newmem2)

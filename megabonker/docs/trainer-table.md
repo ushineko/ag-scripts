@@ -117,22 +117,45 @@ Verified by writing a unique value into each id and reading the Stats screen.
 
 Offset = `0x1C + id * 0x10`.
 
-Not resolved: **XP Gain** and **Elite Spawn Increase** displayed values colliding
-with Size (10) and Crit Damage (40), so they read from elsewhere or are derived.
-**Thorns** showed a capped `999`. **Silver Gain** never changed - it comes from
-the permanent shop upgrade in `progression.json`, not the run array.
+Not resolved: **XP Gain**, **Elite Spawn Increase** and **Thorns**. A second
+probe was inconclusive because a recalculation rebuilt the computed array before
+the screen could be read. Finishing the map means probing the **source** array
+instead, where values persist - best done on a throwaway run, since a bad write
+to the source is more consequential than to the computed copy.
+
+**Silver Gain** is not in the run array at all - it comes from the permanent shop
+upgrade stored in `progression.json`.
 
 The array order does **not** follow the Stats screen. Ids 1-6 happen to line up,
 then diverge - Damage is id 13, not 9, and Shield is 3, not 4. Guessing from
 screen position produces entries that silently do nothing, which is exactly what
 happened before this was measured.
 
-**Two arrays exist.** They are identical except for evasion, where one holds the
-raw sum and the other the post-diminishing-returns value. The array the game
-displays and uses for gameplay is the one holding the *computed* evasion -
-verified by editing movement speed and observing the character actually move
-faster. Recalculated stats (movement speed) are overwritten whenever an upgrade
-fires a recalculation, so freeze rather than set them.
+### Two arrays: source and computed
+
+There are two stat arrays in memory, and the relationship matters:
+
+| | Role |
+| :--- | :--- |
+| **source** | the game's real values, built from your items and upgrades |
+| **computed** | what the Stats screen displays and what `pStats2` points at |
+
+**The computed array is rebuilt from the source array on every recalculation** -
+triggered by picking up an upgrade, levelling, and periodically. Anything written
+into the computed array is therefore *transient*: it applies immediately and
+survives until the next recalculation, then reverts.
+
+Practical rule: **freeze stat entries, do not just set them.** Ticking an entry's
+Active box makes Cheat Engine rewrite it many times a second, which wins against
+the recalculation. A one-off write will appear to work and then silently revert -
+first observed when an agility tome reset an edited movement speed.
+
+The two arrays are otherwise near-identical; evasion differs because the computed
+copy holds the post-diminishing-returns value.
+
+This also breaks naive probing: writing unique values into the computed array to
+identify stats works only if you read the screen before the next recalculation.
+A probe that fails this way looks like the stats were never written at all.
 
 ### Capturing the base
 
