@@ -107,13 +107,13 @@ dealloc(pStats2)
       <Address>pStats2</Address>
     </CheatEntry>
     <CheatEntry>
-      <ID>200</ID>
-      <Description>"Stats (needs script enabled + one jump)"</Description>
+      <ID>300</ID>
+      <Description>"Stats (enable script, then jump once)"</Description>
       <GroupHeader>1</GroupHeader>
       <CheatEntries>
         <CheatEntry>
-          <ID>201</ID>
-          <Description>"Max HP"</Description>
+          <ID>301</ID>
+          <Description>"Max HP (id 1)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -122,8 +122,8 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>202</ID>
-          <Description>"HP Regen"</Description>
+          <ID>302</ID>
+          <Description>"HP Regen (id 2)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -132,8 +132,8 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>203</ID>
-          <Description>"Overheal"</Description>
+          <ID>303</ID>
+          <Description>"Shield (id 3)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -142,18 +142,8 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>204</ID>
-          <Description>"Shield"</Description>
-          <ShowAsSigned>0</ShowAsSigned>
-          <VariableType>Float</VariableType>
-          <Address>pStats2</Address>
-          <Offsets>
-            <Offset>5C</Offset>
-          </Offsets>
-        </CheatEntry>
-        <CheatEntry>
-          <ID>205</ID>
-          <Description>"Armor"</Description>
+          <ID>304</ID>
+          <Description>"Armor (id 5)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -162,8 +152,8 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>206</ID>
-          <Description>"Evasion"</Description>
+          <ID>305</ID>
+          <Description>"Evasion (id 6)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -172,38 +162,78 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>207</ID>
-          <Description>"Lifesteal"</Description>
+          <ID>306</ID>
+          <Description>"Size (id 10)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
           <Offsets>
-            <Offset>8C</Offset>
+            <Offset>BC</Offset>
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>208</ID>
-          <Description>"Thorns"</Description>
+          <ID>307</ID>
+          <Description>"Duration (id 11)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
           <Offsets>
-            <Offset>9C</Offset>
+            <Offset>CC</Offset>
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>209</ID>
-          <Description>"Damage"</Description>
+          <ID>308</ID>
+          <Description>"Projectile Speed (id 12)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
           <Offsets>
-            <Offset>AC</Offset>
+            <Offset>DC</Offset>
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>210</ID>
-          <Description>"Crit Chance"</Description>
+          <ID>309</ID>
+          <Description>"Damage (id 13)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>EC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>310</ID>
+          <Description>"Attack Speed (id 16)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>11C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>311</ID>
+          <Description>"Projectile Count (id 17)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>12C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>312</ID>
+          <Description>"Lifesteal (id 18)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>13C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>313</ID>
+          <Description>"Crit Chance (id 19)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -212,8 +242,28 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>211</ID>
-          <Description>"Movement Speed"</Description>
+          <ID>314</ID>
+          <Description>"Damage to Elites (id 24)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>19C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>315</ID>
+          <Description>"Knockback (id 25)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>1AC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>316</ID>
+          <Description>"Movement Speed (id 26)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -222,8 +272,8 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>212</ID>
-          <Description>"Jump Height"</Description>
+          <ID>317</ID>
+          <Description>"Jump Height (id 27)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
@@ -232,13 +282,103 @@ dealloc(pStats2)
           </Offsets>
         </CheatEntry>
         <CheatEntry>
-          <ID>213</ID>
-          <Description>"Pickup Range"</Description>
+          <ID>318</ID>
+          <Description>"Pickup Range (id 30)"</Description>
           <ShowAsSigned>0</ShowAsSigned>
           <VariableType>Float</VariableType>
           <Address>pStats2</Address>
           <Offsets>
             <Offset>1FC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>319</ID>
+          <Description>"Luck (id 31)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>20C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>320</ID>
+          <Description>"Gold Gain (id 32)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>21C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>321</ID>
+          <Description>"Difficulty (id 39)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>28C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>322</ID>
+          <Description>"Crit Damage (id 40)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>29C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>323</ID>
+          <Description>"Powerup Multiplier (id 41)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>2AC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>324</ID>
+          <Description>"Powerup Drop Chance (id 42)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>2BC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>325</ID>
+          <Description>"Projectile Bounces (id 46)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>2FC</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>326</ID>
+          <Description>"Extra Jumps (id 47)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>30C</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>327</ID>
+          <Description>"Overheal (id 48)"</Description>
+          <ShowAsSigned>0</ShowAsSigned>
+          <VariableType>Float</VariableType>
+          <Address>pStats2</Address>
+          <Offsets>
+            <Offset>31C</Offset>
           </Offsets>
         </CheatEntry>
       </CheatEntries>

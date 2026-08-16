@@ -94,28 +94,38 @@ address = arrayBase + (id * 0x10)
 Percentages are stored as **fractions** - crit chance `0.01` displays as 1%,
 evasion `0.0783` as 8%. Multipliers are stored as shown (`1.0` = 1.0x).
 
-### Confirmed IDs
+### Stat IDs
 
-| id | offset | Stat |
-| ---: | ---: | :--- |
-| 1 | `0x010` | Max HP |
-| 2 | `0x020` | HP Regen |
-| 3 | `0x030` | Overheal |
-| 4 | `0x040` | Shield |
-| 5 | `0x050` | Armor |
-| 6 | `0x060` | Evasion |
-| 7 | `0x070` | Lifesteal |
-| 8 | `0x080` | Thorns |
-| 9 | `0x090` | Damage |
-| 19 | `0x130` | Crit Chance |
-| 26 | `0x1A0` | Movement Speed |
-| 27 | `0x1B0` | Jump Height |
-| 30 | `0x1E0` | Pickup Range |
+Verified by writing a unique value into each id and reading the Stats screen.
 
-IDs 1-9 follow the on-screen order; after that they diverge, because the array
-holds internal stats that are not displayed. The remaining ~20 entries sit at
-`1.0` or `0` and cannot be told apart by value - mapping them needs a probe pass
-(write a unique value into each unknown id, then read the Stats screen).
+| id | Stat | id | Stat |
+| ---: | :--- | ---: | :--- |
+| 1 | Max HP | 25 | Knockback |
+| 2 | HP Regen | 26 | Movement Speed |
+| 3 | Shield | 27 | Jump Height |
+| 5 | Armor | 30 | Pickup Range |
+| 6 | Evasion | 31 | Luck |
+| 10 | Size | 32 | Gold Gain |
+| 11 | Duration | 39 | Difficulty |
+| 12 | Projectile Speed | 40 | Crit Damage |
+| 13 | Damage | 41 | Powerup Multiplier |
+| 16 | Attack Speed | 42 | Powerup Drop Chance |
+| 17 | Projectile Count | 46 | Projectile Bounces |
+| 18 | Lifesteal | 47 | Extra Jumps |
+| 19 | Crit Chance | 48 | Overheal |
+| 24 | Damage to Elites | | |
+
+Offset = `0x1C + id * 0x10`.
+
+Not resolved: **XP Gain** and **Elite Spawn Increase** displayed values colliding
+with Size (10) and Crit Damage (40), so they read from elsewhere or are derived.
+**Thorns** showed a capped `999`. **Silver Gain** never changed - it comes from
+the permanent shop upgrade in `progression.json`, not the run array.
+
+The array order does **not** follow the Stats screen. Ids 1-6 happen to line up,
+then diverge - Damage is id 13, not 9, and Shield is 3, not 4. Guessing from
+screen position produces entries that silently do nothing, which is exactly what
+happened before this was measured.
 
 **Two arrays exist.** They are identical except for evasion, where one holds the
 raw sum and the other the post-diminishing-returns value. The array the game
