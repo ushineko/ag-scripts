@@ -75,7 +75,12 @@ The installer throws an unhandled Wine exception (`0x0eedfade`) as it exits,
 checking for the binary — an earlier version aborted on it and skipped the DPI
 step entirely.
 
-Cheat Engine reads DPI at startup, so if it is already open, restart it.
+**DPI changes only take effect on a fresh Wine session.** Wine reads `LogPixels`
+once, when the wineserver session starts. Change it while Megabonk or Cheat
+Engine is running and the value is written to `user.reg` correctly but the live
+session keeps its old DPI — so it looks applied and does nothing. Quit the game
+*and* Cheat Engine, then relaunch. The script warns when it detects either still
+running.
 
 ### 5. Verify the saves came across
 
@@ -131,6 +136,16 @@ Both are required. `winecfg` writes both, and setting only the Windows-standard
 key leaves the UI at 100% — which looks exactly like the setting failing to
 apply. This was found the hard way: the first version of the script wrote only
 `Control Panel\Desktop` and Cheat Engine launched at original size.
+
+Two further gotchas, both of which produce the same "it didn't work" symptom:
+
+- **Nothing may hold the prefix open.** Wine caches DPI at wineserver startup, so
+  the change is inert until every process using the prefix exits. Quit the game
+  and Cheat Engine, then relaunch.
+- **`winecfg` will not start while the game is running.** protontricks' wine and
+  the wine Proton launched the game with are different builds, and it fails with
+  `version mismatch 931/957`. Close the game first if you want the GUI. This does
+  *not* affect Cheat Engine, which attaches to a running game fine.
 
 | Value | Hex | Scale |
 | ---: | :--- | :--- |
