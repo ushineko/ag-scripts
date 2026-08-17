@@ -111,6 +111,7 @@ Verified by writing a unique value into each id and reading the Stats screen.
 | 1 | Max HP | 25 | Knockback |
 | 2 | HP Regen | 26 | Movement Speed |
 | 3 | Shield | 27 | Jump Height |
+| 4 | Thorns | 33 | XP Gain |
 | 5 | Armor | 30 | Pickup Range |
 | 6 | Evasion | 31 | Luck |
 | 10 | Size | 32 | Gold Gain |
@@ -125,14 +126,28 @@ Verified by writing a unique value into each id and reading the Stats screen.
 
 Offset = `0x1C + id * 0x10`.
 
-Not resolved: **XP Gain**, **Elite Spawn Increase** and **Thorns**. A second
-probe was inconclusive because a recalculation rebuilt the computed array before
-the screen could be read. Finishing the map means probing the **source** array
-instead, where values persist - best done on a throwaway run, since a bad write
-to the source is more consequential than to the computed copy.
+All 50 ids are now accounted for. **Elite Spawn Increase** is not in this array -
+every slot was probed and none moved it - so like **Silver Gain** it lives
+elsewhere (Silver Gain comes from the permanent shop upgrade in
+`progression.json`; Elite Spawn is likely a map or difficulty property).
 
-**Silver Gain** is not in the run array at all - it comes from the permanent shop
-upgrade stored in `progression.json`.
+### Probing technique
+
+Three attempts failed before this worked. What matters:
+
+- **Both arrays get recomputed from the item inventory**, not just source ->
+  computed. A single write is reverted almost immediately, so probe values must
+  be *held* - rewrite them continuously (~20x/sec) while reading the screen.
+- **Re-locate the arrays immediately before probing.** They move between runs and
+  can be relocated by the GC. One probe silently wrote into freed memory that had
+  been reused; the giveaway was Max HP reading back as a denormal float. Scan,
+  back up and write from the same process so addresses cannot go stale.
+- **Mind the display formatting.** Thorns, Overheal, Shield, Projectile Count and
+  Extra Jumps render as integers, so a probe value below 1 shows as `0` and looks
+  like a miss. XP Gain clamps at `10.0x`, so any large value pins the display at
+  the cap and hides which id fed it. Use values that are small enough to avoid
+  caps but large enough to survive integer truncation, and well separated so
+  rounding cannot make two candidates ambiguous.
 
 The array order does **not** follow the Stats screen. Ids 1-6 happen to line up,
 then diverge - Damage is id 13, not 9, and Shield is 3, not 4. Guessing from

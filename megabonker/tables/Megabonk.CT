@@ -391,6 +391,26 @@ gGodmode:
                 <Offset>31C</Offset>
               </Offsets>
             </CheatEntry>
+            <CheatEntry>
+              <ID>900</ID>
+              <Description>"Thorns  (id 4)"</Description>
+              <ShowAsSigned>0</ShowAsSigned>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>5C</Offset>
+              </Offsets>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>901</ID>
+              <Description>"XP Gain  (id 33)"</Description>
+              <ShowAsSigned>0</ShowAsSigned>
+              <VariableType>Float</VariableType>
+              <Address>pStats2</Address>
+              <Offsets>
+                <Offset>22C</Offset>
+              </Offsets>
+            </CheatEntry>
           </CheatEntries>
         </CheatEntry>
         <CheatEntry>
