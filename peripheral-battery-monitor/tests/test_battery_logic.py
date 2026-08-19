@@ -1113,6 +1113,143 @@ class TestHeadphoneAggregation(unittest.TestCase):
         self.assertNotIn('airpods', results)
 
 
+class TestBluetoothDeviceCategory(unittest.TestCase):
+    """Non-headphone (non-audio) Bluetooth battery category (spec 014)."""
+
+    def _managed_objects_patch(self, objects):
+        """Patch battery_reader's dbus so _enumerate_bt_devices sees `objects`."""
+        from unittest.mock import patch
+        manager = MagicMock()
+        manager.GetManagedObjects.return_value = objects
+        return (
+            patch.object(battery_reader.dbus, 'SystemBus', return_value=MagicMock()),
+            patch.object(battery_reader.dbus, 'Interface', return_value=manager),
+        )
+
+    def _sample_objects(self):
+        return {
+            '/dev/mouse': {
+                'org.bluez.Device1': {'Connected': True, 'Icon': 'input-mouse',
+                                      'UUIDs': [], 'Alias': 'MX Master 3', 'Address': 'AA:BB'},
+                'org.bluez.Battery1': {'Percentage': 72},
+            },
+            '/dev/headset': {  # audio -> belongs to the headphone category, not btdev
+                'org.bluez.Device1': {'Connected': True, 'Icon': 'audio-headset',
+                                      'UUIDs': [], 'Alias': 'WH-1000XM6', 'Address': 'CC:DD'},
+                'org.bluez.Battery1': {'Percentage': 59},
+            },
+            '/dev/nobat': {  # non-audio but no Battery1 -> nothing to show
+                'org.bluez.Device1': {'Connected': True, 'Icon': 'input-keyboard',
+                                      'UUIDs': [], 'Alias': 'Cheap KB', 'Address': 'EE:FF'},
+            },
+            '/dev/offline': {  # not connected -> excluded
+                'org.bluez.Device1': {'Connected': False, 'Icon': 'input-mouse',
+                                      'UUIDs': [], 'Alias': 'Sleeping Mouse', 'Address': '11:22'},
+                'org.bluez.Battery1': {'Percentage': 50},
+            },
+        }
+
+    def test_enumerate_nonaudio_requires_battery(self):
+        """audio=False returns connected non-audio devices that expose Battery1,
+        excluding audio devices, offline devices, and non-audio devices with no battery."""
+        p1, p2 = self._managed_objects_patch(self._sample_objects())
+        with p1, p2:
+            devs = battery_reader._enumerate_bt_devices(audio=False)
+        self.assertEqual(devs, [{'mac': 'AA:BB', 'name': 'MX Master 3', 'level': 72}])
+
+    def test_enumerate_audio_unchanged(self):
+        """audio=True still returns audio devices (level None when no Battery1)."""
+        p1, p2 = self._managed_objects_patch(self._sample_objects())
+        with p1, p2:
+            devs = battery_reader._enumerate_bt_devices(audio=True)
+        self.assertEqual(devs, [{'mac': 'CC:DD', 'name': 'WH-1000XM6', 'level': 59}])
+        # The back-compat wrapper delegates to audio=True.
+        with self._managed_objects_patch(self._sample_objects())[0], \
+             self._managed_objects_patch(self._sample_objects())[1]:
+            self.assertEqual(battery_reader._enumerate_bt_audio_devices(),
+                             [{'mac': 'CC:DD', 'name': 'WH-1000XM6', 'level': 59}])
+
+    def test_audio_uuid_with_nonaudio_icon_is_not_headphone(self):
+        """A device advertising A2DP/audio UUIDs but with a non-audio Icon
+        (e.g. an iPad, Icon 'computer') is NOT a headphone; the Icon is the
+        signal, not the UUID. It belongs to the non-headphone category."""
+        ipad = {
+            '/dev/ipad': {
+                'org.bluez.Device1': {
+                    'Connected': True, 'Icon': 'computer',
+                    'UUIDs': ['0000110d-0000-1000-8000-00805f9b34fb'],  # A2DP
+                    'Alias': 'fatpad', 'Address': 'DE:AD',
+                },
+                'org.bluez.Battery1': {'Percentage': 80},
+            },
+        }
+        p1, p2 = self._managed_objects_patch(ipad)
+        with p1, p2:
+            as_audio = battery_reader._enumerate_bt_devices(audio=True)
+            as_nonaudio = battery_reader._enumerate_bt_devices(audio=False)
+        self.assertEqual(as_audio, [])  # not filed as a headphone
+        self.assertEqual(as_nonaudio, [{'mac': 'DE:AD', 'name': 'fatpad', 'level': 80}])
+
+    def test_iconless_audio_uuid_still_headphone(self):
+        """Fallback preserved: a device with no Icon but an audio UUID is still
+        treated as a headphone (guards headsets that report a blank icon)."""
+        headset = {
+            '/dev/hs': {
+                'org.bluez.Device1': {
+                    'Connected': True, 'Icon': '',
+                    'UUIDs': ['0000110d-0000-1000-8000-00805f9b34fb'],
+                    'Alias': 'Mystery Buds', 'Address': '99:99',
+                },
+                'org.bluez.Battery1': {'Percentage': 44},
+            },
+        }
+        p1, p2 = self._managed_objects_patch(headset)
+        with p1, p2:
+            as_audio = battery_reader._enumerate_bt_devices(audio=True)
+            as_nonaudio = battery_reader._enumerate_bt_devices(audio=False)
+        self.assertEqual(as_audio, [{'mac': '99:99', 'name': 'Mystery Buds', 'level': 44}])
+        self.assertEqual(as_nonaudio, [])
+
+    def test_get_bt_devices_surfaces_input_device(self):
+        """A connected BT input device reporting Battery1 is surfaced with its
+        real name/level, no vendor-specific code path."""
+        from unittest.mock import patch
+        with patch.object(battery_reader, '_enumerate_bt_devices',
+                          return_value=[{'mac': 'AA:BB', 'name': 'MX Master 3', 'level': 72}]):
+            devs = battery_reader.get_bt_devices()
+        self.assertEqual(len(devs), 1)
+        self.assertEqual(devs[0].device_name, "MX Master 3")
+        self.assertEqual(devs[0].level, 72)
+        self.assertEqual(devs[0].status, "Discharging")
+
+    def test_get_bt_devices_ranked_by_level(self):
+        """Ranking is connected-first / higher-level-first and deterministic."""
+        from unittest.mock import patch
+        pool = [
+            {'mac': '11', 'name': 'Low KB', 'level': 15},
+            {'mac': '22', 'name': 'High Mouse', 'level': 90},
+        ]
+        with patch.object(battery_reader, '_enumerate_bt_devices', return_value=pool):
+            devs = battery_reader.get_bt_devices()
+        self.assertEqual(devs[0].device_name, "High Mouse")
+        self.assertEqual(devs[1].device_name, "Low KB")
+
+    def test_get_all_batteries_emits_btdev_slots(self):
+        """get_all_batteries() exposes the top two non-audio BT devices as btdev1/btdev2."""
+        from unittest.mock import patch
+        bt = [
+            BatteryInfo(level=90, status="Discharging", voltage=None, device_name="High Mouse"),
+            BatteryInfo(level=15, status="Discharging", voltage=None, device_name="Low KB"),
+        ]
+        with patch.object(battery_reader, 'get_mouse_battery', return_value=None):
+            with patch.object(battery_reader, 'get_keyboard_battery', return_value=None):
+                with patch.object(battery_reader, 'get_headphones', return_value=[]):
+                    with patch.object(battery_reader, 'get_bt_devices', return_value=bt):
+                        results = battery_reader.get_all_batteries()
+        self.assertEqual(results['btdev1']['device_name'], "High Mouse")
+        self.assertEqual(results['btdev2']['device_name'], "Low KB")
+
+
 class TestHeadphoneSlotNameGuard(unittest.TestCase):
     """A headphone slot can change occupants between polls; the merge fallback must
     not bleed one device's cached level onto a different device (spec 013)."""
@@ -1213,6 +1350,25 @@ class TestSlotConfiguration(unittest.TestCase):
         self.assertIn(('headphone1', {'h': 1}, False), captured)
         # The keyboard result is not consumed by any slot in this configuration.
         self.assertTrue(all(cat != 'kb' for cat, _val, _cache in captured))
+
+    def test_btdev_slot_is_valid_and_routes_without_cache(self):
+        """btdev1/btdev2 are selectable slot categories; a slot set to btdev1
+        resolves results['btdev1'] and, like headphones, does not use the cache."""
+        self.assertEqual(pb.PeripheralMonitor._valid_slot('btdev1', 'mouse'), 'btdev1')
+        self.assertEqual(pb.PeripheralMonitor._valid_slot('btdev2', 'mouse'), 'btdev2')
+
+        m = self._monitor({'slot_left': 'btdev1', 'slot_right': 'mouse'})
+        captured = []
+        m.update_single_device = lambda ui, func, use_offline_cache=True: \
+            captured.append((ui['category'], func(), use_offline_cache))
+        m.update_claude_section = MagicMock()
+        m.setToolTip = MagicMock()
+        m.adjustSize = MagicMock()
+
+        results = {'btdev1': {'b': 1}, 'mouse': {'m': 1}}
+        m.on_data_ready(results)
+
+        self.assertIn(('btdev1', {'b': 1}, False), captured)
 
     def test_set_slot_updates_settings_and_reassigns(self):
         m = self._monitor({})

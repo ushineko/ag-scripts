@@ -26,7 +26,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.10.0"
+__version__ = "1.11.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -35,12 +35,16 @@ CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 # in battery_reader.get_all_batteries()'s result dict. "headphone1" is the
 # current, most-recently-connected active headphone (vendor-neutral, ranked
 # connected-first); "headphone2" is the secondary one when two are connected.
+# "btdev1"/"btdev2" are the same idea for non-headphone (non-audio) Bluetooth
+# devices that report a battery — e.g. input devices — ranked connected-first.
 #   (config_value, menu_label, fallback_label, use_offline_cache)
 SLOT_TYPES = [
-    ("mouse",      "Mouse",           "Mouse",        True),
-    ("kb",         "Keyboard",        "Keyboard",     True),
-    ("headphone1", "Headphone",       "Headphones",   False),
-    ("headphone2", "Headphone (2nd)", "Headphones",   False),
+    ("mouse",      "Mouse",                 "Mouse",       True),
+    ("kb",         "Keyboard",              "Keyboard",    True),
+    ("headphone1", "Headphone",             "Headphones",  False),
+    ("headphone2", "Headphone (2nd)",       "Headphones",  False),
+    ("btdev1",     "Bluetooth Device",      "Bluetooth",   False),
+    ("btdev2",     "Bluetooth Device (2nd)", "Bluetooth",  False),
 ]
 SLOT_SPECS = {
     value: {"menu_label": menu, "fallback": fallback, "cache": cache}

@@ -697,17 +697,22 @@ _AUDIO_UUIDS = {
 }
 
 
-def _enumerate_bt_audio_devices() -> list:
-    """Enumerate connected Bluetooth audio devices and their battery via BlueZ D-Bus.
+def _enumerate_bt_devices(audio: bool) -> list:
+    """Enumerate connected Bluetooth devices and their battery via BlueZ D-Bus.
 
-    Vendor-neutral: any headset/headphone that BlueZ recognises as an audio
-    device (Icon 'audio-*' or an audio service UUID) and that exposes
-    org.bluez.Battery1 shows up here without per-vendor code. Returns a list of
-    dicts {mac, name, level} where level is None when no Battery1 interface is
-    present. Only currently-connected devices are returned.
+    Vendor-neutral. `audio` selects which half of the connected pool to return:
 
-    Uses the D-Bus ObjectManager (a stable contract) rather than parsing
-    bluetoothctl output, which changes between bluez versions.
+      audio=True  -> audio devices (headsets/headphones), identified by Icon
+                     'audio-*' or an audio service UUID. Level is None when the
+                     device exposes no org.bluez.Battery1 (a connected headset
+                     without a battery provider still shows as "Connected").
+      audio=False -> non-audio devices (input devices, gamepads, etc.). Only
+                     devices that expose org.bluez.Battery1 are returned, since a
+                     non-audio device with no battery level has nothing to show.
+
+    Returns a list of dicts {mac, name, level}. Only currently-connected devices
+    are returned. Uses the D-Bus ObjectManager (a stable contract) rather than
+    parsing bluetoothctl output, which changes between bluez versions.
     """
     out = []
     try:
@@ -729,12 +734,16 @@ def _enumerate_bt_audio_devices() -> list:
 
         icon = str(dev.get('Icon', ''))
         uuids = {str(u).lower() for u in dev.get('UUIDs', [])}
-        is_audio = icon.startswith('audio-') or bool(_AUDIO_UUIDS & uuids)
-        if not is_audio:
+        # A headphone/headset is an audio *output* peripheral. The BlueZ Icon
+        # (derived from the Class-of-Device major class) is the reliable signal:
+        # 'audio-*'. The A2DP/audio service UUIDs are NOT sufficient on their own
+        # — a whole tablet, phone, or computer (Icon 'computer'/'phone') also
+        # advertises them because it can source/sink audio, yet it is not a
+        # headphone. Fall back to the UUID sniff only when the device exposes no
+        # Icon at all (rare; guards headphones that report a blank icon).
+        is_audio = icon.startswith('audio-') or (not icon and bool(_AUDIO_UUIDS & uuids))
+        if is_audio != audio:
             continue
-
-        name = str(dev.get('Alias', '') or dev.get('Name', '')).strip()
-        mac = str(dev.get('Address', ''))
 
         level = None
         if 'org.bluez.Battery1' in interfaces:
@@ -742,16 +751,28 @@ def _enumerate_bt_audio_devices() -> list:
             if lvl >= 0:
                 level = lvl
 
+        # Non-audio devices are only interesting when they report a battery.
+        if not audio and level is None:
+            continue
+
+        name = str(dev.get('Alias', '') or dev.get('Name', '')).strip()
+        mac = str(dev.get('Address', ''))
         out.append({'mac': mac, 'name': name, 'level': level})
 
     return out
 
 
-def _headphone_rank_key(info: "BatteryInfo"):
-    """Sort key: connected-first ordering for the two headphone slots.
+def _enumerate_bt_audio_devices() -> list:
+    """Connected Bluetooth audio devices (headsets/headphones). See _enumerate_bt_devices."""
+    return _enumerate_bt_devices(audio=True)
+
+
+def _bt_rank_key(info: "BatteryInfo"):
+    """Sort key: connected-first ordering for the ranked Bluetooth slots.
 
     Devices with a known battery level rank ahead of connected-but-unknown
     devices; ties break by higher level, then by name for a deterministic order.
+    Shared by the headphone slots and the non-headphone (btdev) slots.
     """
     has_level = info.level is not None and info.level >= 0
     return (0 if has_level else 1,
@@ -795,7 +816,29 @@ def get_headphones() -> list:
     if arctis:
         infos.append(arctis)
 
-    infos.sort(key=_headphone_rank_key)
+    infos.sort(key=_bt_rank_key)
+    return infos
+
+
+def get_bt_devices() -> list:
+    """Return BatteryInfo for every connected non-audio Bluetooth device that
+    reports a battery, ranked connected-first (same priority as headphones).
+
+    Covers the "non-headphone" category: input devices (BT mice, keyboards,
+    trackpads, gamepads, styluses) and any other non-audio BlueZ device that
+    exposes org.bluez.Battery1. Audio devices are handled by get_headphones().
+    """
+    infos = [
+        BatteryInfo(
+            level=d['level'],
+            status="Discharging",
+            voltage=None,
+            device_name=d['name'] or "Bluetooth Device",
+            ids={'mac': d['mac']},
+        )
+        for d in _enumerate_bt_devices(audio=False)
+    ]
+    infos.sort(key=_bt_rank_key)
     return infos
 
 
@@ -816,6 +859,13 @@ def get_all_batteries() -> dict:
         results['headphone1'] = asdict(headphones[0])
     if len(headphones) > 1:
         results['headphone2'] = asdict(headphones[1])
+
+    # Non-headphone Bluetooth devices (input devices, etc.): two slots, connected-first.
+    bt_devices = get_bt_devices()
+    if len(bt_devices) > 0:
+        results['btdev1'] = asdict(bt_devices[0])
+    if len(bt_devices) > 1:
+        results['btdev2'] = asdict(bt_devices[1])
 
     return results
 
@@ -859,3 +909,10 @@ if __name__ == "__main__":
             print(f"Headphone {i}: {hp.device_name} - {hp.level}% ({hp.status})")
     else:
         print("No headphones connected.")
+
+    bt_devices = get_bt_devices()
+    if bt_devices:
+        for i, bt in enumerate(bt_devices, 1):
+            print(f"BT Device {i}: {bt.device_name} - {bt.level}% ({bt.status})")
+    else:
+        print("No non-headphone Bluetooth battery devices connected.")

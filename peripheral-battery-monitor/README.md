@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.10.0
+Version 1.11.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -15,7 +15,8 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - [Changelog](#changelog)
 
 ## Features
-- **Two Configurable Slots**: The top area shows two cells, each selectable (right-click → Devices) to show any supported device type: Mouse, Keyboard, Headphone, or the secondary Headphone. Defaults to Mouse (left) and the current Headphone (right); a slot with nothing connected shows a placeholder.
+- **Two Configurable Slots**: The top area shows two cells, each selectable (right-click → Devices) to show any supported device type: Mouse, Keyboard, Headphone, the secondary Headphone, or a Bluetooth Device (see below). Defaults to Mouse (left) and the current Headphone (right); a slot with nothing connected shows a placeholder.
+- **Non-Headphone Bluetooth Devices (vendor-neutral)**: The "Bluetooth Device" / "Bluetooth Device (2nd)" slot categories surface the battery of any connected *non-audio* Bluetooth device that reports `org.bluez.Battery1` — e.g. a Bluetooth mouse, keyboard, trackpad, gamepad, or stylus. Like the Headphone slots, they are ranked connected-first (highest known level first) and need no per-vendor code. Audio devices stay in the Headphone category.
 - **Logitech Support**: Uses `solaar` libraries to fetch precise mouse battery levels.
 - **Keychron Support**:
   - **Bluetooth**: Uses `upower` to fetch battery levels %.
@@ -98,6 +99,11 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.11.0
+
+- **Non-headphone Bluetooth device battery category.** New `Bluetooth Device` / `Bluetooth Device (2nd)` slot categories (right-click → Devices) surface the battery level of any connected non-audio Bluetooth device that exposes `org.bluez.Battery1` — Bluetooth mice, keyboards, trackpads, gamepads, styluses, and so on. This is the mirror image of the existing headphone category (which covers audio devices): both share one vendor-neutral BlueZ D-Bus enumeration, split by audio vs non-audio. Non-audio devices are only listed when they report a battery, and are ranked connected-first (highest known level first).
+- **Headphone classification fix.** A device is now treated as a headphone only when its BlueZ `Icon` is `audio-*` (with the audio-service-UUID sniff kept only as a fallback for devices that expose no icon). Previously, anything advertising an A2DP/audio UUID was filed as a headphone — so a tablet, phone, or computer (e.g. an iPad, which can stream audio to the PC) could occupy a Headphone slot at, say, 80%. Such devices now correctly fall into the new Bluetooth Device category instead.
 
 ### v1.10.0
 
