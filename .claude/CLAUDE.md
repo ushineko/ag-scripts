@@ -175,6 +175,21 @@ When completing work on a sub-project:
 ### 6. Final Test Run
 - Run full test suite to confirm nothing regressed
 
+### 7. Tag the Release
+After the release commit lands on `main` (Phase 7 of the global workflow), **always tag it**. This repo is a monorepo, so tags are **scoped to the sub-project** to disambiguate independent version histories.
+
+- **Format**: `<subproject>/vX.Y.Z` (e.g. `peripheral-battery-monitor/v1.11.0`, `audio-source-switcher/v3.2.0`)
+- **Annotated** (`git tag -a`), with a short release note referencing the spec and validation report
+- **Push the tag**: `git push origin <subproject>/vX.Y.Z`
+- The tag must point at the commit that bumped the version (source + README) — verify with `git show <tag> --stat`
+- List one project's history with `git tag -l '<subproject>/*'`
+
+Example:
+```bash
+git tag -a "peripheral-battery-monitor/v1.11.0" -m "peripheral-battery-monitor v1.11.0 — <summary>"
+git push origin "peripheral-battery-monitor/v1.11.0"
+```
+
 ---
 
 ## State Persistence
