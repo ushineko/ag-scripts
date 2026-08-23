@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-.ruff_cache/
-
-# dotnet build output (tools/)
-bin/
-obj/
