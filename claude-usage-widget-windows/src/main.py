@@ -122,6 +122,13 @@ def run_no_gui() -> int:
     """Fetch usage from the API and print to console, then exit."""
     from .oauth import fetch_claude_usage, is_claude_installed, get_time_until_reset
     from .display import format_percentage, usage_color
+    from .usage_shape import (
+        SHAPE_CREDITS,
+        SHAPE_UNAVAILABLE,
+        credits_view,
+        detect_shape,
+        format_credits,
+    )
 
     log.info("starting_console_mode")
 
@@ -143,8 +150,25 @@ def run_no_gui() -> int:
         print(f"Error: {error}")
         return 1
 
-    five_hour = data.get("five_hour", {})
-    seven_day = data.get("seven_day", {})
+    shape = detect_shape(data)
+
+    if shape == SHAPE_CREDITS:
+        view = credits_view(data)
+        print(f"Usage credits:       {format_credits(view)}")
+        print(f"Resets:              {view['resets_at']:%b %-d}")
+        print(f"Severity:            {view['severity']}")
+        print()
+        log.info("console_done", shape=shape, used=view["used"], limit=view["limit"])
+        return 0
+
+    if shape == SHAPE_UNAVAILABLE:
+        print("No usage data available for this account.")
+        print()
+        log.info("console_done", shape=shape)
+        return 0
+
+    five_hour = data.get("five_hour") or {}
+    seven_day = data.get("seven_day") or {}
 
     util_5h = five_hour.get("utilization")
     util_7d = seven_day.get("utilization")

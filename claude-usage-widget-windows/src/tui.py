@@ -29,6 +29,13 @@ from rich.text import Text
 from .display import format_percentage
 from .oauth import fetch_claude_usage, get_time_until_reset
 from .usage_cache import fetch_usage_cached
+from .usage_shape import (
+    SHAPE_CREDITS,
+    SHAPE_UNAVAILABLE,
+    credits_view,
+    detect_shape,
+    format_credits,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -75,6 +82,17 @@ def _staleness_note(data, fetched_at: float | None, interval: int) -> str | None
     if age > interval * 1.5:
         return f"cached {_fmt_age(age)}"
     return None
+
+
+def _severity_style(severity: str | None) -> str:
+    """Rich style for a ``spend.severity`` value, mirroring _usage_style's palette."""
+    return {
+        "normal": "green",
+        "warning": "yellow",
+        "elevated": "yellow",
+        "critical": "red",
+        "exceeded": "red",
+    }.get(severity, "dim")
 
 
 def _usage_style(util: float | None) -> str:
@@ -131,8 +149,42 @@ def build_line(
             line.truncate(width)
         return line
 
-    five = data.get("five_hour", {})
-    seven = data.get("seven_day", {})
+    shape = detect_shape(data)
+
+    if shape == SHAPE_CREDITS:
+        view = credits_view(data)
+        core = Text("Claude ")
+        core.append(
+            format_credits(view),
+            style=_severity_style(view["severity"]),
+        )
+        opt: list[tuple[str, Text]] = [
+            ("reset", Text(f"resets {view['resets_at']:%b %-d}", style="dim"))
+        ]
+        if note:
+            opt.append(("note", Text(f"({note})", style="dim")))
+        present = [name for name, _ in opt]
+        line = _assemble(core, opt, present)
+        while width and line.cell_len > width and present:
+            for name in ["note", "reset"]:
+                if name in present:
+                    present.remove(name)
+                    break
+            line = _assemble(core, opt, present)
+        if width and line.cell_len > width:
+            line.truncate(width)
+        line.no_wrap = True
+        line.overflow = "crop"
+        return line
+
+    if shape == SHAPE_UNAVAILABLE:
+        line = Text("Claude — no usage data", style="dim", no_wrap=True, overflow="crop")
+        if width:
+            line.truncate(width)
+        return line
+
+    five = data.get("five_hour") or {}
+    seven = data.get("seven_day") or {}
     util5 = five.get("utilization")
     util7 = seven.get("utilization")
     resets_at = five.get("resets_at", "")
@@ -186,8 +238,14 @@ def _model_segment(data: dict) -> str:
 
 def _stat_segments(data: dict) -> Text:
     """The trailing stats for the --tui line: 5h% · 7d 7d% · model breakdown."""
-    util5 = data.get("five_hour", {}).get("utilization")
-    util7 = data.get("seven_day", {}).get("utilization")
+    if detect_shape(data) == SHAPE_CREDITS:
+        view = credits_view(data)
+        t = Text(" ")
+        t.append(format_credits(view), style=_severity_style(view["severity"]))
+        return t
+
+    util5 = (data.get("five_hour") or {}).get("utilization")
+    util7 = (data.get("seven_day") or {}).get("utilization")
     t = Text(" ")
     t.append(format_percentage(util5), style=_usage_style(util5))
     t.append("  ·  7d ", style="dim")
@@ -209,30 +267,27 @@ def build_tui_view(data: dict | None, *, note: str | None = None):
     if not isinstance(data, dict) or "five_hour" not in data:
         return build_line(data, note=note)
 
-    five = data["five_hour"]
+    shape = detect_shape(data)
+
+    if shape == SHAPE_UNAVAILABLE:
+        return build_line(data, note=note)
+
+    if shape == SHAPE_CREDITS:
+        # Chart spend against the cap — the same bar Claude Code's /usage shows.
+        view = credits_view(data)
+        return _build_bar_grid(
+            label=Text("Claude  "),
+            completed=min(100, max(0, view["percent"] or 0)),
+            style=_severity_style(view["severity"]),
+            stats=_stat_segments(data),
+            right=Text(f" resets {view['resets_at']:%b %-d}", style="dim")
+            if not note
+            else Text(f" ({note})", style="dim"),
+        )
+
+    five = data["five_hour"] or {}
     util5 = five.get("utilization")
     resets_at = five.get("resets_at", "")
-    style = _usage_style(util5)
-
-    # Slack is split between the bar (3) and a spacer before the reset (1): the
-    # bar stretches to use most of the width, while the reset floats to the far
-    # right with a clean gap. Fixed columns size to their content.
-    grid = Table.grid(expand=True, padding=0)
-    grid.add_column(no_wrap=True)                        # "Claude  5h "
-    grid.add_column(ratio=3)                             # the bar (stretches)
-    grid.add_column(no_wrap=True)                        # stats
-    grid.add_column(ratio=1)                             # spacer / gap
-    grid.add_column(no_wrap=True, justify="right")       # reset / stale note
-
-    bar = ProgressBar(
-        total=100,
-        completed=min(100, max(0, util5 or 0)),
-        width=None,                                       # fill the ratio column
-        complete_style=style,
-        finished_style=style,
-        style="grey30",                                   # unfilled track
-        pulse=False,
-    )
 
     if note:
         right = Text(f" ({note})", style="dim")
@@ -241,7 +296,40 @@ def build_tui_view(data: dict | None, *, note: str | None = None):
     else:
         right = Text("")
 
-    grid.add_row(Text("Claude  5h "), bar, _stat_segments(data), Text(""), right)
+    return _build_bar_grid(
+        label=Text("Claude  5h "),
+        completed=min(100, max(0, util5 or 0)),
+        style=_usage_style(util5),
+        stats=_stat_segments(data),
+        right=right,
+    )
+
+
+def _build_bar_grid(*, label: Text, completed: float, style: str, stats: Text, right: Text):
+    """Assemble the --tui row: label, stretching bar, stats, right-aligned note.
+
+    Slack is split between the bar (3) and a spacer before the right column (1):
+    the bar stretches to use most of the width, while the right note floats to
+    the far right with a clean gap. Fixed columns size to their content.
+    """
+    grid = Table.grid(expand=True, padding=0)
+    grid.add_column(no_wrap=True)                        # label
+    grid.add_column(ratio=3)                             # the bar (stretches)
+    grid.add_column(no_wrap=True)                        # stats
+    grid.add_column(ratio=1)                             # spacer / gap
+    grid.add_column(no_wrap=True, justify="right")       # reset / stale note
+
+    bar = ProgressBar(
+        total=100,
+        completed=completed,
+        width=None,                                       # fill the ratio column
+        complete_style=style,
+        finished_style=style,
+        style="grey30",                                   # unfilled track
+        pulse=False,
+    )
+
+    grid.add_row(label, bar, stats, Text(""), right)
     return grid
 
 

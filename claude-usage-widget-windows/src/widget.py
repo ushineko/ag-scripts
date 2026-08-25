@@ -24,8 +24,20 @@ from PySide6.QtWidgets import (
 
 import structlog
 
-from .display import usage_color, format_percentage, error_message, COLOR_GRAY
+from .display import (
+    usage_color,
+    severity_color,
+    format_percentage,
+    error_message,
+    COLOR_GRAY,
+)
 from .platform_support import IS_MACOS
+from .usage_shape import (
+    SHAPE_CREDITS,
+    SHAPE_UNAVAILABLE,
+    credits_view,
+    detect_shape,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -273,8 +285,22 @@ class FloatingWidget(QWidget):
 
     def _render_usage(self, data: dict) -> None:
         """Render a usage payload to the widgets (no error handling)."""
-        five_hour = data.get("five_hour", {})
-        seven_day = data.get("seven_day", {})
+        shape = detect_shape(data)
+
+        if shape == SHAPE_CREDITS:
+            self._render_credits(credits_view(data))
+            return
+
+        if shape == SHAPE_UNAVAILABLE:
+            self._progress_bar.setValue(0)
+            self._set_bar_color(COLOR_GRAY)
+            self._five_hour_label.setText("No usage data")
+            self._seven_day_label.setText("")
+            self._countdown_label.setText("")
+            return
+
+        five_hour = data.get("five_hour") or {}
+        seven_day = data.get("seven_day") or {}
 
         util_5h = five_hour.get("utilization")
         util_7d = seven_day.get("utilization")
@@ -299,6 +325,21 @@ class FloatingWidget(QWidget):
             self._countdown_label.setText(f"Resets in {get_time_until_reset(resets_at)}")
         else:
             self._countdown_label.setText("")
+
+    def _render_credits(self, view: dict) -> None:
+        """Render the enterprise credits shape into the existing widgets."""
+        percent = view["percent"]
+        self._progress_bar.setValue(min(100, int(percent or 0)))
+        self._set_bar_color(severity_color(view["severity"], percent))
+
+        symbol = "$" if view["currency"] == "USD" else ""
+        self._five_hour_label.setText(
+            f"{symbol}{view['used']:.2f} / {symbol}{view['limit']:.2f}"
+        )
+        self._seven_day_label.setText(
+            f"{percent:.0f}% used" if percent is not None else ""
+        )
+        self._countdown_label.setText(f"Resets {view['resets_at']:%b %-d}")
 
     def _staleness_suffix(self) -> str:
         """Human-readable age of the cached reading, e.g. '3m ago'."""

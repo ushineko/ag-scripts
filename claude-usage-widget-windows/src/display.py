@@ -24,6 +24,25 @@ def usage_color(utilization: float | None) -> str:
     return COLOR_GREEN
 
 
+def severity_color(severity: str | None, percent: float | None = None) -> str:
+    """Return hex color for a ``spend.severity`` value.
+
+    The credits shape reports its own severity, so honor that rather than
+    re-deriving a threshold from percent — the API decides what counts as
+    concerning. ``percent`` is only a fallback for an unrecognized severity.
+    """
+    mapping = {
+        "normal": COLOR_GREEN,
+        "warning": COLOR_YELLOW,
+        "elevated": COLOR_YELLOW,
+        "critical": COLOR_RED,
+        "exceeded": COLOR_RED,
+    }
+    if severity in mapping:
+        return mapping[severity]
+    return usage_color(percent)
+
+
 def format_percentage(utilization: float | None) -> str:
     """Format utilization percentage (0-100) as a display string."""
     if utilization is None:

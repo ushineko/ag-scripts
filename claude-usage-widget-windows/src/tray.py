@@ -8,7 +8,14 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 import structlog
 
-from .display import usage_color, format_percentage, COLOR_GRAY
+from .display import usage_color, severity_color, format_percentage, COLOR_GRAY
+from .usage_shape import (
+    SHAPE_CREDITS,
+    SHAPE_UNAVAILABLE,
+    credits_view,
+    detect_shape,
+    format_credits,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -133,8 +140,29 @@ class SystemTray:
 
     def _render(self, data: dict, stale: bool) -> None:
         """Render a usage reading to the tray icon + tooltip."""
-        five_hour = data.get("five_hour", {})
-        seven_day = data.get("seven_day", {})
+        shape = detect_shape(data)
+
+        if shape == SHAPE_CREDITS:
+            view = credits_view(data)
+            percent = view["percent"]
+            color = severity_color(view["severity"], percent)
+            self._tray.setIcon(QIcon(create_tray_icon_pixmap(color, percent)))
+            tooltip = f"Claude credits: {format_credits(view)}"
+            if stale:
+                tooltip += " (stale)"
+            self._tray.setToolTip(tooltip)
+            return
+
+        if shape == SHAPE_UNAVAILABLE:
+            self._tray.setIcon(QIcon(create_tray_icon_pixmap(COLOR_GRAY)))
+            tooltip = "Claude: no usage data"
+            if stale:
+                tooltip += " (stale)"
+            self._tray.setToolTip(tooltip)
+            return
+
+        five_hour = data.get("five_hour") or {}
+        seven_day = data.get("seven_day") or {}
 
         util_5h = five_hour.get("utilization")
         util_7d = seven_day.get("utilization")
