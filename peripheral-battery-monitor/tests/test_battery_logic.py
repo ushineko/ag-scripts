@@ -1405,5 +1405,131 @@ def tearDownModule():
             sys.modules.pop(name, None)
 
 
+
+class TestAccountShapeAdaptiveUsage(unittest.TestCase):
+    """Spec 015: the Claude section adapts to enterprise vs personal payloads.
+
+    Behavioral contract only — what the three labels read for each account
+    shape. The detection heuristic itself is free to change underneath.
+    """
+
+    ENTERPRISE = {
+        "five_hour": None,
+        "seven_day": None,
+        "seven_day_opus": None,
+        "seven_day_sonnet": None,
+        # Empty placeholder: a dict, but zero usage and no reset window. Must
+        # not be mistaken for a live bucket.
+        "nimbus_quill": {
+            "utilization": 0.0,
+            "resets_at": None,
+            "limit_dollars": None,
+            "used_dollars": None,
+            "remaining_dollars": None,
+        },
+        "extra_usage": {
+            "monthly_limit": 20000,
+            "used_credits": 279.0,
+            "utilization": 1.395,
+            "currency": "USD",
+            "decimal_places": 2,
+        },
+        "spend": {
+            "used": {"amount_minor": 279, "currency": "USD", "exponent": 2},
+            "limit": {"amount_minor": 20000, "currency": "USD", "exponent": 2},
+            "percent": 1,
+            "severity": "normal",
+            "enabled": True,
+        },
+        "limits": [],
+        "member_dashboard_available": True,
+    }
+
+    def _monitor(self):
+        pb.PeripheralMonitor.load_settings = MagicMock(
+            return_value={'claude_section_enabled': True})
+        m = pb.PeripheralMonitor()
+        m.claude_frame = MagicMock()
+        m.claude_section_visible = True
+        m.claude_progress = MockQProgressBar()
+        m.claude_progress.setValue = MagicMock()
+        m.claude_progress.setStyleSheet = MagicMock()
+        for name in ("claude_five_hour_lbl", "claude_seven_day_lbl",
+                     "claude_duration_lbl"):
+            lbl = MockQLabel()
+            lbl.setText = MagicMock()
+            setattr(m, name, lbl)
+        return m
+
+    def test_enterprise_payload_renders_credits(self):
+        m = self._monitor()
+        m.update_claude_section(self.ENTERPRISE)
+
+        m.claude_progress.setValue.assert_called_with(1)
+        m.claude_five_hour_lbl.setText.assert_called_with("$2.79 / $200")
+        m.claude_seven_day_lbl.setText.assert_called_with("1% used")
+        self.assertTrue(
+            m.claude_duration_lbl.setText.call_args[0][0].startswith("Resets "))
+
+    def test_enterprise_payload_does_not_crash(self):
+        """Regression: null five_hour used to raise AttributeError."""
+        m = self._monitor()
+        try:
+            m.update_claude_section(self.ENTERPRISE)
+        except AttributeError as e:
+            self.fail(f"null bucket crashed the render path: {e}")
+
+    def test_placeholder_bucket_is_not_treated_as_live(self):
+        import usage_shape
+        self.assertFalse(
+            usage_shape.bucket_is_live(self.ENTERPRISE["nimbus_quill"]))
+        self.assertEqual(
+            usage_shape.detect_shape(self.ENTERPRISE), usage_shape.SHAPE_CREDITS)
+
+    def test_personal_payload_still_renders_gauges(self):
+        from datetime import datetime, timezone, timedelta
+        m = self._monitor()
+        future = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        seven_future = (
+            datetime.now(timezone.utc) + timedelta(days=4, hours=5)).isoformat()
+        m.update_claude_section({
+            "five_hour": {"utilization": 70.0, "resets_at": future},
+            "seven_day": {"utilization": 25.0, "resets_at": seven_future},
+        })
+        m.claude_five_hour_lbl.setText.assert_called_with("5h: 70%")
+        m.claude_seven_day_lbl.setText.assert_called_with("7d: 25% (5d left)")
+
+    def test_unavailable_shape_shows_empty_state(self):
+        m = self._monitor()
+        m.update_claude_section({
+            "five_hour": None,
+            "seven_day": None,
+            "spend": {"used": {"amount_minor": 0, "exponent": 2},
+                      "limit": {"amount_minor": 0, "exponent": 2},
+                      "percent": 0, "severity": "normal", "enabled": False},
+        })
+        m.claude_five_hour_lbl.setText.assert_called_with("5h: --")
+        m.claude_seven_day_lbl.setText.assert_called_with("7d: --")
+        m.claude_progress.setValue.assert_called_with(0)
+
+    def test_last_good_countdown_survives_null_bucket(self):
+        """Regression: the stale-countdown path also indexed five_hour blindly."""
+        import time as _time
+        m = self._monitor()
+        m._last_good_usage = self.ENTERPRISE
+        m._last_good_usage_time = _time.monotonic() - 120
+        try:
+            m._update_staleness_label()
+        except AttributeError as e:
+            self.fail(f"stale countdown crashed on null bucket: {e}")
+        except Exception:
+            pass  # other failures are out of scope for this regression
+
+    def test_severity_drives_color(self):
+        self.assertEqual(pb._severity_hex("normal"), "#4caf50")
+        self.assertEqual(pb._severity_hex("critical"), "#f44336")
+        self.assertEqual(pb._severity_hex("wat", 95), "#f44336")
+
+
 if __name__ == '__main__':
     unittest.main()

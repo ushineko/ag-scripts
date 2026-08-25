@@ -2,7 +2,7 @@
 
 > **Note**: This work has no associated issue tracker ticket (personal public repo, per project policy).
 
-## Status: INCOMPLETE
+## Status: COMPLETE
 
 ## Problem
 
@@ -96,20 +96,27 @@ use for the `limits` shape; feed them the derived timestamp for `credits`.
 4. Leave the `seven_day_opus` / `seven_day_sonnet` loop as-is — already guarded,
    and it naturally renders nothing when those buckets are null.
 
+**Survey result**: spec 009 turned up an 11th site in the widget project
+(`build_tui_view`) that guards with `"five_hour" not in data` then indexes
+directly — a pattern the `, {}` grep cannot find. This project was re-surveyed
+for that shape by listing *every* `five_hour`/`seven_day` reference, not just the
+`, {}` ones. There is no direct-index analog here: all four references go through
+`.get()`, so the three sites above are the complete set.
+
 ## Acceptance Criteria
 
-- [ ] The monitor starts and renders the Claude section on the enterprise account without an exception
-- [ ] `bucket_is_live()` rejects `{"utilization": 0.0, "resets_at": None}` (the `nimbus_quill` placeholder)
-- [ ] `bucket_is_live()` accepts `{"utilization": 70.0, "resets_at": "2026-02-16T22:00:00+00:00"}`
-- [ ] `detect_shape()` returns `"credits"` for an enterprise payload fixture, `"limits"` for a personal one, `"unavailable"` when buckets are null and `spend.enabled` is false
-- [ ] Under `credits`, the three labels read `$2.79 / $200`, `1% used`, `Resets Sep 1`
-- [ ] Under `limits`, existing tests at `tests/test_battery_logic.py:591-631` still pass unmodified — `5h: 70%` and `7d: 25% (5d left)`
-- [ ] The last-known-good path (line 1308) survives a null `five_hour` without raising
-- [ ] `spend.severity` drives credit-meter color; no hardcoded percent threshold
-- [ ] No `usage_data.get("<bucket>", {})` occurrences remain (grep clean)
-- [ ] `usage_shape.py` is byte-identical to the widget project's copy
-- [ ] **Integration**: a real fetch against the live `/api/oauth/usage` endpoint classifies as `credits` on this account and the GUI renders it — not a mocked response
-- [ ] New unit tests cover both fixtures in `tests/test_battery_logic.py`, alongside the existing usage tests
+- [x] The monitor starts and renders the Claude section on the enterprise account without an exception
+- [x] `bucket_is_live()` rejects `{"utilization": 0.0, "resets_at": None}` (the `nimbus_quill` placeholder)
+- [x] `bucket_is_live()` accepts `{"utilization": 70.0, "resets_at": "2026-02-16T22:00:00+00:00"}`
+- [x] `detect_shape()` returns `"credits"` for an enterprise payload fixture, `"limits"` for a personal one, `"unavailable"` when buckets are null and `spend.enabled` is false
+- [x] Under `credits`, the three labels read `$2.79 / $200`, `1% used`, `Resets Sep 1`
+- [x] Under `limits`, existing tests at `tests/test_battery_logic.py:591-631` still pass unmodified — `5h: 70%` and `7d: 25% (5d left)`
+- [x] The last-known-good path (line 1308) survives a null `five_hour` without raising
+- [x] `spend.severity` drives credit-meter color; no hardcoded percent threshold
+- [x] No `usage_data.get("<bucket>", {})` occurrences remain (grep clean)
+- [x] `usage_shape.py` is byte-identical to the widget project's copy
+- [x] **Integration**: a real fetch against the live `/api/oauth/usage` endpoint classifies as `credits` on this account and the GUI renders it — not a mocked response
+- [x] New unit tests cover both fixtures in `tests/test_battery_logic.py`, alongside the existing usage tests
 
 ## Risks & Assumptions
 

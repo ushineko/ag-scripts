@@ -22,6 +22,12 @@ from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 import battery_reader
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
+from usage_shape import (
+    SHAPE_CREDITS,
+    SHAPE_UNAVAILABLE,
+    credits_view,
+    detect_shape,
+)
 import structlog
 import logging.config
 import logging
@@ -98,6 +104,31 @@ def reset_usage_backoff():
 def is_claude_installed():
     """Check if Claude Code CLI is installed on the system."""
     return shutil.which('claude') is not None
+
+
+def _severity_hex(severity: str | None, percent: float | None = None) -> str:
+    """Chunk color for a ``spend.severity`` value, matching the 5h/7d palette.
+
+    The credits shape reports its own severity, so honor that rather than
+    re-deriving a threshold from percent — the API decides what counts as
+    concerning. ``percent`` is only a fallback for an unrecognized severity.
+    """
+    mapping = {
+        "normal": "#4caf50",
+        "warning": "#ff9800",
+        "elevated": "#ff9800",
+        "critical": "#f44336",
+        "exceeded": "#f44336",
+    }
+    if severity in mapping:
+        return mapping[severity]
+    if percent is None:
+        return "#4caf50"
+    if percent >= 80:
+        return "#f44336"
+    if percent >= 50:
+        return "#ff9800"
+    return "#4caf50"
 
 
 def get_time_until_reset(resets_at: str) -> str:
@@ -1305,34 +1336,24 @@ class PeripheralMonitor(QWidget):
         # Include last-known reset countdown alongside staleness
         reset_text = ""
         if self._last_good_usage:
-            resets_at = self._last_good_usage.get("five_hour", {}).get("resets_at", "")
-            if resets_at:
-                reset_text = get_time_until_reset(resets_at)
+            if detect_shape(self._last_good_usage) == SHAPE_CREDITS:
+                view = credits_view(self._last_good_usage)
+                reset_text = f"resets {view['resets_at']:%b %-d}"
+            else:
+                resets_at = (self._last_good_usage.get("five_hour") or {}).get(
+                    "resets_at", ""
+                )
+                if resets_at:
+                    reset_text = get_time_until_reset(resets_at)
 
         if reset_text:
             self.claude_duration_lbl.setText(f"{ago} {reset_text}")
         else:
             self.claude_duration_lbl.setText(ago)
 
-    def _render_usage_data(self, usage_data: dict):
-        """Render usage data to the Claude section widgets."""
-        five_hour = usage_data.get("five_hour", {})
-        seven_day = usage_data.get("seven_day", {})
-
-        five_pct = five_hour.get("utilization", 0)
-        seven_pct = seven_day.get("utilization", 0)
-        resets_at = five_hour.get("resets_at", "")
-
-        progress = min(100, int(five_pct))
-        self.claude_progress.setValue(progress)
-
-        if progress >= 80:
-            color = "#f44336"
-        elif progress >= 50:
-            color = "#ff9800"
-        else:
-            color = "#4caf50"
-
+    def _set_claude_progress(self, percent: float, color: str):
+        """Set the Claude progress bar value + chunk color."""
+        self.claude_progress.setValue(min(100, max(0, int(percent))))
         self.claude_progress.setStyleSheet(f"""
             QProgressBar#ClaudeProgress {{
                 background-color: rgba(255, 255, 255, 0.1);
@@ -1344,6 +1365,59 @@ class PeripheralMonitor(QWidget):
                 border-radius: 4px;
             }}
         """)
+
+    def _render_credits_data(self, view: dict):
+        """Render the enterprise credits shape into the Claude section widgets.
+
+        Reuses the three existing labels rather than adding new ones, so the
+        layout and ClaudeStats styling are unchanged.
+        """
+        percent = view["percent"] or 0
+        self._set_claude_progress(percent, _severity_hex(view["severity"], percent))
+
+        symbol = "$" if view["currency"] == "USD" else ""
+        self.claude_five_hour_lbl.setText(
+            f"{symbol}{view['used']:.2f} / {symbol}{view['limit']:.0f}"
+        )
+        self.claude_seven_day_lbl.setText(f"{percent:.0f}% used")
+        self.claude_duration_lbl.setText(f"Resets {view['resets_at']:%b %-d}")
+
+    def _render_unavailable(self):
+        """No live buckets and no spend — a normal empty state, not an error."""
+        self._set_claude_progress(0, "#4caf50")
+        self.claude_five_hour_lbl.setText("5h: --")
+        self.claude_seven_day_lbl.setText("7d: --")
+        self.claude_duration_lbl.setText("")
+
+    def _render_usage_data(self, usage_data: dict):
+        """Render usage data to the Claude section widgets."""
+        shape = detect_shape(usage_data)
+
+        if shape == SHAPE_CREDITS:
+            self._render_credits_data(credits_view(usage_data))
+            return
+
+        if shape == SHAPE_UNAVAILABLE:
+            self._render_unavailable()
+            return
+
+        five_hour = usage_data.get("five_hour") or {}
+        seven_day = usage_data.get("seven_day") or {}
+
+        five_pct = five_hour.get("utilization", 0)
+        seven_pct = seven_day.get("utilization", 0)
+        resets_at = five_hour.get("resets_at", "")
+
+        progress = min(100, int(five_pct))
+
+        if progress >= 80:
+            color = "#f44336"
+        elif progress >= 50:
+            color = "#ff9800"
+        else:
+            color = "#4caf50"
+
+        self._set_claude_progress(progress, color)
 
         self.claude_five_hour_lbl.setText(f"5h: {five_pct:.0f}%")
 
