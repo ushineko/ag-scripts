@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.12.0
+Version 1.12.1
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -99,6 +99,10 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.12.1
+
+- **Fix: stale account-type letter after a profile changes plan.** Rows were only rebuilt when the set of account *names* changed, so logging a profile into a different account (e.g. `claude-max` moving from an Enterprise seat to a Max one) left the old type letter beside fresh data — a Max reading labeled `E`. Labels are now re-derived every poll and updated in place when they differ, which also preserves each row's last-known-good reading.
 
 ### v1.12.0
 

@@ -33,7 +33,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.12.0"
+__version__ = "1.12.1"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -1436,6 +1436,7 @@ class PeripheralMonitor(QWidget):
         """
         wanted = [a.name for a, _ in readings]
         if wanted == self.claude_rows_order:
+            self._refresh_claude_row_labels(readings)
             return
         multi = len(readings) > 1
         labels = [
@@ -1445,6 +1446,28 @@ class PeripheralMonitor(QWidget):
             for a, _ in readings
         ]
         self._build_claude_rows(labels or [DEFAULT_CLAUDE_ROW])
+
+    def _refresh_claude_row_labels(self, readings):
+        """Update account labels in place when the type changed under us.
+
+        The account *set* can stay the same while a profile's plan changes —
+        logging a profile into a different account is exactly that. Keying the
+        rebuild on names alone left a stale type letter next to fresh data (a
+        Max reading labeled ``E``), so the label is re-derived every poll and
+        applied only when it actually differs. Updating in place rather than
+        rebuilding keeps each row's last-known-good reading.
+        """
+        if len(readings) <= 1:
+            return
+        for account, _ in readings:
+            row = self.claude_rows.get(account.name)
+            label = row and row.get("account")
+            if label is None:
+                continue
+            text = self._account_row_label(account, readings)
+            if label.text() != text:
+                label.setText(text)
+                label.setToolTip(f"{account.name} — {account.type_label}")
 
     @staticmethod
     def _account_row_label(account, readings):

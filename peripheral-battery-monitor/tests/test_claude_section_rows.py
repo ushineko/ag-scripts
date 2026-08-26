@@ -183,3 +183,56 @@ class TestPerAccountRendering:
 
         assert len(section.claude_rows) == 1
         assert section.claude_rows[section.claude_rows_order[0]]["five"].text() == "5h: 12%"
+
+
+class TestAccountTypeChanges:
+    """Regression: a profile's plan can change while its name does not.
+
+    Logging `claude-max` from an Enterprise seat into a Max account left the
+    row labeled `E` next to Max rate-limit data, because rows were only rebuilt
+    when the set of account *names* changed.
+    """
+
+    def test_label_follows_a_plan_change_on_the_same_profile(self, section):
+        section.update_claude_section([
+            (_account("max", "enterprise"), _credits()),
+            (_account("work", "enterprise"), _credits()),
+        ])
+        assert section.claude_rows["max"]["account"].text().strip() == "max   E"
+
+        # Same profile names, but `max` is now a Max account.
+        section.update_claude_section([
+            (_account("max", "max"), _limits()),
+            (_account("work", "enterprise"), _credits()),
+        ])
+
+        assert section.claude_rows["max"]["account"].text().strip() == "max   M"
+        assert section.claude_rows["max"]["account"].toolTip() == "max — Max"
+        # ...and the other row is left alone.
+        assert section.claude_rows["work"]["account"].text().strip() == "work  E"
+
+    def test_label_change_does_not_discard_last_known_good(self, section):
+        section.update_claude_section([
+            (_account("max", "enterprise"), _credits()),
+            (_account("work", "enterprise"), _credits()),
+        ])
+        section.update_claude_section([
+            (_account("max", "max"), _limits()),
+            (_account("work", "enterprise"), {"error": "offline"}),
+        ])
+
+        # work fell back to its own cached credits rather than blanking
+        assert "$279.00" in section.claude_rows["work"]["five"].text()
+
+    def test_unchanged_type_leaves_the_label_untouched(self, section):
+        both = [
+            (_account("max", "max"), _limits()),
+            (_account("work", "enterprise"), _credits()),
+        ]
+        section.update_claude_section(both)
+        before = section.claude_rows["max"]["account"]
+
+        section.update_claude_section(both)
+
+        # Same widget object — refreshed in place, not rebuilt.
+        assert section.claude_rows["max"]["account"] is before
