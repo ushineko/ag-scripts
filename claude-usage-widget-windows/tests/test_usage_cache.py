@@ -25,7 +25,7 @@ def cache_dir(tmp_path, monkeypatch):
 def _counter(result):
     calls = {"n": 0}
 
-    def fetch():
+    def fetch(*_args, **_kwargs):
         calls["n"] += 1
         return result() if callable(result) else result
 
@@ -101,7 +101,7 @@ class TestFailure:
         uc._write_cache({"next_attempt_at": time.time() - 1, "fetched_at": time.time() - 300,
                          "data": OK})
         monkeypatch.setattr(uc, "fetch_claude_usage",
-                            lambda: {"error": "rate_limited", "retry_after": 999})
+                            lambda *a, **k: {"error": "rate_limited", "retry_after": 999})
         data, fetched_at = uc.fetch_usage_cached(60)
         assert data == OK                                   # last-good returned
         entry = uc.read_cache()
@@ -109,7 +109,7 @@ class TestFailure:
         assert entry["next_attempt_at"] - time.time() > 900  # gate pushed by retry_after
 
     def test_failure_without_prior_returns_error(self, cache_dir, monkeypatch):
-        monkeypatch.setattr(uc, "fetch_claude_usage", lambda: {"error": "offline"})
+        monkeypatch.setattr(uc, "fetch_claude_usage", lambda *a, **k: {"error": "offline"})
         data, fetched_at = uc.fetch_usage_cached(60)
         assert data == {"error": "offline"}
         assert fetched_at is None
@@ -117,7 +117,7 @@ class TestFailure:
     def test_failure_without_retry_after_uses_ttl(self, cache_dir, monkeypatch):
         uc._write_cache({"next_attempt_at": time.time() - 1, "fetched_at": time.time() - 5,
                          "data": OK})
-        monkeypatch.setattr(uc, "fetch_claude_usage", lambda: {"error": "api_error"})
+        monkeypatch.setattr(uc, "fetch_claude_usage", lambda *a, **k: {"error": "api_error"})
         uc.fetch_usage_cached(120)
         gate = uc.read_cache()["next_attempt_at"] - time.time()
         assert 100 < gate <= 120                            # ~ttl, not retry_after
@@ -144,7 +144,7 @@ class TestIO:
         assert uc.read_cache() is None
 
     def test_no_credentials_persisted(self, cache_dir, monkeypatch):
-        monkeypatch.setattr(uc, "fetch_claude_usage", lambda: OK)
+        monkeypatch.setattr(uc, "fetch_claude_usage", lambda *a, **k: OK)
         uc.fetch_usage_cached(60)
         raw = uc.get_cache_path().read_text()
         assert "accessToken" not in raw and "refreshToken" not in raw

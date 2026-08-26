@@ -20,6 +20,7 @@ from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
 import battery_reader
+import accounts
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
 from usage_shape import (
@@ -32,7 +33,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.11.0"
+__version__ = "1.12.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -60,20 +61,18 @@ DEFAULT_SLOT_LEFT = "mouse"
 DEFAULT_SLOT_RIGHT = "headphone1"
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
 
+# The row key used before any account has been discovered (spec 016).
+DEFAULT_CLAUDE_ROW = (accounts.DEFAULT_PROFILE_NAME, None)
+
 CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CLAUDE_TOKEN_URL = "https://console.anthropic.com/api/oauth/token"
 CLAUDE_USER_AGENT = "claude-code/2.1.42"
 CLAUDE_BETA_HEADER = "oauth-2025-04-20"
 
-# OAuth refresh backoff state (in-memory only, resets on app restart)
-_oauth_backoff_until: float = 0.0   # monotonic timestamp; skip refresh if now < this
-_oauth_fail_count: int = 0          # consecutive refresh failures
-_oauth_creds_mtime: float = 0.0     # last-seen mtime of credentials file
-
-# Usage API backoff state (in-memory only, resets on app restart)
-_usage_backoff_until: float = 0.0   # monotonic timestamp; skip usage call if now < this
-_usage_fail_count: int = 0          # consecutive usage API failures
+# OAuth / usage backoff state, per credential store (spec 016). In-memory only,
+# resets on app restart. Keyed by store directory so one account in backoff
+# (revoked seat, 429) never suppresses calls for another healthy account.
 
 # Usage API backoff constants (seconds)
 _USAGE_BACKOFF_BASE = 60            # base delay for usage API errors
@@ -87,18 +86,67 @@ _BACKOFF_PERMANENT_BASE = 60        # base delay for permanent errors (401, 403)
 _BACKOFF_PERMANENT_CAP = 1800       # max 30 minutes
 
 
-def reset_oauth_backoff():
-    """Reset OAuth backoff state, allowing the next refresh attempt immediately."""
-    global _oauth_backoff_until, _oauth_fail_count
-    _oauth_backoff_until = 0.0
-    _oauth_fail_count = 0
+class _AccountState:
+    """OAuth + usage-API backoff state for one credential store."""
+
+    __slots__ = ("oauth_backoff_until", "oauth_fail_count", "oauth_creds_mtime",
+                 "usage_backoff_until", "usage_fail_count")
+
+    def __init__(self):
+        self.oauth_backoff_until = 0.0
+        self.oauth_fail_count = 0
+        self.oauth_creds_mtime = 0.0
+        self.usage_backoff_until = 0.0
+        self.usage_fail_count = 0
 
 
-def reset_usage_backoff():
+_states: dict = {}
+
+
+def _default_store_dir() -> str:
+    return os.path.dirname(CLAUDE_CREDENTIALS_PATH)
+
+
+def _state(store_dir=None) -> "_AccountState":
+    """Backoff state for a store, created on first use."""
+    key = store_dir or _default_store_dir()
+    state = _states.get(key)
+    if state is None:
+        state = _AccountState()
+        _states[key] = state
+    return state
+
+
+def _credentials_path(store_dir=None) -> str:
+    if store_dir is None:
+        return CLAUDE_CREDENTIALS_PATH
+    return os.path.join(store_dir, ".credentials.json")
+
+
+def reset_oauth_backoff(store_dir=None):
+    """Reset OAuth backoff state, allowing the next refresh attempt immediately.
+
+    With no argument, resets every known store.
+    """
+    states = _states.values() if store_dir is None else [_state(store_dir)]
+    for state in states:
+        state.oauth_backoff_until = 0.0
+        state.oauth_fail_count = 0
+
+
+def reset_usage_backoff(store_dir=None):
     """Reset usage API backoff state, allowing the next call immediately."""
-    global _usage_backoff_until, _usage_fail_count
-    _usage_backoff_until = 0.0
-    _usage_fail_count = 0
+    states = _states.values() if store_dir is None else [_state(store_dir)]
+    for state in states:
+        state.usage_backoff_until = 0.0
+        state.usage_fail_count = 0
+
+
+def any_backoff_active() -> bool:
+    """True when any account is currently backing off (drives the warning icon)."""
+    now = time.monotonic()
+    return any(s.oauth_backoff_until > now or s.usage_backoff_until > now
+               for s in _states.values())
 
 
 def is_claude_installed():
@@ -172,16 +220,16 @@ def get_days_until_reset(resets_at: str) -> str:
     return f"{days}d left"
 
 
-def _read_credentials() -> dict | None:
+def _read_credentials(store_dir=None) -> dict | None:
     """Read and return the Claude OAuth credentials, or None if unavailable."""
     try:
-        with open(CLAUDE_CREDENTIALS_PATH, 'r') as f:
+        with open(_credentials_path(store_dir), 'r') as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, PermissionError):
         return None
 
 
-def _refresh_oauth_token(refresh_token: str) -> tuple[dict | None, bool]:
+def _refresh_oauth_token(refresh_token: str, fail_count: int = 0) -> tuple[dict | None, bool]:
     """Refresh the OAuth access token.
 
     Returns:
@@ -207,80 +255,84 @@ def _refresh_oauth_token(refresh_token: str) -> tuple[dict | None, bool]:
             return json.loads(resp.read()), False
     except urllib.error.HTTPError as e:
         is_permanent = e.code in (401, 403)
-        if _oauth_fail_count == 0:
+        if fail_count == 0:
             log.warning("oauth_refresh_failed", error=str(e), status=e.code)
         else:
             log.debug("oauth_refresh_failed", error=str(e), status=e.code,
-                       fail_count=_oauth_fail_count)
+                       fail_count=fail_count)
         return None, is_permanent
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as e:
-        if _oauth_fail_count == 0:
+        if fail_count == 0:
             log.warning("oauth_refresh_failed", error=str(e))
         else:
             log.debug("oauth_refresh_failed", error=str(e),
-                       fail_count=_oauth_fail_count)
+                       fail_count=fail_count)
         return None, False
 
 
-def _save_credentials(creds: dict) -> None:
-    """Write updated credentials back to disk."""
+def _save_credentials(creds: dict, store_dir=None) -> None:
+    """Write updated credentials back to the store they came from."""
+    path = _credentials_path(store_dir)
     try:
-        with open(CLAUDE_CREDENTIALS_PATH, 'w') as f:
+        with open(path, 'w') as f:
             json.dump(creds, f)
+        # Assert 0600 rather than inheriting whatever the file/umask had.
+        os.chmod(path, 0o600)
     except OSError:
         pass
 
 
-def _check_creds_mtime():
-    """Check if the credentials file has been modified since last seen. If so, reset backoff."""
-    global _oauth_creds_mtime
+def _check_creds_mtime(store_dir=None):
+    """Reset this store's backoff if its credentials file changed."""
+    state = _state(store_dir)
     try:
-        mtime = os.stat(CLAUDE_CREDENTIALS_PATH).st_mtime
+        mtime = os.stat(_credentials_path(store_dir)).st_mtime
     except OSError:
         return
-    if mtime > _oauth_creds_mtime:
-        if _oauth_creds_mtime > 0 and _oauth_fail_count > 0:
+    if mtime > state.oauth_creds_mtime:
+        if state.oauth_creds_mtime > 0 and state.oauth_fail_count > 0:
             log = structlog.get_logger()
-            log.info("oauth_backoff_reset_creds_changed")
-            reset_oauth_backoff()
-        _oauth_creds_mtime = mtime
+            log.info("oauth_backoff_reset_creds_changed", store=store_dir)
+            reset_oauth_backoff(store_dir)
+        state.oauth_creds_mtime = mtime
 
 
-def _apply_backoff(is_permanent: bool):
+def _apply_backoff(is_permanent: bool, store_dir=None):
     """Compute and set the next backoff deadline after a failed refresh."""
-    global _oauth_backoff_until, _oauth_fail_count
-    _oauth_fail_count += 1
+    state = _state(store_dir)
+    state.oauth_fail_count += 1
     if is_permanent:
-        delay = min(_BACKOFF_PERMANENT_BASE * (2 ** (_oauth_fail_count - 1)),
+        delay = min(_BACKOFF_PERMANENT_BASE * (2 ** (state.oauth_fail_count - 1)),
                      _BACKOFF_PERMANENT_CAP)
     else:
-        delay = min(_BACKOFF_TRANSIENT_BASE * (2 ** (_oauth_fail_count - 1)),
+        delay = min(_BACKOFF_TRANSIENT_BASE * (2 ** (state.oauth_fail_count - 1)),
                      _BACKOFF_TRANSIENT_CAP)
-    _oauth_backoff_until = time.monotonic() + delay
+    state.oauth_backoff_until = time.monotonic() + delay
     log = structlog.get_logger()
     log.warning("oauth_backoff_engaged", next_retry_secs=delay,
-                fail_count=_oauth_fail_count,
+                fail_count=state.oauth_fail_count, store=store_dir,
                 error_type="permanent" if is_permanent else "transient")
 
 
-def fetch_claude_usage() -> dict | None:
+def fetch_claude_usage(store_dir=None) -> dict | None:
     """Fetch Claude Code usage from the Anthropic OAuth API.
 
-    Reads the OAuth token from ~/.claude/.credentials.json, refreshes if expired,
-    and calls GET /api/oauth/usage. Returns the parsed JSON response or None on error.
-    Applies exponential backoff on repeated refresh failures.
+    Reads the OAuth token from ``store_dir`` (the default store when None),
+    refreshes if expired, and calls GET /api/oauth/usage. Returns the parsed
+    JSON response or None on error. Backoff is applied per store (spec 016).
     """
-    global _oauth_backoff_until, _oauth_fail_count, _usage_backoff_until, _usage_fail_count
     log = structlog.get_logger()
+    state = _state(store_dir)
 
     # Check usage API backoff before doing any work
-    if time.monotonic() < _usage_backoff_until:
-        log.debug("usage_api_skipped_backoff", fail_count=_usage_fail_count)
+    if time.monotonic() < state.usage_backoff_until:
+        log.debug("usage_api_skipped_backoff", fail_count=state.usage_fail_count,
+                  store=store_dir)
         return {"error": "rate_limited"}
 
-    _check_creds_mtime()
+    _check_creds_mtime(store_dir)
 
-    creds = _read_credentials()
+    creds = _read_credentials(store_dir)
     if not creds:
         return None
 
@@ -299,18 +351,20 @@ def fetch_claude_usage() -> dict | None:
             return {"error": "auth_expired"}
 
         # Check backoff before attempting refresh
-        if time.monotonic() < _oauth_backoff_until:
-            log.debug("oauth_refresh_skipped_backoff", fail_count=_oauth_fail_count)
+        if time.monotonic() < state.oauth_backoff_until:
+            log.debug("oauth_refresh_skipped_backoff",
+                      fail_count=state.oauth_fail_count, store=store_dir)
             return {"error": "auth_backoff"}
 
-        new_token_data, is_permanent = _refresh_oauth_token(refresh_token)
+        new_token_data, is_permanent = _refresh_oauth_token(
+            refresh_token, state.oauth_fail_count)
         if not new_token_data or "access_token" not in new_token_data:
-            _apply_backoff(is_permanent)
+            _apply_backoff(is_permanent, store_dir)
             return {"error": "auth_expired"}
 
-        # Success — reset backoff
-        _oauth_fail_count = 0
-        _oauth_backoff_until = 0.0
+        # Success — reset this store's backoff
+        state.oauth_fail_count = 0
+        state.oauth_backoff_until = 0.0
 
         access_token = new_token_data["access_token"]
         oauth["accessToken"] = access_token
@@ -318,7 +372,7 @@ def fetch_claude_usage() -> dict | None:
             oauth["refreshToken"] = new_token_data["refresh_token"]
         if "expires_in" in new_token_data:
             oauth["expiresAt"] = now_ms + new_token_data["expires_in"] * 1000
-        _save_credentials(creds)
+        _save_credentials(creds, store_dir)
 
     req = urllib.request.Request(
         CLAUDE_USAGE_URL,
@@ -332,14 +386,14 @@ def fetch_claude_usage() -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             # Success — reset usage backoff
-            if _usage_fail_count > 0:
-                reset_usage_backoff()
+            if state.usage_fail_count > 0:
+                reset_usage_backoff(store_dir)
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        _usage_fail_count += 1
+        state.usage_fail_count += 1
         if e.code == 429:
             # Exponential backoff: base * 2^(failures-1), floored at default, capped at max
-            exp_delay = min(_USAGE_429_DEFAULT_RETRY * (2 ** (_usage_fail_count - 1)),
+            exp_delay = min(_USAGE_429_DEFAULT_RETRY * (2 ** (state.usage_fail_count - 1)),
                             _USAGE_BACKOFF_CAP)
             # If server sends a Retry-After header, use whichever is larger
             retry_after = e.headers.get("Retry-After") if e.headers else None
@@ -350,20 +404,22 @@ def fetch_claude_usage() -> dict | None:
                     delay = exp_delay
             else:
                 delay = exp_delay
-            _usage_backoff_until = time.monotonic() + delay
-            if _usage_fail_count == 1:
-                log.warning("claude_usage_rate_limited", retry_after_secs=delay)
+            state.usage_backoff_until = time.monotonic() + delay
+            if state.usage_fail_count == 1:
+                log.warning("claude_usage_rate_limited", retry_after_secs=delay,
+                            store=store_dir)
             else:
                 log.debug("claude_usage_rate_limited", retry_after_secs=delay,
-                           fail_count=_usage_fail_count)
+                           fail_count=state.usage_fail_count, store=store_dir)
             return {"error": "rate_limited"}
         else:
             # Other HTTP errors: apply exponential backoff
-            delay = min(_USAGE_BACKOFF_BASE * (2 ** (_usage_fail_count - 1)),
+            delay = min(_USAGE_BACKOFF_BASE * (2 ** (state.usage_fail_count - 1)),
                          _USAGE_BACKOFF_CAP)
-            _usage_backoff_until = time.monotonic() + delay
+            state.usage_backoff_until = time.monotonic() + delay
             log.warning("claude_usage_api_error", status=e.code,
-                         backoff_secs=delay, fail_count=_usage_fail_count)
+                         backoff_secs=delay, fail_count=state.usage_fail_count,
+                         store=store_dir)
             return {"error": "api_error"}
     except (urllib.error.URLError, TimeoutError) as e:
         log.warning("claude_usage_network_error", error=str(e))
@@ -460,11 +516,23 @@ class UpdateThread(QThread):
             log = structlog.get_logger()
             log.error("update_failed", error=str(e))
         
+        # One reading per configured account (spec 016). Each is fetched
+        # independently so a failure on one does not lose the others.
         try:
-            results['claude_usage'] = fetch_claude_usage()
+            readings = []
+            for account in accounts.discover_or_default():
+                try:
+                    data = fetch_claude_usage(account.store_dir)
+                except Exception as e:
+                    log = structlog.get_logger()
+                    log.error("claude_usage_fetch_failed",
+                              account=account.name, error=str(e))
+                    data = {"error": "api_error"}
+                readings.append((account, data))
+            results['claude_usage'] = readings
         except Exception as e:
             log = structlog.get_logger()
-            log.error("claude_usage_fetch_failed", error=str(e))
+            log.error("claude_usage_discovery_failed", error=str(e))
 
         self.data_ready.emit(results)
 
@@ -728,30 +796,92 @@ class PeripheralMonitor(QWidget):
 
         claude_layout.addLayout(header_row)
 
-        self.claude_progress = QProgressBar(self)
-        self.claude_progress.setObjectName("ClaudeProgress")
-        self.claude_progress.setMinimum(0)
-        self.claude_progress.setMaximum(100)
-        self.claude_progress.setValue(0)
-        self.claude_progress.setTextVisible(False)
-        self.claude_progress.setFixedHeight(8)
-        claude_layout.addWidget(self.claude_progress)
-
-        stats_row = QHBoxLayout()
-
-        self.claude_five_hour_lbl = QLabel("5h: --", self)
-        self.claude_five_hour_lbl.setObjectName("ClaudeStats")
-        stats_row.addWidget(self.claude_five_hour_lbl)
-
-        stats_row.addStretch()
-
-        self.claude_seven_day_lbl = QLabel("7d: --", self)
-        self.claude_seven_day_lbl.setObjectName("ClaudeStats")
-        stats_row.addWidget(self.claude_seven_day_lbl)
-
-        claude_layout.addLayout(stats_row)
+        # One row per account, built on first update (spec 016). Keyed by
+        # account name so a row survives across polls and is only rebuilt when
+        # the set of configured accounts actually changes.
+        self.claude_rows = {}
+        self.claude_rows_order = []
+        self._build_claude_rows([DEFAULT_CLAUDE_ROW])
 
         return self.claude_frame
+
+    def _build_claude_rows(self, labels):
+        """(Re)build the per-account rows inside the existing Claude section.
+
+        ``labels`` is a list of ``(key, text)`` pairs — ``text`` is None for the
+        single-account case, which renders exactly as the section always has
+        (bar above a stats row, no account label). With several accounts each
+        row gains a leading label naming the profile and its type.
+        """
+        for row in self.claude_rows.values():
+            row["container"].setParent(None)
+            row["container"].deleteLater()
+        self.claude_rows = {}
+        self.claude_rows_order = []
+
+        multi = len(labels) > 1
+        for entry in labels:
+            key, text = entry[0], entry[1]
+            tooltip = entry[2] if len(entry) > 2 else None
+            container = QWidget(self)
+            box = QVBoxLayout(container)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(2)
+
+            progress = QProgressBar(container)
+            progress.setObjectName("ClaudeProgress")
+            progress.setMinimum(0)
+            progress.setMaximum(100)
+            progress.setValue(0)
+            progress.setTextVisible(False)
+            progress.setFixedHeight(8)
+
+            stats_row = QHBoxLayout()
+            account_lbl = None
+            if multi:
+                account_lbl = QLabel(text, container)
+                account_lbl.setObjectName("ClaudeAccount")
+                account_lbl.setToolTip(tooltip or "")
+                stats_row.addWidget(account_lbl)
+
+            five_lbl = QLabel("5h: --", container)
+            five_lbl.setObjectName("ClaudeStats")
+            stats_row.addWidget(five_lbl)
+
+            stats_row.addStretch()
+
+            seven_lbl = QLabel("7d: --", container)
+            seven_lbl.setObjectName("ClaudeStats")
+            stats_row.addWidget(seven_lbl)
+
+            # With one account the bar sits above its stats, as before. With
+            # several, the bar goes under each account's stats line so the
+            # block reads as one labeled line per account.
+            if multi:
+                box.addLayout(stats_row)
+                box.addWidget(progress)
+            else:
+                box.addWidget(progress)
+                box.addLayout(stats_row)
+
+            self.claude_layout.addWidget(container)
+            self.claude_rows[key] = {
+                "container": container,
+                "progress": progress,
+                "five": five_lbl,
+                "seven": seven_lbl,
+                "account": account_lbl,
+                "last_good": None,
+                "last_good_time": 0.0,
+            }
+            self.claude_rows_order.append(key)
+
+        # The single-account widgets keep their historical attribute names so
+        # the rest of the class (and the tests) address them unchanged.
+        first = self.claude_rows[self.claude_rows_order[0]]
+        self.claude_progress = first["progress"]
+        self.claude_five_hour_lbl = first["five"]
+        self.claude_seven_day_lbl = first["seven"]
 
     def _scaled_metrics(self, scale):
         """Compute scale-aware layout spacing so padding shrinks with the font.
@@ -856,6 +986,11 @@ class PeripheralMonitor(QWidget):
             QLabel#ClaudeReset {{
                 font-size: {int(9 * scale)}px;
                 color: #888888;
+            }}
+            QLabel#ClaudeAccount {{
+                color: rgba(255, 255, 255, 0.55);
+                font-size: {int(11 * scale)}px;
+                font-family: monospace;
             }}
             QLabel#ClaudeStats {{
                 font-size: {int(9 * scale)}px;
@@ -1252,8 +1387,14 @@ class PeripheralMonitor(QWidget):
         if worker is not None:
             worker.deleteLater()
 
-    def update_claude_section(self, usage_data: dict | None = None):
-        """Update the Claude Code usage stats display from API data."""
+    def update_claude_section(self, readings=None):
+        """Update the Claude Code usage display from one reading per account.
+
+        ``readings`` is a list of ``(account, usage_data)`` pairs (spec 016).
+        A bare dict — or None — is still accepted and treated as the single
+        default account, so older callers and the manual-refresh path keep
+        working unchanged.
+        """
         if not self.settings.get('claude_section_enabled', True) or self.claude_frame is None:
             return
 
@@ -1261,54 +1402,108 @@ class PeripheralMonitor(QWidget):
             self.claude_frame.show()
             self.claude_section_visible = True
 
-        if usage_data is None:
-            if self._last_good_usage:
-                self._render_usage_data(self._last_good_usage)
-                self._update_staleness_label()
-                self._update_backoff_indicator()
-                return
-            self.claude_progress.setValue(0)
-            self.claude_five_hour_lbl.setText("5h: --")
-            self.claude_seven_day_lbl.setText("7d: --")
-            self.claude_duration_lbl.setText("No data")
-            return
+        readings = self._normalize_readings(readings)
+        self._sync_claude_rows(readings)
 
-        error = usage_data.get("error")
-        if error:
-            # Show cached data if available during any error
-            if self._last_good_usage:
-                self._render_usage_data(self._last_good_usage)
-                self._update_staleness_label()
-                self._update_backoff_indicator()
-                return
-            # No cached data — show error state
-            self.claude_progress.setValue(0)
-            labels = {
-                "auth_expired": "Auth expired",
-                "auth_backoff": "Auth retry...",
-                "offline": "Offline",
-                "api_error": "API error",
-                "rate_limited": "Rate limited",
-                "invalid_response": "No data",
-            }
-            self.claude_five_hour_lbl.setText(labels.get(error, "Error"))
-            self.claude_seven_day_lbl.setText("")
-            self.claude_duration_lbl.setText("")
-            return
+        used_cache = False
+        for account, usage_data in readings:
+            row = self.claude_rows.get(account.name)
+            if row is None:
+                continue
+            used_cache |= self._update_account_row(row, usage_data)
 
-        # Success — cache and render
-        self._last_good_usage = usage_data
-        self._last_good_usage_time = time.monotonic()
-        self._render_usage_data(usage_data)
+        # The staleness clock replaces the reset countdown in the header, so it
+        # is only shown when a reading actually came from cache — otherwise a
+        # fresh render would lose its own countdown to a "(<1m ago)".
+        if used_cache:
+            self._update_staleness_label()
         self._update_backoff_indicator()
+
+    def _normalize_readings(self, readings):
+        """Coerce the several accepted shapes into ``[(account, data), ...]``."""
+        if isinstance(readings, list):
+            return readings
+        # A bare payload (or None) means the default account.
+        placeholder = accounts.discover_or_default()[0]
+        return [(placeholder, readings)]
+
+    def _sync_claude_rows(self, readings):
+        """Rebuild the rows when the set of configured accounts has changed.
+
+        Rebuilding only on change keeps each row's last-known-good reading
+        across polls, so a transient failure does not blank a row that already
+        has a good value.
+        """
+        wanted = [a.name for a, _ in readings]
+        if wanted == self.claude_rows_order:
+            return
+        multi = len(readings) > 1
+        labels = [
+            (a.name,
+             self._account_row_label(a, readings) if multi else None,
+             f"{a.name} — {a.type_label}")
+            for a, _ in readings
+        ]
+        self._build_claude_rows(labels or [DEFAULT_CLAUDE_ROW])
+
+    @staticmethod
+    def _account_row_label(account, readings):
+        """Profile name + one-letter account type, padded so the rows line up.
+
+        The letter rather than the word keeps the label narrow — this widget is
+        a fixed-width panel companion, so every character spent on the label is
+        taken from the reading itself. The full type is on the tooltip.
+        """
+        name_width = max(len(a.name) for a, _ in readings)
+        return f"{account.name.ljust(name_width)}  {account.type_abbrev}"
+
+    def _update_account_row(self, row, usage_data) -> bool:
+        """Render one account's reading, falling back to its last-known-good.
+
+        Returns True when the render came from cache rather than fresh data.
+        """
+        if usage_data is None or usage_data.get("error"):
+            # Per-account cache first. The section-level cache is only a valid
+            # fallback for a lone account — with several it belongs to whichever
+            # account refreshed last, and showing it here would attribute one
+            # account's usage to another.
+            cached = row["last_good"]
+            if cached is None and not self._is_multi():
+                cached = self._last_good_usage
+            if cached:
+                self._render_usage_data(cached, row)
+                return True
+            if usage_data is None:
+                self._render_unavailable(row)
+                row["five"].setText("5h: --")
+                self._set_reset_text("No data", row)
+                return False
+            self._render_error(usage_data.get("error"), row)
+            return False
+
+        row["last_good"] = usage_data
+        row["last_good_time"] = time.monotonic()
+        # The section-level staleness clock tracks the freshest account.
+        self._last_good_usage = usage_data
+        self._last_good_usage_time = row["last_good_time"]
+        self._render_usage_data(usage_data, row)
+        return False
 
     def _update_backoff_indicator(self):
         """Show/hide the backoff warning icon based on current backoff state."""
         if not hasattr(self, 'claude_backoff_icon'):
             return
         now = time.monotonic()
-        if _usage_backoff_until > now or _oauth_backoff_until > now:
-            remaining = max(_usage_backoff_until, _oauth_backoff_until) - now
+        # Any account in backoff lights the icon; the tooltip reports the
+        # longest remaining wait across accounts (spec 016).
+        deadlines = [
+            d
+            for s in _states.values()
+            for d in (s.usage_backoff_until, s.oauth_backoff_until)
+            if d > now
+        ]
+        if deadlines:
+            remaining = max(deadlines) - now
             mins = int(remaining // 60) + 1
             self.claude_backoff_icon.setToolTip(
                 f"Backoff ~{mins}m — increase activity interval")
@@ -1333,9 +1528,11 @@ class PeripheralMonitor(QWidget):
             mins = minutes % 60
             ago = f"({hours}h{mins}m ago)"
 
-        # Include last-known reset countdown alongside staleness
+        # Include last-known reset countdown alongside staleness. With several
+        # accounts each row carries its own reset, and resets can differ per
+        # account, so the shared header would only duplicate or contradict them.
         reset_text = ""
-        if self._last_good_usage:
+        if self._last_good_usage and not self._is_multi():
             if detect_shape(self._last_good_usage) == SHAPE_CREDITS:
                 view = credits_view(self._last_good_usage)
                 reset_text = f"resets {view['resets_at']:%b %-d}"
@@ -1351,10 +1548,11 @@ class PeripheralMonitor(QWidget):
         else:
             self.claude_duration_lbl.setText(ago)
 
-    def _set_claude_progress(self, percent: float, color: str):
-        """Set the Claude progress bar value + chunk color."""
-        self.claude_progress.setValue(min(100, max(0, int(percent))))
-        self.claude_progress.setStyleSheet(f"""
+    def _set_claude_progress(self, percent: float, color: str, row=None):
+        """Set a Claude progress bar's value + chunk color."""
+        progress = (row or self._first_row())["progress"]
+        progress.setValue(min(100, max(0, int(percent))))
+        progress.setStyleSheet(f"""
             QProgressBar#ClaudeProgress {{
                 background-color: rgba(255, 255, 255, 0.1);
                 border: none;
@@ -1366,39 +1564,81 @@ class PeripheralMonitor(QWidget):
             }}
         """)
 
-    def _render_credits_data(self, view: dict):
-        """Render the enterprise credits shape into the Claude section widgets.
+    def _first_row(self):
+        """The default account's row — the target when no row is named."""
+        return self.claude_rows[self.claude_rows_order[0]]
 
-        Reuses the three existing labels rather than adding new ones, so the
+    def _is_multi(self) -> bool:
+        """True when more than one account is configured (spec 016)."""
+        return len(self.claude_rows_order) > 1
+
+    def _set_reset_text(self, text: str, row):
+        """Put a reset countdown where this layout has room for it.
+
+        Single account: the section header, as always. Several accounts: the
+        header belongs to no single account, so the countdown rides along with
+        that account's own right-hand label instead.
+        """
+        if self._is_multi():
+            row["reset_text"] = text
+        else:
+            self.claude_duration_lbl.setText(text)
+
+    def _render_credits_data(self, view: dict, row=None):
+        """Render the enterprise credits shape into an account's widgets.
+
+        Reuses the row's existing labels rather than adding new ones, so the
         layout and ClaudeStats styling are unchanged.
         """
+        row = row or self._first_row()
         percent = view["percent"] or 0
-        self._set_claude_progress(percent, _severity_hex(view["severity"], percent))
+        self._set_claude_progress(percent, _severity_hex(view["severity"], percent), row)
 
         symbol = "$" if view["currency"] == "USD" else ""
-        self.claude_five_hour_lbl.setText(
+        row["five"].setText(
             f"{symbol}{view['used']:.2f} / {symbol}{view['limit']:.0f}"
         )
-        self.claude_seven_day_lbl.setText(f"{percent:.0f}% used")
-        self.claude_duration_lbl.setText(f"Resets {view['resets_at']:%b %-d}")
+        reset = f"Resets {view['resets_at']:%b %-d}"
+        if self._is_multi():
+            row["seven"].setText(f"{percent:.0f}% used · {reset}")
+        else:
+            row["seven"].setText(f"{percent:.0f}% used")
+        self._set_reset_text(reset, row)
 
-    def _render_unavailable(self):
+    def _render_unavailable(self, row=None):
         """No live buckets and no spend — a normal empty state, not an error."""
-        self._set_claude_progress(0, "#4caf50")
-        self.claude_five_hour_lbl.setText("5h: --")
-        self.claude_seven_day_lbl.setText("7d: --")
-        self.claude_duration_lbl.setText("")
+        row = row or self._first_row()
+        self._set_claude_progress(0, "#4caf50", row)
+        row["five"].setText("5h: --")
+        row["seven"].setText("7d: --")
+        self._set_reset_text("", row)
 
-    def _render_usage_data(self, usage_data: dict):
-        """Render usage data to the Claude section widgets."""
+    def _render_error(self, error: str, row):
+        """Render one account's error into its own row, leaving others alone."""
+        labels = {
+            "auth_expired": "Auth expired",
+            "auth_backoff": "Auth retry...",
+            "offline": "Offline",
+            "api_error": "API error",
+            "rate_limited": "Rate limited",
+            "invalid_response": "No data",
+        }
+        self._set_claude_progress(0, "#6b7280", row)
+        row["five"].setText(labels.get(error, "Error"))
+        row["seven"].setText("")
+        self._set_reset_text("", row)
+
+    def _render_usage_data(self, usage_data: dict, row=None):
+        """Render usage data to one account's Claude section widgets."""
+        row = row or self._first_row()
         shape = detect_shape(usage_data)
 
         if shape == SHAPE_CREDITS:
-            self._render_credits_data(credits_view(usage_data))
+            self._render_credits_data(credits_view(usage_data), row)
             return
 
         if shape == SHAPE_UNAVAILABLE:
-            self._render_unavailable()
+            self._render_unavailable(row)
             return
 
         five_hour = usage_data.get("five_hour") or {}
@@ -1417,9 +1657,9 @@ class PeripheralMonitor(QWidget):
         else:
             color = "#4caf50"
 
-        self._set_claude_progress(progress, color)
+        self._set_claude_progress(progress, color, row)
 
-        self.claude_five_hour_lbl.setText(f"5h: {five_pct:.0f}%")
+        row["five"].setText(f"5h: {five_pct:.0f}%")
 
         seven_label = f"7d: {seven_pct:.0f}%"
         days_left = get_days_until_reset(seven_day.get("resets_at", ""))
@@ -1431,9 +1671,11 @@ class PeripheralMonitor(QWidget):
             if bucket and bucket.get("utilization", 0) > 0:
                 label = key.replace("seven_day_", "").capitalize()
                 right_parts.append(f"{label}: {bucket['utilization']:.0f}%")
-        self.claude_seven_day_lbl.setText(" | ".join(right_parts))
-
-        self.claude_duration_lbl.setText(get_time_until_reset(resets_at) if resets_at else "")
+        reset = get_time_until_reset(resets_at) if resets_at else ""
+        if self._is_multi() and reset:
+            right_parts.append(reset)
+        row["seven"].setText(" | ".join(right_parts))
+        self._set_reset_text(reset, row)
 
     def on_data_ready(self, results):
         # Two configurable slots. Each resolves its assigned device type to a

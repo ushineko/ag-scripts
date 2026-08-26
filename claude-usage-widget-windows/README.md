@@ -24,6 +24,7 @@ A floating desktop widget that displays Claude Code API usage metrics via the An
 - System tray / menu-bar icon with color-coded usage status
 - Reads authoritative usage data from the Anthropic OAuth API (no local file parsing)
 - Credentials read from the platform store: macOS **login Keychain**, Windows/Linux `~/.claude/.credentials.json`
+- **Multi-account**: every configured Claude login is detected automatically and reported on its own line, labeled by profile name and account type (Pro / Max / Team / Enterprise)
 - Automatic OAuth token refresh with exponential backoff (refreshed tokens written back to the store)
 - Draggable widget with position persistence
 - Selectable font size (right-click → Font Size; persisted)
@@ -215,6 +216,16 @@ pytest tests/
 ```
 
 ## Changelog
+
+### v3.3.0 (2026-08-26)
+
+- **Multi-account usage display.** Every configured Claude Code login is now discovered and reported on its own line, instead of only the default credential store
+  - Discovery is automatic, with no configuration: the default store (`~/.claude`) plus every profile under `~/.claude-credentials/<name>/`. That layout is what `CLAUDE_SECURESTORAGE_CONFIG_DIR` addresses — it relocates the credential store *only*, so several logins share one `~/.claude` for projects, sessions, settings and skills
+  - Each line is labeled with its profile name and a one-letter account type (`max M`, `work E`) read from `subscriptionType`. The letter keeps the label narrow so the width goes to the reading
+  - Account shape is resolved per account (spec 009), so a Max line can show rate-limit gauges while an Enterprise line beside it shows credit spend
+  - Failures are per account: one login expired, rate-limited or offline renders its own error while the others still report. OAuth backoff, the usage cache file, and its lock are all per account, and a refreshed token is written back to the store it came from
+  - A single configured account renders exactly as before
+  - New `src/accounts.py` (dependency-free, mirrored into `peripheral-battery-monitor`); `fetch_claude_usage`, `fetch_usage_cached`, `build_line` and `build_tui_view` all take an account
 
 ### v3.2.0 (2026-06-28)
 

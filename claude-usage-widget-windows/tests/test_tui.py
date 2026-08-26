@@ -185,11 +185,25 @@ class _DummyLive:
         self.frames.append(renderable)
 
 
+def _account(name="max", subscription_type="max"):
+    """One discovered account, for pinning discovery in wiring tests."""
+    from src.accounts import Account
+    return Account(name=name, store_dir=f"/tmp/{name}",
+                   subscription_type=subscription_type, is_default=(name == "max"))
+
+
+def _pin_accounts(*accounts):
+    """Patch discovery so a test does not depend on the host's real logins."""
+    return mock.patch.object(tui, "discover_or_default",
+                             return_value=list(accounts) or [_account()])
+
+
 class TestCacheWiring:
     """--line/--tui use the cooperative cache by default; --no-cache bypasses it."""
 
     def test_run_line_uses_cache_by_default(self):
-        with mock.patch.object(tui, "fetch_usage_cached", return_value=(_data(), 0.0)) as cached, \
+        with _pin_accounts(_account()), \
+             mock.patch.object(tui, "fetch_usage_cached", return_value=(_data(), 0.0)) as cached, \
              mock.patch.object(tui, "fetch_claude_usage") as direct, \
              mock.patch.object(tui, "Console", lambda *a, **k: Console(file=io.StringIO())):
             tui.run_line(color=False, use_cache=True, ttl=60)
@@ -197,7 +211,8 @@ class TestCacheWiring:
         direct.assert_not_called()
 
     def test_run_line_no_cache_fetches_directly(self):
-        with mock.patch.object(tui, "fetch_usage_cached") as cached, \
+        with _pin_accounts(_account()), \
+             mock.patch.object(tui, "fetch_usage_cached") as cached, \
              mock.patch.object(tui, "fetch_claude_usage", return_value=_data()) as direct, \
              mock.patch.object(tui, "Console", lambda *a, **k: Console(file=io.StringIO())):
             tui.run_line(color=False, use_cache=False, ttl=60)
@@ -234,7 +249,8 @@ class TestRunTuiLoop:
             if len(slept) >= 3:
                 raise KeyboardInterrupt
 
-        with mock.patch.object(tui, "fetch_usage_cached", return_value=(_data(), 0.0)) as cached, \
+        with _pin_accounts(_account()), \
+             mock.patch.object(tui, "fetch_usage_cached", return_value=(_data(), 0.0)) as cached, \
              mock.patch.object(tui.time, "sleep", fake_sleep), \
              mock.patch.object(tui, "Live", _DummyLive), \
              mock.patch.object(tui, "Console",
@@ -243,7 +259,8 @@ class TestRunTuiLoop:
 
         assert rc == 0
         assert slept == [10, 10, 10]                 # fixed cadence, no per-process backoff
-        cached.assert_called_with(10)                 # polls the cache with the interval as TTL
+        # Polls the cache with the interval as TTL, addressed to the account.
+        cached.assert_called_with(10, account="max", store_dir="/tmp/max")
 
 
 def _spend(minor, severity="normal"):
@@ -310,3 +327,68 @@ class TestCreditsSegment:
         d0 = _data(resets=True)
         d0["spend"] = _spend(0)
         assert "$" not in tui._stat_segments(d0).plain
+
+
+class TestMultiAccountLines:
+    """Spec 011: one line per configured account, each labeled."""
+
+    def test_single_account_label_is_unchanged(self):
+        assert tui.account_labels([_account()]) == ["Claude"]
+
+    def test_multiple_accounts_are_labeled_and_padded(self):
+        labels = tui.account_labels([
+            _account("max", "max"),
+            _account("work", "enterprise"),
+        ])
+        assert labels == ["max  M", "work E"]
+        assert len({len(x) for x in labels}) == 1     # aligned columns
+
+    def test_build_multi_line_emits_one_line_per_account(self):
+        readings = [("max M", _data(), 0.0), ("work E", _data(), 0.0)]
+
+        lines = tui.build_multi_line(readings)
+
+        assert len(lines) == 2
+        assert lines[0].plain.startswith("max M 5h")
+        assert lines[1].plain.startswith("work E 5h")
+
+    def test_run_line_prints_a_line_per_account(self):
+        buf = io.StringIO()
+        with _pin_accounts(_account("max", "max"), _account("work", "enterprise")), \
+             mock.patch.object(tui, "fetch_usage_cached", return_value=(_data(), 0.0)), \
+             mock.patch.object(tui, "Console",
+                               lambda *a, **k: Console(file=buf, width=200, no_color=True)):
+            tui.run_line(color=False, use_cache=True, ttl=60)
+
+        printed = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+        assert len(printed) == 2
+        assert printed[0].startswith("max  M")
+        assert printed[1].startswith("work E")
+
+    def test_each_account_reads_its_own_store(self):
+        with _pin_accounts(_account("max", "max"), _account("work", "enterprise")), \
+             mock.patch.object(tui, "fetch_usage_cached",
+                               return_value=(_data(), 0.0)) as cached, \
+             mock.patch.object(tui, "Console", lambda *a, **k: Console(file=io.StringIO())):
+            tui.run_line(color=False, use_cache=True, ttl=60)
+
+        stores = [c.kwargs["store_dir"] for c in cached.call_args_list]
+        assert stores == ["/tmp/max", "/tmp/work"]
+
+    def test_one_account_failing_does_not_hide_the_other(self):
+        readings = [
+            ("max  M", {"error": "offline"}, None),
+            ("work E", _data(), 0.0),
+        ]
+
+        lines = tui.build_multi_line(readings)
+
+        assert "offline" in lines[0].plain
+        assert "5h" in lines[1].plain          # healthy account still reports
+
+    def test_multi_tui_view_has_one_renderable_per_account(self):
+        readings = [("max M", _data(), 0.0), ("work E", _data(), 0.0)]
+
+        view = tui.build_multi_tui_view(readings, interval=60)
+
+        assert len(view.renderables) == 2

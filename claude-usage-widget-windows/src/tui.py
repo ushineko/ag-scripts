@@ -20,12 +20,13 @@ import signal
 import time
 
 import structlog
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
+from .accounts import discover_or_default
 from .display import format_percentage
 from .oauth import fetch_claude_usage, get_time_until_reset
 from .usage_cache import fetch_usage_cached
@@ -107,10 +108,10 @@ def _usage_style(util: float | None) -> str:
     return "green"
 
 
-def _seg_five_hour(util: float | None) -> Text:
-    """The core 5-hour segment (never dropped): 'Claude 5h XX%'."""
+def _seg_five_hour(util: float | None, label: str = "Claude") -> Text:
+    """The core 5-hour segment (never dropped): '<label> 5h XX%'."""
     style = _usage_style(util)
-    t = Text("Claude 5h ")
+    t = Text(f"{label} 5h ")
     t.append(format_percentage(util), style=style)
     return t
 
@@ -130,12 +131,14 @@ def build_line(
     *,
     width: int | None = None,
     note: str | None = None,
+    label: str = "Claude",
 ) -> Text:
     """Build a single compact status line as a styled rich ``Text`` (the --line
     mode, and the --tui fallback for error states).
 
     Segments, in display order: ``Claude 5h`` · 7d · reset · model breakdown ·
-    note. When ``width`` is given, lower-priority segments are dropped
+    note. ``label`` replaces the leading ``Claude`` so a multi-account render
+    can identify which account the line belongs to. When ``width`` is given, lower-priority segments are dropped
     (note → model → reset → 7d) so the 5h reading always fits; if the core alone
     still overflows it is truncated. ``data`` may be ``None`` (not logged in) or
     an error dict (no ``five_hour``), which render as a short status line. Color
@@ -144,7 +147,7 @@ def build_line(
     # No usable reading -> short status line.
     if not isinstance(data, dict) or "five_hour" not in data:
         text = "not logged in" if data is None else _err_text((data or {}).get("error"))
-        line = Text(f"Claude — {text}", style="dim", no_wrap=True, overflow="crop")
+        line = Text(f"{label} — {text}", style="dim", no_wrap=True, overflow="crop")
         if width:
             line.truncate(width)
         return line
@@ -153,7 +156,7 @@ def build_line(
 
     if shape == SHAPE_CREDITS:
         view = credits_view(data)
-        core = Text("Claude ")
+        core = Text(f"{label} ")
         core.append(
             format_credits(view),
             style=_severity_style(view["severity"]),
@@ -178,7 +181,7 @@ def build_line(
         return line
 
     if shape == SHAPE_UNAVAILABLE:
-        line = Text("Claude — no usage data", style="dim", no_wrap=True, overflow="crop")
+        line = Text(f"{label} — no usage data", style="dim", no_wrap=True, overflow="crop")
         if width:
             line.truncate(width)
         return line
@@ -189,7 +192,7 @@ def build_line(
     util7 = seven.get("utilization")
     resets_at = five.get("resets_at", "")
 
-    core = _seg_five_hour(util5)
+    core = _seg_five_hour(util5, label)
 
     # Optional segments tagged for width-driven dropping.
     seg7 = Text("7d ")
@@ -281,7 +284,7 @@ def _stat_segments(data: dict) -> Text:
     return t
 
 
-def build_tui_view(data: dict | None, *, note: str | None = None):
+def build_tui_view(data: dict | None, *, note: str | None = None, label: str = "Claude"):
     """Build the full-width --tui renderable: a 5h progress bar that stretches to
     fill the pane, the stats trailing it, and the reset countdown right-aligned.
 
@@ -289,18 +292,18 @@ def build_tui_view(data: dict | None, *, note: str | None = None):
     `Text` for the not-logged-in / error states (no `five_hour` to chart).
     """
     if not isinstance(data, dict) or "five_hour" not in data:
-        return build_line(data, note=note)
+        return build_line(data, note=note, label=label)
 
     shape = detect_shape(data)
 
     if shape == SHAPE_UNAVAILABLE:
-        return build_line(data, note=note)
+        return build_line(data, note=note, label=label)
 
     if shape == SHAPE_CREDITS:
         # Chart spend against the cap — the same bar Claude Code's /usage shows.
         view = credits_view(data)
         return _build_bar_grid(
-            label=Text("Claude  "),
+            label=Text(f"{label}  "),
             completed=min(100, max(0, view["percent"] or 0)),
             style=_severity_style(view["severity"]),
             stats=_stat_segments(data),
@@ -321,7 +324,7 @@ def build_tui_view(data: dict | None, *, note: str | None = None):
         right = Text("")
 
     return _build_bar_grid(
-        label=Text("Claude  5h "),
+        label=Text(f"{label}  5h "),
         completed=min(100, max(0, util5 or 0)),
         style=_usage_style(util5),
         stats=_stat_segments(data),
@@ -357,6 +360,65 @@ def _build_bar_grid(*, label: Text, completed: float, style: str, stats: Text, r
     return grid
 
 
+SINGLE_ACCOUNT_LABEL = "Claude"
+
+
+def account_labels(accounts: list) -> list[str]:
+    """Display label per account, padded to a common width.
+
+    With one account the label stays ``Claude``, so a single-login machine
+    renders exactly as it did before multi-account support (spec 011).
+
+    With several, each line is identified by profile name and a one-letter
+    account type (``max M`` / ``work E``). The letter rather than the word
+    keeps the label narrow, leaving the width for the readings themselves.
+    Padding to a common width keeps the bars and stats columns aligned down
+    the block, since each account renders its own independent grid.
+    """
+    if len(accounts) <= 1:
+        return [SINGLE_ACCOUNT_LABEL]
+    name_width = max(len(a.name) for a in accounts)
+    return [f"{a.name.ljust(name_width)} {a.type_abbrev}" for a in accounts]
+
+
+def read_accounts(*, use_cache: bool, ttl: int) -> list[tuple]:
+    """Fetch every configured account, returning ``(label, data, fetched_at)``.
+
+    Each account is fetched independently so one failure stays local: an
+    expired or rate-limited account renders its own error line while the
+    others still show their readings.
+    """
+    accounts = discover_or_default()
+    labels = account_labels(accounts)
+    readings = []
+    for account, label in zip(accounts, labels):
+        if use_cache:
+            data, fetched_at = fetch_usage_cached(
+                ttl, account=account.name, store_dir=account.store_dir
+            )
+        else:
+            data, fetched_at = fetch_claude_usage(account.store_dir), time.time()
+        readings.append((label, data, fetched_at))
+    return readings
+
+
+def build_multi_line(readings: list[tuple], *, width: int | None = None) -> list[Text]:
+    """One compact line per account."""
+    return [
+        build_line(data, width=width, label=label) for label, data, _ in readings
+    ]
+
+
+def build_multi_tui_view(readings: list[tuple], *, interval: int):
+    """One bar row per account, stacked."""
+    return Group(*[
+        build_tui_view(
+            data, note=_staleness_note(data, fetched_at, interval), label=label
+        )
+        for label, data, fetched_at in readings
+    ])
+
+
 def run_line(color: bool, *, use_cache: bool = True, ttl: int = 60) -> int:
     """Fetch usage once, print a single compact line, and exit.
 
@@ -366,12 +428,10 @@ def run_line(color: bool, *, use_cache: bool = True, ttl: int = 60) -> int:
     """
     log.info("starting_line_mode", cache=use_cache)
     console = Console(no_color=not color, highlight=False)
-    if use_cache:
-        data, _ = fetch_usage_cached(ttl)
-    else:
-        data = fetch_claude_usage()
-    # soft_wrap keeps the line intact (no wrapping/cropping) for status bars.
-    console.print(build_line(data), soft_wrap=True)
+    readings = read_accounts(use_cache=use_cache, ttl=ttl)
+    # soft_wrap keeps each line intact (no wrapping/cropping) for status bars.
+    for line in build_multi_line(readings):
+        console.print(line, soft_wrap=True)
     return 0
 
 
@@ -407,12 +467,12 @@ def run_tui(interval: int, color: bool, *, use_cache: bool = True) -> int:
                 prev_winch = signal.signal(signal.SIGWINCH, _on_resize)
             try:
                 while True:
-                    if use_cache:
-                        data, fetched_at = fetch_usage_cached(base)
-                    else:
-                        data, fetched_at = fetch_claude_usage(), time.time()
-                    note = _staleness_note(data, fetched_at, base)
-                    live.update(build_tui_view(data, note=note), refresh=True)
+                    # Rediscovered every poll so a newly logged-in profile
+                    # appears without restarting the pane.
+                    readings = read_accounts(use_cache=use_cache, ttl=base)
+                    live.update(
+                        build_multi_tui_view(readings, interval=base), refresh=True
+                    )
                     time.sleep(base)
             finally:
                 if prev_winch is not None:

@@ -38,32 +38,46 @@ from .oauth import fetch_claude_usage
 log = structlog.get_logger(__name__)
 
 
-def get_cache_path():
-    """Path to the shared usage cache file."""
-    return get_cache_dir() / "usage.json"
+def _slug(account: str | None) -> str:
+    """Filesystem-safe suffix for an account name.
+
+    Cache files are per account (spec 011) so two accounts cannot serve each
+    other's readings. Callers that pass no account (direct single-account use)
+    keep the original unsuffixed filenames; named accounts get their own, so
+    the pre-upgrade ``usage.json`` is simply left unused.
+    """
+    if not account:
+        return ""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in account)
+    return f"-{safe}" if safe else ""
 
 
-def _lock_path():
-    return get_cache_dir() / "usage.lock"
+def get_cache_path(account: str | None = None):
+    """Path to the shared usage cache file for an account."""
+    return get_cache_dir() / f"usage{_slug(account)}.json"
 
 
-def read_cache() -> dict | None:
+def _lock_path(account: str | None = None):
+    return get_cache_dir() / f"usage{_slug(account)}.lock"
+
+
+def read_cache(account: str | None = None) -> dict | None:
     """Return the parsed cache entry, or None if missing/corrupt/partial."""
     try:
-        with open(get_cache_path(), "r", encoding="utf-8") as f:
+        with open(get_cache_path(account), "r", encoding="utf-8") as f:
             entry = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
         return None
     return entry if isinstance(entry, dict) else None
 
 
-def _write_cache(entry: dict) -> None:
+def _write_cache(entry: dict, account: str | None = None) -> None:
     """Atomically write the cache entry (tmp + os.replace). Best-effort."""
     try:
         cache_dir = get_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
-        path = get_cache_path()
-        tmp = path.parent / f"usage.json.{os.getpid()}.tmp"
+        path = get_cache_path(account)
+        tmp = path.parent / f"{path.name}.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(entry, f)
         os.replace(tmp, path)
@@ -72,7 +86,7 @@ def _write_cache(entry: dict) -> None:
 
 
 @contextmanager
-def _locked():
+def _locked(account: str | None = None):
     """Yield True if the cache lock was acquired (or locking is unavailable),
     False if another process holds it.
 
@@ -88,7 +102,7 @@ def _locked():
 
     try:
         get_cache_dir().mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(_lock_path()), os.O_CREAT | os.O_RDWR, 0o644)
+        fd = os.open(str(_lock_path(account)), os.O_CREAT | os.O_RDWR, 0o644)
     except OSError:
         # Can't even open the lock file — degrade to gate-only coordination.
         yield True
@@ -116,7 +130,9 @@ def _within_gate(cache: dict | None, now: float) -> bool:
     return cache is not None and now < cache.get("next_attempt_at", 0)
 
 
-def fetch_usage_cached(ttl: int) -> tuple[dict | None, float | None]:
+def fetch_usage_cached(
+    ttl: int, account: str | None = None, store_dir: str | None = None
+) -> tuple[dict | None, float | None]:
     """Return ``(data, fetched_at)`` for the usage reading, coordinating fetches
     across processes so only ~1 API call happens per ``ttl`` window.
 
@@ -125,29 +141,37 @@ def fetch_usage_cached(ttl: int) -> tuple[dict | None, float | None]:
     no last-known-good. ``fetched_at`` is the epoch time the returned ``data`` was
     obtained (None when there is no good reading), for a consistent staleness age
     across all panes.
+
+    ``account`` names the cache file and ``store_dir`` names the credential store
+    to read (spec 011). Each account gets its own cache file, gate and lock, so
+    coordination stays per account: a rate-limited account backs off on its own
+    without gating a healthy one.
     """
     now = time.time()
-    cache = read_cache()
+    cache = read_cache(account)
     if cache is not None and _within_gate(cache, now):
         return cache.get("data"), cache.get("fetched_at")
 
-    with _locked() as acquired:
+    with _locked(account) as acquired:
         if not acquired:
             # Another instance is fetching right now — use what we have.
-            cache = read_cache()
+            cache = read_cache(account)
             if cache is not None:
                 return cache.get("data"), cache.get("fetched_at")
             return None, None
 
         # Hold the lock: re-read in case another instance just refreshed.
-        cache = read_cache()
+        cache = read_cache(account)
         if cache is not None and _within_gate(cache, now):
             return cache.get("data"), cache.get("fetched_at")
 
-        result = fetch_claude_usage()
+        result = fetch_claude_usage(store_dir)
         if isinstance(result, dict) and not result.get("error"):
-            _write_cache({"next_attempt_at": now + ttl, "fetched_at": now, "data": result})
-            log.debug("usage_cache_refreshed")
+            _write_cache(
+                {"next_attempt_at": now + ttl, "fetched_at": now, "data": result},
+                account,
+            )
+            log.debug("usage_cache_refreshed", account=account)
             return result, now
 
         # Failure: keep last-good, push the gate out (honor Retry-After).
@@ -158,7 +182,8 @@ def fetch_usage_cached(ttl: int) -> tuple[dict | None, float | None]:
             "next_attempt_at": now + max(ttl, retry or 0),
             "fetched_at": prev_fetched,
             "data": prev_data,
-        })
-        log.debug("usage_cache_fetch_failed", error=(result or {}).get("error")
+        }, account)
+        log.debug("usage_cache_fetch_failed", account=account,
+                  error=(result or {}).get("error")
                   if isinstance(result, dict) else None)
         return (prev_data if prev_data is not None else result), prev_fetched

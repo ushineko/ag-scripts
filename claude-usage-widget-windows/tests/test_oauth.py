@@ -35,11 +35,9 @@ import src.oauth as oauth_module
 @pytest.fixture(autouse=True)
 def reset_backoff_state():
     """Reset OAuth backoff state before each test."""
-    reset_oauth_backoff()
-    oauth_module._oauth_creds_mtime = 0.0
+    oauth_module._states.clear()
     yield
-    reset_oauth_backoff()
-    oauth_module._oauth_creds_mtime = 0.0
+    oauth_module._states.clear()
 
 
 class TestReadCredentialsFile:
@@ -140,41 +138,41 @@ class TestBackoff:
 
     def test_transient_backoff_increases(self):
         _apply_backoff(is_permanent=False)
-        assert oauth_module._oauth_fail_count == 1
-        assert oauth_module._oauth_backoff_until > time.monotonic()
+        assert oauth_module._state(None).fail_count == 1
+        assert oauth_module._state(None).backoff_until > time.monotonic()
 
     def test_permanent_backoff_uses_higher_base(self):
         _apply_backoff(is_permanent=True)
-        until_1 = oauth_module._oauth_backoff_until
+        until_1 = oauth_module._state(None).backoff_until
         reset_oauth_backoff()
 
         _apply_backoff(is_permanent=False)
-        until_2 = oauth_module._oauth_backoff_until
+        until_2 = oauth_module._state(None).backoff_until
 
         # Permanent base (60s) > transient base (30s), so deadline should be later
         # (both measured from same monotonic base, but permanent delay is larger)
-        assert oauth_module._oauth_fail_count == 1
+        assert oauth_module._state(None).fail_count == 1
 
     def test_reset_clears_backoff(self):
         _apply_backoff(is_permanent=False)
-        assert oauth_module._oauth_fail_count == 1
+        assert oauth_module._state(None).fail_count == 1
 
         reset_oauth_backoff()
-        assert oauth_module._oauth_fail_count == 0
-        assert oauth_module._oauth_backoff_until == 0.0
+        assert oauth_module._state(None).fail_count == 0
+        assert oauth_module._state(None).backoff_until == 0.0
 
     def test_transient_caps_at_limit(self):
         for _ in range(20):
             _apply_backoff(is_permanent=False)
         # After many failures, delay should be capped
         expected_max_until = time.monotonic() + _BACKOFF_TRANSIENT_CAP + 1
-        assert oauth_module._oauth_backoff_until <= expected_max_until
+        assert oauth_module._state(None).backoff_until <= expected_max_until
 
     def test_permanent_caps_at_limit(self):
         for _ in range(20):
             _apply_backoff(is_permanent=True)
         expected_max_until = time.monotonic() + _BACKOFF_PERMANENT_CAP + 1
-        assert oauth_module._oauth_backoff_until <= expected_max_until
+        assert oauth_module._state(None).backoff_until <= expected_max_until
 
 
 class TestCredsFileWatch:
@@ -190,13 +188,13 @@ class TestCredsFileWatch:
         with mock.patch("src.oauth.CLAUDE_CREDENTIALS_PATH", path), \
              mock.patch("src.oauth.IS_MACOS", False):
             # Set initial mtime
-            oauth_module._oauth_creds_mtime = os.stat(path).st_mtime - 1
+            oauth_module._state(None).creds_mtime = os.stat(path).st_mtime - 1
             _apply_backoff(is_permanent=False)
-            assert oauth_module._oauth_fail_count == 1
+            assert oauth_module._state(None).fail_count == 1
 
             # Trigger mtime check — file is "newer" than recorded
             _check_creds_mtime()
-            assert oauth_module._oauth_fail_count == 0
+            assert oauth_module._state(None).fail_count == 0
 
         os.unlink(path)
 
@@ -242,7 +240,7 @@ class TestFetchClaudeUsage:
             assert result == {"error": "auth_expired"}
 
     def test_returns_backoff_when_in_backoff(self):
-        oauth_module._oauth_backoff_until = time.monotonic() + 3600
+        oauth_module._state(None).backoff_until = time.monotonic() + 3600
         creds = {"claudeAiOauth": {"accessToken": "tok", "refreshToken": "ref", "expiresAt": 0}}
         with mock.patch("src.oauth._read_credentials", return_value=creds):
             result = fetch_claude_usage()
@@ -304,3 +302,82 @@ class TestIsClaudeInstalled:
     def test_returns_false_when_not_found(self):
         with mock.patch("shutil.which", return_value=None):
             assert is_claude_installed() is False
+
+
+class TestPerAccountBackoff:
+    """Spec 011: backoff state is per credential store, not per process."""
+
+    def test_backoff_on_one_store_does_not_affect_another(self):
+        _apply_backoff(is_permanent=True, store_dir="/tmp/store-a")
+
+        assert oauth_module._state("/tmp/store-a").fail_count == 1
+        assert oauth_module._state("/tmp/store-b").fail_count == 0
+        assert oauth_module.is_in_backoff("/tmp/store-a") is True
+        assert oauth_module.is_in_backoff("/tmp/store-b") is False
+
+    def test_reset_targets_one_store(self):
+        _apply_backoff(is_permanent=False, store_dir="/tmp/store-a")
+        _apply_backoff(is_permanent=False, store_dir="/tmp/store-b")
+
+        reset_oauth_backoff("/tmp/store-a")
+
+        assert oauth_module._state("/tmp/store-a").fail_count == 0
+        assert oauth_module._state("/tmp/store-b").fail_count == 1
+
+    def test_reset_without_argument_clears_every_store(self):
+        _apply_backoff(is_permanent=False, store_dir="/tmp/store-a")
+        _apply_backoff(is_permanent=False, store_dir="/tmp/store-b")
+
+        reset_oauth_backoff()
+
+        assert oauth_module._state("/tmp/store-a").fail_count == 0
+        assert oauth_module._state("/tmp/store-b").fail_count == 0
+
+    def test_is_in_backoff_any_store(self):
+        assert oauth_module.is_in_backoff() is False
+        _apply_backoff(is_permanent=False, store_dir="/tmp/store-a")
+        assert oauth_module.is_in_backoff() is True
+
+    def test_a_backed_off_store_does_not_gate_a_healthy_one(self):
+        """The regression the refactor exists to prevent."""
+        oauth_module._state("/tmp/broken").backoff_until = time.monotonic() + 3600
+        oauth_module._state("/tmp/broken").fail_count = 1
+        expired = {"claudeAiOauth": {"accessToken": "t", "refreshToken": "r", "expiresAt": 0}}
+
+        with mock.patch("src.oauth._read_credentials", return_value=expired):
+            assert fetch_claude_usage("/tmp/broken") == {"error": "auth_backoff"}
+
+        # The healthy store must still attempt its refresh.
+        with mock.patch("src.oauth._read_credentials", return_value=expired), \
+             mock.patch("src.oauth._refresh_oauth_token",
+                        return_value=({"access_token": "new"}, False)) as refresh, \
+             mock.patch("src.oauth._save_credentials"), \
+             mock.patch("src.oauth.urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b"{}"
+            fetch_claude_usage("/tmp/healthy")
+            assert refresh.called
+
+
+class TestPerAccountStorePaths:
+    """Spec 011: reads and writes address the originating store."""
+
+    def test_reads_from_the_named_store(self, tmp_path):
+        store = tmp_path / "work"
+        store.mkdir()
+        (store / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "w"}}))
+
+        creds = _read_credentials_file(str(store))
+
+        assert creds["claudeAiOauth"]["accessToken"] == "w"
+
+    def test_refreshed_token_is_written_back_to_its_own_store(self, tmp_path):
+        store = tmp_path / "work"
+        store.mkdir()
+        path = store / ".credentials.json"
+        path.write_text(json.dumps({"claudeAiOauth": {"accessToken": "old"}}))
+
+        oauth_module._save_credentials_file(
+            {"claudeAiOauth": {"accessToken": "new"}}, str(store)
+        )
+
+        assert json.loads(path.read_text())["claudeAiOauth"]["accessToken"] == "new"

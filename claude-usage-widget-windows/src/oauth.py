@@ -42,11 +42,6 @@ CLAUDE_TOKEN_URL = "https://console.anthropic.com/api/oauth/token"
 CLAUDE_USER_AGENT = "claude-code/2.1.42"
 CLAUDE_BETA_HEADER = "oauth-2025-04-20"
 
-# OAuth refresh backoff state (in-memory, resets on app restart)
-_oauth_backoff_until: float = 0.0
-_oauth_fail_count: int = 0
-_oauth_creds_mtime: float = 0.0
-
 # Backoff constants (seconds)
 _BACKOFF_TRANSIENT_BASE = 30
 _BACKOFF_TRANSIENT_CAP = 300    # 5 minutes
@@ -54,11 +49,66 @@ _BACKOFF_PERMANENT_BASE = 60
 _BACKOFF_PERMANENT_CAP = 1800   # 30 minutes
 
 
-def reset_oauth_backoff() -> None:
-    """Reset OAuth backoff state, allowing the next refresh attempt immediately."""
-    global _oauth_backoff_until, _oauth_fail_count
-    _oauth_backoff_until = 0.0
-    _oauth_fail_count = 0
+class _AccountState:
+    """In-memory OAuth refresh state for one credential store.
+
+    Spec 011: state is per store, not per process. One account in permanent
+    backoff (revoked seat, expired refresh token) must not suppress refresh
+    attempts for another account that is perfectly healthy.
+    """
+
+    __slots__ = ("backoff_until", "fail_count", "creds_mtime")
+
+    def __init__(self) -> None:
+        self.backoff_until: float = 0.0
+        self.fail_count: int = 0
+        self.creds_mtime: float = 0.0
+
+
+# Keyed by credential-store directory. Resets on app restart.
+_states: dict[str, _AccountState] = {}
+
+
+def default_store_dir() -> str:
+    """Directory of the default credential store (``~/.claude``)."""
+    return os.path.dirname(CLAUDE_CREDENTIALS_PATH)
+
+
+def _state(store_dir: str | None) -> _AccountState:
+    """Return the backoff state for a store, creating it on first use."""
+    key = store_dir or default_store_dir()
+    state = _states.get(key)
+    if state is None:
+        state = _AccountState()
+        _states[key] = state
+    return state
+
+
+def reset_oauth_backoff(store_dir: str | None = None) -> None:
+    """Reset OAuth backoff state, allowing the next refresh attempt immediately.
+
+    With no argument, resets every known account — matching the previous
+    single-account behavior for callers that just want a clean slate.
+    """
+    if store_dir is None:
+        for state in _states.values():
+            state.backoff_until = 0.0
+            state.fail_count = 0
+        return
+    state = _state(store_dir)
+    state.backoff_until = 0.0
+    state.fail_count = 0
+
+
+def is_in_backoff(store_dir: str | None = None) -> bool:
+    """True when this store (or any store, with no argument) is backing off."""
+    if store_dir is None:
+        return any(
+            s.fail_count > 0 and time.monotonic() < s.backoff_until
+            for s in _states.values()
+        )
+    state = _state(store_dir)
+    return state.fail_count > 0 and time.monotonic() < state.backoff_until
 
 
 def is_claude_installed() -> bool:
@@ -86,10 +136,17 @@ def get_time_until_reset(resets_at: str) -> str:
     return f"{minutes}m"
 
 
-def _read_credentials_file() -> dict | None:
-    """Read Claude OAuth credentials from ~/.claude/.credentials.json."""
+def _credentials_path(store_dir: str | None) -> str:
+    """Path to the credentials file for a store, or the default store's."""
+    if store_dir is None:
+        return CLAUDE_CREDENTIALS_PATH
+    return os.path.join(store_dir, ".credentials.json")
+
+
+def _read_credentials_file(store_dir: str | None = None) -> dict | None:
+    """Read Claude OAuth credentials from a store's .credentials.json."""
     try:
-        with open(CLAUDE_CREDENTIALS_PATH, "r") as f:
+        with open(_credentials_path(store_dir), "r") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, PermissionError):
         return None
@@ -115,21 +172,33 @@ def _read_credentials_keychain() -> dict | None:
         return None
 
 
-def _read_credentials() -> dict | None:
-    """Read and return the Claude OAuth credentials, or None if unavailable."""
-    if IS_MACOS:
+def _read_credentials(store_dir: str | None = None) -> dict | None:
+    """Read and return the Claude OAuth credentials, or None if unavailable.
+
+    On macOS the *default* store lives in the login Keychain rather than on
+    disk. Non-default profile stores are always files: Claude Code namespaces
+    the Keychain item by a hash of the store directory, which is not
+    reproducible from here, so a named profile is read from its file.
+    """
+    if IS_MACOS and store_dir is None:
         return _read_credentials_keychain()
-    return _read_credentials_file()
+    return _read_credentials_file(store_dir)
 
 
-def _refresh_oauth_token(refresh_token: str) -> tuple[dict | None, bool]:
+def _refresh_oauth_token(
+    refresh_token: str, fail_count: int = 0
+) -> tuple[dict | None, bool]:
     """Refresh the OAuth access token.
+
+    ``fail_count`` is this store's consecutive-failure count, used only to
+    decide log level so a persistently broken account does not spam warnings.
 
     Returns:
         (token_data, is_permanent_error) — token_data is the parsed JSON on
         success or None on failure. is_permanent_error is True for HTTP 401/403.
     """
     log = structlog.get_logger()
+    _oauth_fail_count = fail_count
     body = json.dumps({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -162,11 +231,19 @@ def _refresh_oauth_token(refresh_token: str) -> tuple[dict | None, bool]:
         return None, False
 
 
-def _save_credentials_file(creds: dict) -> None:
-    """Write updated credentials to ~/.claude/.credentials.json."""
+def _save_credentials_file(creds: dict, store_dir: str | None = None) -> None:
+    """Write updated credentials back to the store they came from.
+
+    Writing to the originating store matters with more than one account: a
+    refreshed token written to the default store would overwrite an unrelated
+    account's credentials.
+    """
+    path = _credentials_path(store_dir)
     try:
-        with open(CLAUDE_CREDENTIALS_PATH, "w") as f:
+        with open(path, "w") as f:
             json.dump(creds, f)
+        # Assert 0600 rather than inheriting whatever the file/umask had.
+        os.chmod(path, 0o600)
     except OSError:
         pass
 
@@ -188,12 +265,12 @@ def _save_credentials_keychain(creds: dict) -> None:
         pass
 
 
-def _save_credentials(creds: dict) -> None:
+def _save_credentials(creds: dict, store_dir: str | None = None) -> None:
     """Write updated credentials back to the platform credential store."""
-    if IS_MACOS:
+    if IS_MACOS and store_dir is None:
         _save_credentials_keychain(creds)
     else:
-        _save_credentials_file(creds)
+        _save_credentials_file(creds, store_dir)
 
 
 def _keychain_mtime() -> float:
@@ -222,60 +299,61 @@ def _keychain_mtime() -> float:
         return 0.0
 
 
-def _creds_mtime() -> float:
-    """Modification time of the active credential store, or 0.0 if unknown."""
-    if IS_MACOS:
+def _creds_mtime(store_dir: str | None = None) -> float:
+    """Modification time of a credential store, or 0.0 if unknown."""
+    if IS_MACOS and store_dir is None:
         return _keychain_mtime()
     try:
-        return os.stat(CLAUDE_CREDENTIALS_PATH).st_mtime
+        return os.stat(_credentials_path(store_dir)).st_mtime
     except OSError:
         return 0.0
 
 
-def _check_creds_mtime() -> None:
-    """Reset backoff if the credential store changed (e.g. after `claude login`)."""
-    global _oauth_creds_mtime
-    mtime = _creds_mtime()
+def _check_creds_mtime(store_dir: str | None = None) -> None:
+    """Reset this store's backoff if it changed (e.g. after `claude login`)."""
+    state = _state(store_dir)
+    mtime = _creds_mtime(store_dir)
     if mtime <= 0:
         return
-    if mtime > _oauth_creds_mtime:
-        if _oauth_creds_mtime > 0 and _oauth_fail_count > 0:
+    if mtime > state.creds_mtime:
+        if state.creds_mtime > 0 and state.fail_count > 0:
             log = structlog.get_logger()
-            log.info("oauth_backoff_reset_creds_changed")
-            reset_oauth_backoff()
-        _oauth_creds_mtime = mtime
+            log.info("oauth_backoff_reset_creds_changed", store=store_dir)
+            reset_oauth_backoff(store_dir)
+        state.creds_mtime = mtime
 
 
-def _apply_backoff(is_permanent: bool) -> None:
+def _apply_backoff(is_permanent: bool, store_dir: str | None = None) -> None:
     """Compute and set the next backoff deadline after a failed refresh."""
-    global _oauth_backoff_until, _oauth_fail_count
-    _oauth_fail_count += 1
+    state = _state(store_dir)
+    state.fail_count += 1
     if is_permanent:
-        delay = min(_BACKOFF_PERMANENT_BASE * (2 ** (_oauth_fail_count - 1)),
+        delay = min(_BACKOFF_PERMANENT_BASE * (2 ** (state.fail_count - 1)),
                      _BACKOFF_PERMANENT_CAP)
     else:
-        delay = min(_BACKOFF_TRANSIENT_BASE * (2 ** (_oauth_fail_count - 1)),
+        delay = min(_BACKOFF_TRANSIENT_BASE * (2 ** (state.fail_count - 1)),
                      _BACKOFF_TRANSIENT_CAP)
-    _oauth_backoff_until = time.monotonic() + delay
+    state.backoff_until = time.monotonic() + delay
     log = structlog.get_logger()
     log.warning("oauth_backoff_engaged", next_retry_secs=delay,
-                fail_count=_oauth_fail_count,
+                fail_count=state.fail_count, store=store_dir,
                 error_type="permanent" if is_permanent else "transient")
 
 
-def fetch_claude_usage() -> dict | None:
+def fetch_claude_usage(store_dir: str | None = None) -> dict | None:
     """Fetch Claude Code usage from the Anthropic OAuth API.
 
-    Reads the OAuth token from ~/.claude/.credentials.json, refreshes if
-    expired, and calls GET /api/oauth/usage. Returns the parsed JSON response
-    or None on error. Applies exponential backoff on repeated refresh failures.
+    Reads the OAuth token from ``store_dir`` (the default store when None),
+    refreshes if expired, and calls GET /api/oauth/usage. Returns the parsed
+    JSON response or None on error. Applies exponential backoff, per store, on
+    repeated refresh failures.
     """
-    global _oauth_backoff_until, _oauth_fail_count
     log = structlog.get_logger()
+    state = _state(store_dir)
 
-    _check_creds_mtime()
+    _check_creds_mtime(store_dir)
 
-    creds = _read_credentials()
+    creds = _read_credentials(store_dir)
     if not creds:
         return None
 
@@ -293,18 +371,21 @@ def fetch_claude_usage() -> dict | None:
             log.warning("claude_token_expired_no_refresh")
             return {"error": "auth_expired"}
 
-        if time.monotonic() < _oauth_backoff_until:
-            log.debug("oauth_refresh_skipped_backoff", fail_count=_oauth_fail_count)
+        if time.monotonic() < state.backoff_until:
+            log.debug("oauth_refresh_skipped_backoff",
+                      fail_count=state.fail_count, store=store_dir)
             return {"error": "auth_backoff"}
 
-        new_token_data, is_permanent = _refresh_oauth_token(refresh_token)
+        new_token_data, is_permanent = _refresh_oauth_token(
+            refresh_token, state.fail_count
+        )
         if not new_token_data or "access_token" not in new_token_data:
-            _apply_backoff(is_permanent)
+            _apply_backoff(is_permanent, store_dir)
             return {"error": "auth_expired"}
 
-        # Success — reset backoff
-        _oauth_fail_count = 0
-        _oauth_backoff_until = 0.0
+        # Success — reset this store's backoff
+        state.fail_count = 0
+        state.backoff_until = 0.0
 
         access_token = new_token_data["access_token"]
         oauth["accessToken"] = access_token
@@ -312,7 +393,7 @@ def fetch_claude_usage() -> dict | None:
             oauth["refreshToken"] = new_token_data["refresh_token"]
         if "expires_in" in new_token_data:
             oauth["expiresAt"] = now_ms + new_token_data["expires_in"] * 1000
-        _save_credentials(creds)
+        _save_credentials(creds, store_dir)
 
     req = urllib.request.Request(
         CLAUDE_USAGE_URL,

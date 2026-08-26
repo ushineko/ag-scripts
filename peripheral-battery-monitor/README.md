@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.11.0
+Version 1.12.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -99,6 +99,15 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.12.0
+
+- **Multi-account Claude usage.** The Claude Code section now shows one row per configured Claude login rather than only the default credential store. Discovery is automatic — the default store (`~/.claude`) plus every profile under `~/.claude-credentials/<name>/` — and needs no configuration.
+  - The rows live inside the existing section; there is still one "Claude Code" header. Each row carries its profile name and a one-letter account type (`max M`, `work E`), with the full type on the tooltip, so the label costs as little width as possible.
+  - Each row resolves its own account shape (spec 015), so a Max row can show rate-limit gauges while an Enterprise row beside it shows credit spend.
+  - Failures are per account: one login expired or offline shows an error in its own row while the others keep reporting, each falling back to its own last-known-good reading. OAuth and usage-API backoff are tracked per store, and a refreshed token is written back to the store it came from.
+  - With a single account configured the section is unchanged.
+  - New `accounts.py`, copied verbatim from `claude-usage-widget-windows` (the same arrangement as `usage_shape.py`).
 
 ### v1.11.0
 
