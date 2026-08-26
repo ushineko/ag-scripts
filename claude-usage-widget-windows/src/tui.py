@@ -203,11 +203,17 @@ def build_line(
     if model:
         opt.append(("model", Text(model, style="dim")))
 
+    credits = _credits_segment(data)
+    if credits:
+        opt.append(("credits", credits))
+
     if note:
         opt.append(("note", Text(f"({note})", style="dim")))
 
     present = [name for name, _ in opt]
-    drop_order = ["note", "model", "reset", "7d"]
+    # Credits drop first: the segment must never displace a gauge, the reset
+    # countdown, or the model breakdown on a narrow pane.
+    drop_order = ["credits", "note", "model", "reset", "7d"]
 
     line = _assemble(core, opt, present)
     while width and line.cell_len > width and present:
@@ -223,6 +229,20 @@ def build_line(
     line.no_wrap = True
     line.overflow = "crop"
     return line
+
+
+def _credits_segment(data: dict) -> Text | None:
+    """Spend figure for the `limits` shape, or None when there is nothing to show.
+
+    Spec 009 resolves live buckets over credits, which hides the dollar figure
+    while both are populated. This surfaces it as a droppable extra. Zero spend
+    renders nothing, so a fresh month looks exactly as it did before.
+    """
+    view = credits_view(data)
+    if not view or not view.get("used"):
+        return None
+    symbol = "$" if view.get("currency") == "USD" else ""
+    return Text(f"{symbol}{view['used']:.2f}", style=_severity_style(view["severity"]))
 
 
 def _model_segment(data: dict) -> str:
@@ -254,6 +274,10 @@ def _stat_segments(data: dict) -> Text:
     if model:
         t.append("  ·  ", style="dim")
         t.append(model, style="dim")
+    credits = _credits_segment(data)
+    if credits:
+        t.append("  ·  ", style="dim")
+        t.append_text(credits)
     return t
 
 

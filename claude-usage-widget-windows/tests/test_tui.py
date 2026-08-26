@@ -244,3 +244,69 @@ class TestRunTuiLoop:
         assert rc == 0
         assert slept == [10, 10, 10]                 # fixed cadence, no per-process backoff
         cached.assert_called_with(10)                 # polls the cache with the interval as TTL
+
+
+def _spend(minor, severity="normal"):
+    """A `spend` block with the given used amount in minor units."""
+    return {
+        "used": {"amount_minor": minor, "currency": "USD", "exponent": 2},
+        "limit": {"amount_minor": 20000, "currency": "USD", "exponent": 2},
+        "percent": minor // 200,
+        "severity": severity,
+        "enabled": True,
+    }
+
+
+class TestCreditsSegment:
+    """Spec 010: credit spend stays visible while rate-limit gauges are live.
+
+    Spec 009 resolves buckets over credits, which hid the dollar figure whenever
+    both were populated. These lock in that it reappears, that a fresh month is
+    unchanged, and that it can never displace an existing segment.
+    """
+
+    def test_spend_above_zero_shows_the_figure(self):
+        d = _data(resets=True)
+        d["spend"] = _spend(2567)
+        assert "$25.67" in build_line(d, width=120).plain
+
+    def test_zero_spend_shows_nothing(self):
+        d = _data(resets=True)
+        d["spend"] = _spend(0)
+        assert "$" not in build_line(d, width=120).plain
+
+    def test_absent_spend_key_does_not_raise(self):
+        d = _data(resets=True)
+        assert "$" not in build_line(d, width=120).plain
+
+    def test_zero_spend_is_byte_identical_to_no_spend(self):
+        """A fresh month must render exactly as it did before spec 010."""
+        base = _data(resets=True, opus=12)
+        withz = dict(base)
+        withz["spend"] = _spend(0)
+        assert build_line(base, width=120).plain == build_line(withz, width=120).plain
+
+    def test_credits_drops_before_any_other_segment(self):
+        """Width pressure must sacrifice the dollar figure first, never a gauge."""
+        d = _data(resets=True, opus=12)
+        d["spend"] = _spend(2567)
+        full = build_line(d, width=200).plain
+        assert "$25.67" in full
+        # A width one cell short of the full line drops credits and nothing else.
+        trimmed = build_line(d, width=len(full) - 1).plain
+        assert "$25.67" not in trimmed
+        assert "7d" in trimmed and "opus" in trimmed and "reset" in trimmed
+
+    def test_never_overflows_requested_width(self):
+        d = _data(resets=True, opus=12)
+        d["spend"] = _spend(2567)
+        for w in (120, 100, 60, 40, 24, 12):
+            assert build_line(d, width=w).cell_len <= w
+
+    def test_stat_segments_include_credits(self):
+        d = _data(resets=True)
+        d["spend"] = _spend(2567)
+        assert "$25.67" in tui._stat_segments(d).plain
+        d0 = _data(resets=True)
+        d0["spend"] = _spend(0)
+        assert "$" not in tui._stat_segments(d0).plain
