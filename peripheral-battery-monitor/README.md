@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.12.1
+Version 1.13.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
 
@@ -99,6 +99,14 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.13.0
+
+- **The Claude section now reads through the shared usage cache.** It previously polled `/api/oauth/usage` directly on its own timer while the `claude-usage-widget` terminal panes coordinated through a cache, so total request volume scaled with the number of watchers times the number of accounts (2 accounts on a 2-minute timer = 60 requests/hour from this widget alone, on top of the panes). The widget, every `--tui` pane and any one-shot `--line` call now share one gate per account: ~1 request per account per window, regardless of how many are watching.
+  - `usage_cache.py` mirrored in from `claude-usage-widget-windows`, joining `usage_shape.py` and `accounts.py`. Both projects resolve the identical cache directory, which is what makes the sharing real.
+  - The cache TTL tracks the configured poll interval, so the gate opens exactly as often as the widget would have polled.
+  - The widget's internal usage-API backoff is disabled on the cached path. Stacking two throttles is actively harmful: the inner one returns `rate_limited` instantly without making a request, the outer one reads that as a failed fetch and extends its own window, and the two keep re-arming each other long after the server would have served a request. `retry_after` is now propagated so the single remaining throttle honors the server's own window.
+  - **Refresh Now** forces past the freshness gate — it still takes the cache lock and still writes its result, so it cannot stampede and every other reader benefits from it.
 
 ### v1.12.1
 

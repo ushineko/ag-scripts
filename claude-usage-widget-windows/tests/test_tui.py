@@ -392,3 +392,39 @@ class TestMultiAccountLines:
         view = tui.build_multi_tui_view(readings, interval=60)
 
         assert len(view.renderables) == 2
+
+
+class TestNoDataIsNotLoggedOut:
+    """Regression: a cache miss must not render as 'not logged in'.
+
+    A closed gate after a failed fetch returns None from the cache. Rendering
+    that as 'not logged in' made a healthy, freshly-authenticated account look
+    logged out.
+    """
+
+    def test_null_reading_with_credentials_present_says_no_reading(self, tmp_path):
+        store = tmp_path / "max"
+        store.mkdir()
+        (store / ".credentials.json").write_text("{}")
+        from src.accounts import Account
+        account = Account(name="max", store_dir=str(store),
+                          subscription_type="max", is_default=True)
+
+        with mock.patch.object(tui, "discover_or_default", return_value=[account]), \
+             mock.patch.object(tui, "fetch_usage_cached", return_value=(None, None)):
+            readings = tui.read_accounts(use_cache=True, ttl=60)
+
+        assert readings[0][1] == {"error": "no_data"}
+        assert "no reading yet" in tui.build_multi_line(readings)[0].plain
+
+    def test_null_reading_without_credentials_still_says_not_logged_in(self, tmp_path):
+        from src.accounts import Account
+        account = Account(name="max", store_dir=str(tmp_path / "missing"),
+                          subscription_type=None, is_default=True)
+
+        with mock.patch.object(tui, "discover_or_default", return_value=[account]), \
+             mock.patch.object(tui, "fetch_usage_cached", return_value=(None, None)):
+            readings = tui.read_accounts(use_cache=True, ttl=60)
+
+        assert readings[0][1] is None
+        assert "not logged in" in tui.build_multi_line(readings)[0].plain

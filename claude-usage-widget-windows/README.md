@@ -217,6 +217,12 @@ pytest tests/
 
 ## Changelog
 
+### v3.4.0 (2026-08-26)
+
+- **The cooperative usage cache is now shareable across projects.** `usage_cache.py` no longer imports anything project-local: the fetch function is injected and `get_cache_dir()` is defined in the module itself, so the file is copied verbatim into `peripheral-battery-monitor` (as `usage_shape.py` and `accounts.py` already are) and both resolve the same directory. The GUI widget there now joins the same per-account gate as the terminal panes, so request volume stops scaling with the number of watchers.
+- **Fix: a cache miss no longer renders as "not logged in".** A closed gate after a failed fetch returns a null reading; showing that as "not logged in" made a healthy, freshly-authenticated account look logged out. It now reads `no reading yet` when the account's credentials are present, and still says "not logged in" when they genuinely are not.
+- `fetch_usage_cached(..., force=True)` bypasses the freshness gate for an explicit user-initiated refresh, while still taking the lock and writing its result. `config.get_cache_dir()` delegates to the new definition.
+
 ### v3.3.0 (2026-08-26)
 
 - **Multi-account usage display.** Every configured Claude Code login is now discovered and reported on its own line, instead of only the default credential store

@@ -16,6 +16,7 @@ Two modes:
 
 from __future__ import annotations
 
+import os
 import signal
 import time
 
@@ -52,6 +53,10 @@ _ERR_TEXT = {
     "api_error": "API error",
     "offline": "offline",
     "invalid_response": "bad response",
+    # The shared cache has no reading for this account yet (cold start, or a
+    # gate still closed after a failure). Distinct from "not logged in": the
+    # credentials are present and fine, there is simply nothing to show yet.
+    "no_data": "no reading yet",
 }
 
 
@@ -398,8 +403,21 @@ def read_accounts(*, use_cache: bool, ttl: int) -> list[tuple]:
             )
         else:
             data, fetched_at = fetch_claude_usage(account.store_dir), time.time()
+        # A null reading from the cache means "nothing cached yet", not "no
+        # credentials" — rendering it as "not logged in" libels a healthy
+        # account whenever its gate is closed after a failure.
+        if data is None and _has_credentials(account):
+            data = {"error": "no_data"}
         readings.append((label, data, fetched_at))
     return readings
+
+
+def _has_credentials(account) -> bool:
+    """True when this account's credential file exists on disk."""
+    try:
+        return os.path.isfile(account.credentials_path)
+    except (OSError, AttributeError):
+        return False
 
 
 def build_multi_line(readings: list[tuple], *, width: int | None = None) -> list[Text]:

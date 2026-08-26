@@ -21,6 +21,7 @@ from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 
 import battery_reader
 import accounts
+import usage_cache
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
 from usage_shape import (
@@ -33,7 +34,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.12.1"
+__version__ = "1.13.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -314,18 +315,25 @@ def _apply_backoff(is_permanent: bool, store_dir=None):
                 error_type="permanent" if is_permanent else "transient")
 
 
-def fetch_claude_usage(store_dir=None) -> dict | None:
+def fetch_claude_usage(store_dir=None, use_usage_backoff: bool = True) -> dict | None:
     """Fetch Claude Code usage from the Anthropic OAuth API.
 
     Reads the OAuth token from ``store_dir`` (the default store when None),
     refreshes if expired, and calls GET /api/oauth/usage. Returns the parsed
     JSON response or None on error. Backoff is applied per store (spec 016).
+
+    ``use_usage_backoff=False`` disables the *internal* usage-API throttle, for
+    callers that already throttle. Stacking two throttles is actively harmful:
+    the inner one returns ``rate_limited`` instantly without making a request,
+    the outer one reads that as a failed fetch and extends its own window, and
+    the two keep re-arming each other long after the server would have let a
+    request through. The shared cache is the single throttle on that path.
     """
     log = structlog.get_logger()
     state = _state(store_dir)
 
     # Check usage API backoff before doing any work
-    if time.monotonic() < state.usage_backoff_until:
+    if use_usage_backoff and time.monotonic() < state.usage_backoff_until:
         log.debug("usage_api_skipped_backoff", fail_count=state.usage_fail_count,
                   store=store_dir)
         return {"error": "rate_limited"}
@@ -411,7 +419,7 @@ def fetch_claude_usage(store_dir=None) -> dict | None:
             else:
                 log.debug("claude_usage_rate_limited", retry_after_secs=delay,
                            fail_count=state.usage_fail_count, store=store_dir)
-            return {"error": "rate_limited"}
+            return {"error": "rate_limited", "retry_after": delay}
         else:
             # Other HTTP errors: apply exponential backoff
             delay = min(_USAGE_BACKOFF_BASE * (2 ** (state.usage_fail_count - 1)),
@@ -489,6 +497,13 @@ def setup_logging(debug_mode=False):
 class UpdateThread(QThread):
     data_ready = pyqtSignal(dict)
 
+    def __init__(self, usage_ttl: int = 120, force_usage: bool = False, parent=None):
+        super().__init__(parent)
+        # Freshness window for the shared usage cache, matched to the widget's
+        # own poll cadence. `force_usage` is set for a user-initiated refresh.
+        self.usage_ttl = usage_ttl
+        self.force_usage = force_usage
+
     def run(self):
         results = {}
         try:
@@ -522,7 +537,19 @@ class UpdateThread(QThread):
             readings = []
             for account in accounts.discover_or_default():
                 try:
-                    data = fetch_claude_usage(account.store_dir)
+                    # Through the shared cache, so this widget, every --tui pane
+                    # and any one-shot --line call together make ~1 request per
+                    # account per window instead of each polling the API.
+                    data, _ = usage_cache.fetch_usage_cached(
+                        self.usage_ttl,
+                        account=account.name,
+                        store_dir=account.store_dir,
+                        # The cache owns throttling on this path, so the inner
+                        # usage backoff is disabled — see fetch_claude_usage.
+                        fetch=lambda sd: fetch_claude_usage(
+                            sd, use_usage_backoff=False),
+                        force=self.force_usage,
+                    )
                 except Exception as e:
                     log = structlog.get_logger()
                     log.error("claude_usage_fetch_failed",
@@ -542,6 +569,7 @@ class PeripheralMonitor(QWidget):
         super().__init__()
         self.settings = self.load_settings()
         self.worker = None
+        self._force_usage_refresh = False           # next fetch bypasses the cache gate
         self._last_good_usage: dict | None = None  # cached last successful API response
         self._last_good_usage_time: float = 0.0     # monotonic timestamp of last good fetch
 
@@ -1358,9 +1386,16 @@ class PeripheralMonitor(QWidget):
         return latest
 
     def _manual_refresh(self):
-        """Handle 'Refresh Now' from context menu or button — resets all backoff and triggers update."""
+        """Handle 'Refresh Now' — reset all backoff and force a live fetch.
+
+        The shared cache gate would otherwise serve a cached reading to an
+        explicit user refresh, which reads as a broken button. The forced fetch
+        still takes the cache lock and still writes its result, so it cannot
+        stampede and every other reader benefits from it.
+        """
         reset_oauth_backoff()
         reset_usage_backoff()
+        self._force_usage_refresh = True
         self.update_status()
 
     def update_status(self):
@@ -1368,8 +1403,15 @@ class PeripheralMonitor(QWidget):
         if self.worker is not None:
             return
 
-        # Start worker thread
-        self.worker = UpdateThread()
+        # Start worker thread. The cache TTL tracks the configured poll
+        # cadence, so the shared gate opens exactly as often as this widget
+        # would have polled on its own.
+        interval_min = self.settings.get("claude_activity_interval", 2)
+        self.worker = UpdateThread(
+            usage_ttl=max(30, int(interval_min) * 60),
+            force_usage=self._force_usage_refresh,
+        )
+        self._force_usage_refresh = False
         self.worker.data_ready.connect(self.on_data_ready)
         self.worker.finished.connect(self._cleanup_worker)
         self.worker.start()

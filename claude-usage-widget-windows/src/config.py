@@ -44,18 +44,13 @@ def get_config_path() -> Path:
 def get_cache_dir() -> Path:
     """Get the cache directory path (shared across processes).
 
-    macOS: ``~/Library/Caches/claude-usage-widget`` (native).
-    Windows: ``%LOCALAPPDATA%\\claude-usage-widget\\cache``.
-    Other: ``${XDG_CACHE_HOME:-~/.cache}/claude-usage-widget``.
+    Defined in ``usage_cache`` so the mirrored copy in
+    ``peripheral-battery-monitor`` resolves the identical path; re-exported here
+    for the existing callers.
     """
-    if IS_MACOS:
-        return Path.home() / "Library" / "Caches" / "claude-usage-widget"
-    localappdata = os.environ.get("LOCALAPPDATA", "")
-    if localappdata:
-        return Path(localappdata) / "claude-usage-widget" / "cache"
-    xdg_cache = os.environ.get("XDG_CACHE_HOME", "")
-    base = Path(xdg_cache) if xdg_cache else Path.home() / ".cache"
-    return base / "claude-usage-widget"
+    from .usage_cache import get_cache_dir as _get_cache_dir
+
+    return _get_cache_dir()
 
 
 def load_config() -> dict[str, Any]:

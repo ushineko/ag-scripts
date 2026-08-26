@@ -236,3 +236,109 @@ class TestAccountTypeChanges:
 
         # Same widget object — refreshed in place, not rebuilt.
         assert section.claude_rows["max"]["account"] is before
+
+
+class TestSharedUsageCache:
+    """The widget reads through the same cache the TUI panes use.
+
+    Without this, the GUI polled the API directly on its own timer while the
+    panes shared a gate, so total request volume scaled with the number of
+    watchers times the number of accounts.
+    """
+
+    def test_worker_fetches_through_the_cache(self, pb, monkeypatch):
+        calls = []
+
+        def fake_cached(ttl, account=None, store_dir=None, fetch=None, force=False):
+            calls.append({"ttl": ttl, "account": account,
+                          "store_dir": store_dir, "force": force})
+            return {"five_hour": {"utilization": 1.0}}, 0.0
+
+        monkeypatch.setattr(pb.usage_cache, "fetch_usage_cached", fake_cached)
+        monkeypatch.setattr(pb.accounts, "discover_or_default",
+                            lambda: [_account("max", "max"), _account("work", "enterprise")])
+        # The direct fetcher must not be called by the worker any more.
+        monkeypatch.setattr(pb, "fetch_claude_usage",
+                            lambda *a, **k: pytest.fail("bypassed the shared cache"))
+
+        worker = pb.UpdateThread(usage_ttl=300)
+        worker.run()
+
+        assert [c["account"] for c in calls] == ["max", "work"]
+        assert [c["store_dir"] for c in calls] == ["/tmp/max", "/tmp/work"]
+        assert all(c["ttl"] == 300 for c in calls)
+        assert all(c["force"] is False for c in calls)
+
+    def test_manual_refresh_forces_past_the_gate(self, pb, monkeypatch):
+        forced = []
+        monkeypatch.setattr(pb.usage_cache, "fetch_usage_cached",
+                            lambda ttl, account=None, store_dir=None, fetch=None, force=False:
+                            (forced.append(force), ({"five_hour": {}}, 0.0))[1])
+        monkeypatch.setattr(pb.accounts, "discover_or_default",
+                            lambda: [_account("max", "max")])
+
+        pb.UpdateThread(usage_ttl=300, force_usage=True).run()
+
+        assert forced == [True]
+
+    def test_cache_dir_matches_the_widget_project(self, pb):
+        """Both projects must resolve one directory or they share nothing."""
+        import usage_cache
+
+        expected = os.path.join(
+            os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+            "claude-usage-widget",
+        )
+        assert str(usage_cache.get_cache_dir()) == expected
+
+
+class TestSingleThrottle:
+    """Regression: the cache gate and the inner usage backoff must not stack.
+
+    With both active, the inner throttle returns `rate_limited` instantly
+    without making a request, the cache reads that as a failed fetch and pushes
+    its gate out again, and the two keep re-arming each other — the account
+    stays stuck long after the server would have served a request.
+    """
+
+    def test_inner_backoff_can_be_disabled(self, pb):
+        import time as _time
+
+        store = "/tmp/throttle-test"
+        pb._state(store).usage_backoff_until = _time.monotonic() + 3600
+        pb._state(store).usage_fail_count = 1
+
+        # Default: short-circuits without touching the network.
+        assert pb.fetch_claude_usage(store) == {"error": "rate_limited"}
+
+        # Disabled: proceeds to the credential read (returns None with no creds)
+        # rather than short-circuiting on the local backoff.
+        assert pb.fetch_claude_usage(store, use_usage_backoff=False) is None
+
+    def test_worker_disables_the_inner_backoff(self, pb, monkeypatch):
+        seen = {}
+
+        def fake_cached(ttl, account=None, store_dir=None, fetch=None, force=False):
+            seen["fetch"] = fetch
+            return {"five_hour": {}}, 0.0
+
+        monkeypatch.setattr(pb.usage_cache, "fetch_usage_cached", fake_cached)
+        monkeypatch.setattr(pb.accounts, "discover_or_default",
+                            lambda: [_account("max", "max")])
+
+        captured = {}
+        monkeypatch.setattr(pb, "fetch_claude_usage",
+                            lambda sd, use_usage_backoff=True:
+                            captured.update(backoff=use_usage_backoff) or {})
+
+        pb.UpdateThread(usage_ttl=120).run()
+        seen["fetch"]("/tmp/x")
+
+        assert captured["backoff"] is False
+
+    def test_rate_limited_error_carries_retry_after(self, pb):
+        """The outer throttle can only honor the server's window if it is told."""
+        import inspect
+
+        src = inspect.getsource(pb.fetch_claude_usage)
+        assert '"retry_after": delay' in src
