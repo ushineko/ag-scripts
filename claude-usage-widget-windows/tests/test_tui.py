@@ -96,9 +96,17 @@ class TestColorEmission:
 
 
 def _render_plain(renderable, width=120):
-    """Render any rich renderable to a plain (no-color) string at a fixed width."""
+    """Render any rich renderable to a plain string at a fixed width.
+
+    ``color_system=None`` rather than ``no_color=True``: no_color suppresses
+    colors but still emits attribute codes (dim, bold), so a styled label and
+    its differently-styled value end up separated by an escape sequence and a
+    plain-text assertion like ``"7d 31%" in out`` fails on text that renders
+    correctly. It only bites where rich thinks it is writing to a terminal —
+    e.g. with FORCE_COLOR set — which made this environment-dependent.
+    """
     buf = io.StringIO()
-    Console(file=buf, no_color=True, width=width).print(renderable)
+    Console(file=buf, color_system=None, width=width).print(renderable)
     return buf.getvalue()
 
 
