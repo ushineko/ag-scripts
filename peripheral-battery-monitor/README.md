@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.14.0
+Version 1.15.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), liquid-cooler thermals, plus optional Claude Code API usage tracking.
 
@@ -104,7 +104,18 @@ The AIO section sits between the bandwidth section and the Claude Code section. 
 - **Coolant**: liquid temperature reported by the cooler, with a colour band and a sparkline.
 - **Fans**: mean RPM across the cooler's fans, the fan count, and pump RPM.
 
-The sparkline plots coolant temperature only, 60 samples at a 5-second cadence, so it covers the last 5 minutes. CPU temperature is deliberately not plotted: on a boosting CPU it spikes to 100 °C routinely and reads as noise at this size. Coolant moves slowly and is the signal worth watching.
+### The sparkline
+
+The graph covers the last 5 minutes: 60 samples at a 5-second cadence, right-anchored so "now" is the right edge. It carries two traces:
+
+- **Coolant**, plotted raw, in the current band colour. This is the primary trace.
+- **CPU**, plotted as a 60-second trailing mean, in muted steel blue. Raw CPU is unreadable at this size, since it spikes to 100 °C on any compile. Averaged, it becomes a trend line, and the interesting part is its correlation with coolant: CPU leads, coolant follows, and the lag between them is the loop's thermal inertia.
+
+There is no legend. Each row's value label is painted in its trace's colour, which is the mapping.
+
+**Heights are not comparable between the two traces.** They are scaled independently, each to its own min/max, because they do not share a usable axis: in one session CPU ranged 65–98 °C while coolant moved 45.8–46.6 °C, roughly 40:1. On a shared axis a 3 °C coolant climb would occupy about 2 px of a 26 px box. Read shape and correlation from the graph; read values from the rows above it.
+
+Each trace has a 5 °C minimum span, so an idle flat line stays flat instead of amplifying sensor jitter into a mountain range. History is in-memory only and starts empty after a restart. If the daemon drops out, no sample is recorded and the gap is not interpolated.
 
 ### Coolant colour bands
 
@@ -114,7 +125,7 @@ The sparkline plots coolant temperature only, 60 samples at a 5-second cadence, 
 | 50–55 °C | amber | warming; heat-soaked case |
 | 55 °C and above | red | warning band |
 
-The thresholds come from the behaviour of a Corsair H150i ELITE LCD on this machine. Its pump-head over-temperature alarm tripped at 57.1 °C and cleared near 50 °C. CPU temperature is not colour-graded, because a high boost temperature is normal and grading it would flag every compile.
+The thresholds come from the behaviour of a Corsair H150i ELITE LCD on this machine. Its pump-head over-temperature alarm tripped at 57.1 °C and cleared near 50 °C. CPU temperature is not colour-graded: its colour identifies its trace, not a severity. A high boost temperature is normal and grading it would flag every compile.
 
 ### Data source and supported devices
 
@@ -136,7 +147,7 @@ The section reads; it never writes. Fan and pump duty writes are silently discar
 
 - **OpenLinkHub not installed, not running, or managing no supported device**: the section stays hidden and the window is unchanged. A slow 30-second probe keeps running, so starting the daemon later brings the section in without restarting the app.
 - **Daemon disappears after working**: the section stays visible with its last values dimmed and `(unavailable)` in the header. Sparkline history is kept and the gap is not interpolated. Recovery clears the marker.
-- **Partial data**: any metric that cannot be read hides its own row. The section stays up as long as one row has data.
+- **Partial data**: any metric that cannot be read hides its own row. The section stays up as long as one row has data, and the graph stays up as long as either trace has data.
 
 Fetching uses `QNetworkAccessManager` with a 2-second transfer timeout, so a hung daemon cannot stall the UI.
 
@@ -150,6 +161,14 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.15.0
+
+- **CPU trend overlay on the AIO sparkline.** A second trace plots CPU temperature as a 60-second trailing mean in muted steel blue, alongside the raw coolant trace. Raw CPU was excluded in 1.14.0 because it spikes to 100 °C on any compile and reads as noise; averaged, it becomes a trend line worth watching against coolant.
+  - The CPU row keeps showing the instantaneous reading. Only the graph is smoothed.
+  - Each trace scales to its own min/max rather than a shared axis. CPU swings ~33 °C where coolant moves under 1 °C, so a shared axis would flatten the coolant trace to about 2 px. The trade-off is that heights are not comparable between traces, which is documented in the README and the class docstring.
+  - No legend: each row's value label is painted in its trace's colour.
+  - The graph now shows whenever either trace has data, so a fan controller with no cooler still gets a CPU trend line. This amends the 1.14.0 behaviour of hiding the graph whenever coolant was absent.
 
 ### v1.14.0
 

@@ -1,4 +1,4 @@
-"""Spec 017: AioSection rendering, degradation, and menu wiring.
+"""Specs 017 and 018: AioSection rendering, degradation, traces, and menu wiring.
 
 Runs the real Qt widgets on the offscreen platform. No event loop is started
 and every section's timer is stopped immediately after construction, so no test
@@ -100,13 +100,21 @@ class TestRendering:
         assert section.fan_row.value_lbl.text() == "1405 rpm ×4  pump 2399"
         assert not section.isHidden()
 
-    def test_missing_coolant_hides_row_and_graph(self, section):
-        """AC11: the section survives on the rows it does have."""
+    def test_missing_coolant_hides_its_row(self, section):
+        """017 AC11, as amended by 018 AC6: the coolant row goes, but the graph
+        stays as long as the CPU trace has data."""
         section.render_snapshot(_snapshot(coolant_temp_c=None, pump_rpm=None))
         assert section.coolant_row.is_visible() is False
-        assert section.sparkline.isHidden()
+        assert section.sparkline.samples(aio_section.SERIES_COOLANT) == []
+        assert not section.sparkline.isHidden()
         assert section.cpu_row.is_visible() is True
         assert section.fan_row.is_visible() is True
+        assert not section.isHidden()
+
+    def test_graph_hidden_when_neither_trace_has_data(self, section):
+        """018 AC6: no coolant and no CPU means nothing to plot."""
+        section.render_snapshot(_snapshot(coolant_temp_c=None, cpu_temp_c=None))
+        assert section.sparkline.isHidden()
         assert not section.isHidden()
 
     def test_missing_cpu_temp_hides_only_that_row(self, section):
@@ -140,7 +148,8 @@ class TestCoolantBands:
     def test_band_applied_to_label_and_graph(self, section):
         section.render_snapshot(_snapshot(coolant_temp_c=57.0))
         assert aio_section.COLOR_ALARM in section.coolant_row.value_lbl.styleSheet()
-        assert section.sparkline._color.name() == aio_section.COLOR_ALARM
+        coolant = section.sparkline._series[aio_section.SERIES_COOLANT]
+        assert coolant.color.name() == aio_section.COLOR_ALARM
 
     def test_unknown_temperature_is_dim(self):
         assert aio_section.coolant_color(None) == aio_section.COLOR_DIM
@@ -181,15 +190,15 @@ class TestDegradation:
         section.render_snapshot(_snapshot(coolant_temp_c=45.0))
         section.render_snapshot(UNAVAILABLE)
         section.render_snapshot(_snapshot(coolant_temp_c=46.0))
-        assert section.sparkline.samples() == [45.0, 46.0]
+        assert section.sparkline.samples(aio_section.SERIES_COOLANT) == [45.0, 46.0]
 
 
 class TestSparkline:
     def test_retains_at_most_capacity_samples(self, section):
-        """AC15."""
+        """017 AC15."""
         for i in range(aio_section.SPARKLINE_SAMPLES + 20):
-            section.sparkline.add_sample(float(i))
-        samples = section.sparkline.samples()
+            section.sparkline.add_sample(aio_section.SERIES_COOLANT, float(i))
+        samples = section.sparkline.samples(aio_section.SERIES_COOLANT)
         assert len(samples) == aio_section.SPARKLINE_SAMPLES
         # Oldest dropped, newest kept.
         assert samples[0] == 20.0
@@ -197,21 +206,100 @@ class TestSparkline:
 
     def test_paints_without_a_display(self, section, qapp):
         for value in (44.0, 45.0, 46.5, 52.0):
-            section.sparkline.add_sample(value)
+            section.sparkline.add_sample(aio_section.SERIES_COOLANT, value)
+        for value in (70.0, 95.0, 62.0, 88.0):
+            section.sparkline.add_sample(aio_section.SERIES_CPU, value)
         section.sparkline.resize(200, 26)
         pixmap = QPixmap(200, 26)
         section.sparkline.render(pixmap)  # would raise if paintEvent is broken
 
     def test_flat_series_paints(self, section):
         for _ in range(5):
-            section.sparkline.add_sample(45.0)
+            section.sparkline.add_sample(aio_section.SERIES_COOLANT, 45.0)
         section.sparkline.resize(200, 26)
         section.sparkline.render(QPixmap(200, 26))
 
     def test_single_sample_is_a_no_op(self, section):
-        section.sparkline.add_sample(45.0)
+        section.sparkline.add_sample(aio_section.SERIES_COOLANT, 45.0)
         section.sparkline.resize(200, 26)
         section.sparkline.render(QPixmap(200, 26))
+
+
+class TestCpuTrace:
+    """Spec 018: the CPU trend overlay."""
+
+    def test_plots_a_trailing_mean_not_the_raw_value(self, section):
+        """018 AC1: a 100 °C boost spike must not become a 100 °C spike on the
+        graph while the window still holds cooler samples."""
+        for cpu in (60.0, 60.0, 60.0, 100.0):
+            section.render_snapshot(_snapshot(cpu_temp_c=cpu))
+        plotted = section.sparkline.samples(aio_section.SERIES_CPU)
+        assert plotted == [60.0, 60.0, 60.0, 70.0]
+        # The row still shows the real instantaneous reading.
+        assert section.cpu_row.value_lbl.text() == "100.0 °C"
+
+    def test_partial_window_averages_what_it_has(self, section):
+        """018 AC2: the trace starts on the first sample, not after a minute."""
+        section.render_snapshot(_snapshot(cpu_temp_c=80.0))
+        assert section.sparkline.samples(aio_section.SERIES_CPU) == [80.0]
+
+    def test_window_slides(self, section):
+        """018 AC3: readings older than the window stop counting."""
+        window = aio_section.CPU_AVERAGE_WINDOW
+        for _ in range(window):
+            section.render_snapshot(_snapshot(cpu_temp_c=100.0))
+        for _ in range(window):
+            section.render_snapshot(_snapshot(cpu_temp_c=50.0))
+        plotted = section.sparkline.samples(aio_section.SERIES_CPU)
+        assert plotted[window - 1] == 100.0
+        assert plotted[-1] == 50.0
+
+    def test_missing_cpu_adds_no_sample(self, section):
+        section.render_snapshot(_snapshot(cpu_temp_c=None))
+        assert section.sparkline.samples(aio_section.SERIES_CPU) == []
+
+    def test_row_colour_is_the_trace_colour(self, section):
+        """018 AC4: the row value is the legend."""
+        section.render_snapshot(_snapshot())
+        assert aio_section.COLOR_CPU in section.cpu_row.value_lbl.styleSheet()
+
+    def test_traces_scale_independently(self, section):
+        """018 AC5: a 35 °C CPU swing must not flatten a 1 °C coolant swing.
+
+        Both series are normalised to their own bounds, so each spans the full
+        box height regardless of the other's range.
+        """
+        cpu = section.sparkline._series[aio_section.SERIES_CPU]
+        coolant = section.sparkline._series[aio_section.SERIES_COOLANT]
+        cpu.samples[:] = [60.0, 95.0]
+        coolant.samples[:] = [45.0, 46.0]
+
+        cpu_lo, cpu_span = cpu.bounds()
+        coolant_lo, coolant_span = coolant.bounds()
+        assert (cpu_lo, cpu_span) == (60.0, 35.0)
+        # Under the 5 °C floor, centred on the pair.
+        assert (coolant_lo, coolant_span) == (43.0, 5.0)
+
+    def test_both_traces_paint(self, section):
+        section.sparkline.resize(200, 26)
+        for i in range(5):
+            section.sparkline.add_sample(aio_section.SERIES_CPU, 60.0 + i * 8)
+            section.sparkline.add_sample(aio_section.SERIES_COOLANT, 45.0 + i * 0.2)
+        section.sparkline.render(QPixmap(200, 26))
+
+    def test_dimmed_and_restored_with_the_daemon(self, section):
+        """018 AC7: the CPU trace follows the section's degraded state."""
+        section.render_snapshot(_snapshot())
+        section.render_snapshot(UNAVAILABLE)
+        cpu = section.sparkline._series[aio_section.SERIES_CPU]
+        assert cpu.color.name() == aio_section.COLOR_DIM
+        section.render_snapshot(_snapshot())
+        assert cpu.color.name() == aio_section.COLOR_CPU
+
+    def test_unknown_series_key_is_a_no_op(self, section):
+        section.sparkline.add_sample("nope", 1.0)
+        section.sparkline.set_color("nope", "#ffffff")
+        assert section.sparkline.samples("nope") == []
 
 
 class TestUserToggle:

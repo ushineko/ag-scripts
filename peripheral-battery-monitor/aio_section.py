@@ -1,9 +1,11 @@
 """AIO section widget.
 
 A self-contained QFrame showing liquid-cooler thermals from the OpenLinkHub
-daemon: CPU temperature, coolant temperature (with a 5-minute sparkline), and
-fan/pump speeds. Owns its own QTimer. All parsing lives in `aio_reader`; this
-module is UI and state only.
+daemon: CPU temperature, coolant temperature, and fan/pump speeds, over a
+5-minute sparkline carrying two traces. Coolant is plotted raw; CPU is plotted
+as a 60-second trailing mean, because raw CPU is too spiky to read at this size.
+Owns its own QTimer. All parsing lives in `aio_reader`; this module is UI and
+state only.
 
 Public API
 ----------
@@ -57,10 +59,22 @@ COLOR_OK = "#4caf50"
 COLOR_WARN = "#ff9800"
 COLOR_ALARM = "#f44336"
 COLOR_DIM = "#666666"
+# Secondary trace. Muted on purpose: coolant is the primary signal and must stay
+# the thing the eye lands on. The CPU row's value label is painted this colour
+# too, which is the whole legend — there is no room for a real one.
+COLOR_CPU = "#6d9dc5"
 
 # Sparkline never renders a span narrower than this, so an idle flat line stays
 # flat instead of amplifying 0.1 C of sensor jitter into a mountain range.
 SPARKLINE_MIN_SPAN_C = 5.0
+
+# Raw CPU temperature is unplottable at this size: it spikes to 100 C on any
+# compile and swings ~35 C where coolant moves under 1 C. A trailing mean over
+# this many samples (12 * 5 s = 60 s) turns it into a trend line.
+CPU_AVERAGE_WINDOW = 12
+
+SERIES_CPU = "cpu"
+SERIES_COOLANT = "coolant"
 
 
 def coolant_color(temp_c: float | None) -> str:
@@ -74,38 +88,80 @@ def coolant_color(temp_c: float | None) -> str:
     return COLOR_OK
 
 
-class Sparkline(QWidget):
-    """Fixed-capacity line plot of one series, drawn with QPainter.
+class _Series:
+    """One trace: its samples, its colour, and its own vertical scale."""
 
-    Keeps the last `capacity` samples and auto-scales vertically to them. No
-    axes, no grid — at this width anything more is noise.
+    def __init__(self, color: str, width: float, min_span: float):
+        self.samples: list[float] = []
+        self.color = QColor(color)
+        self.width = width
+        self.min_span = min_span
+
+    def bounds(self) -> tuple[float, float]:
+        """(low, span) for this series alone, widened to `min_span`."""
+        lo = min(self.samples)
+        hi = max(self.samples)
+        span = hi - lo
+        if span < self.min_span:
+            mid = (hi + lo) / 2.0
+            lo = mid - self.min_span / 2.0
+            span = self.min_span
+        return lo, span
+
+
+class Sparkline(QWidget):
+    """Fixed-capacity line plot of one or more series, drawn with QPainter.
+
+    Each series is scaled to its own min/max rather than to a shared axis.
+    CPU temperature swings roughly 35 C while coolant moves under 1 C, so a
+    shared degrees-Celsius axis would flatten the coolant trace to a couple of
+    pixels and destroy the signal this graph exists for. The consequence, worth
+    being explicit about: heights are NOT comparable between series. The plot
+    carries no axis labels, and the real numbers live in the rows above, so the
+    reader takes shape and correlation from here and values from there.
+
+    Series are drawn in registration order, so register the primary one last.
     """
 
     def __init__(self, capacity: int = SPARKLINE_SAMPLES, parent: QWidget | None = None):
         super().__init__(parent)
         self._capacity = capacity
-        self._samples: list[float] = []
-        self._color = QColor(COLOR_OK)
+        self._series: dict[str, _Series] = {}
         self.setMinimumHeight(24)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-    def samples(self) -> list[float]:
-        return list(self._samples)
+    def add_series(self, key: str, color: str, width: float = 1.5,
+                   min_span: float = SPARKLINE_MIN_SPAN_C):
+        self._series[key] = _Series(color, width, min_span)
 
-    def add_sample(self, value: float):
-        self._samples.append(float(value))
-        if len(self._samples) > self._capacity:
-            del self._samples[: len(self._samples) - self._capacity]
+    def samples(self, key: str) -> list[float]:
+        series = self._series.get(key)
+        return list(series.samples) if series else []
+
+    def add_sample(self, key: str, value: float):
+        series = self._series.get(key)
+        if series is None:
+            return
+        series.samples.append(float(value))
+        if len(series.samples) > self._capacity:
+            del series.samples[: len(series.samples) - self._capacity]
         self.update()
+
+    def has_data(self) -> bool:
+        return any(series.samples for series in self._series.values())
 
     def clear(self):
-        self._samples.clear()
+        for series in self._series.values():
+            series.samples.clear()
         self.update()
 
-    def set_color(self, color: str):
+    def set_color(self, key: str, color: str):
+        series = self._series.get(key)
+        if series is None:
+            return
         new = QColor(color)
-        if new != self._color:
-            self._color = new
+        if new != series.color:
+            series.color = new
             self.update()
 
     def set_height(self, height: int):
@@ -113,40 +169,38 @@ class Sparkline(QWidget):
         self.setMaximumHeight(height)
 
     def paintEvent(self, event):  # noqa: N802 (Qt naming)
-        if len(self._samples) < 2:
-            return
+        painter = None
+        for series in self._series.values():
+            if len(series.samples) < 2:
+                continue
+            if painter is None:
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._draw_series(painter, series)
+        if painter is not None:
+            painter.end()
 
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
+    def _draw_series(self, painter: QPainter, series: _Series):
         w = self.width()
         h = self.height()
-        lo = min(self._samples)
-        hi = max(self._samples)
-        span = hi - lo
-        if span < SPARKLINE_MIN_SPAN_C:
-            # Centre the series inside the minimum span.
-            mid = (hi + lo) / 2.0
-            lo = mid - SPARKLINE_MIN_SPAN_C / 2.0
-            span = SPARKLINE_MIN_SPAN_C
+        lo, span = series.bounds()
 
         # Right-anchored: a partially filled buffer grows leftward from "now"
         # rather than stretching a handful of samples across the full width.
         step = w / max(1, self._capacity - 1)
-        first_x = w - step * (len(self._samples) - 1)
+        first_x = w - step * (len(series.samples) - 1)
 
         points = QPolygonF()
-        for i, value in enumerate(self._samples):
+        for i, value in enumerate(series.samples):
             x = first_x + i * step
             y = h - 1 - ((value - lo) / span) * (h - 2)
             points.append(QPointF(x, y))
 
-        pen = QPen(self._color)
-        pen.setWidthF(1.5)
+        pen = QPen(series.color)
+        pen.setWidthF(series.width)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.drawPolyline(points)
-        painter.end()
 
 
 class _MetricRow:
@@ -205,6 +259,8 @@ class AioSection(QFrame):
         self._inflight: dict | None = None
         self._font_scale = 1.0
         self._last_coolant: float | None = None
+        # Raw CPU readings behind the plotted trailing mean.
+        self._cpu_raw: list[float] = []
 
         self._root_layout = QVBoxLayout(self)
         self._root_layout.setContentsMargins(15, 8, 15, 10)
@@ -226,6 +282,9 @@ class AioSection(QFrame):
             row.hide()
 
         self.sparkline = Sparkline(parent=self)
+        # Registration order is draw order: the primary trace goes last.
+        self.sparkline.add_series(SERIES_CPU, COLOR_CPU, width=1.0)
+        self.sparkline.add_series(SERIES_COOLANT, COLOR_OK, width=1.5)
         self.sparkline.hide()
         self._root_layout.addWidget(self.sparkline)
 
@@ -299,8 +358,8 @@ class AioSection(QFrame):
                 font-family: monospace;
             }}
         """)
-        # The parent sheet resets the coolant colour; reapply the band.
-        self._apply_coolant_color(self._last_coolant)
+        # The parent sheet resets the per-row colours; reapply them.
+        self._apply_row_colors()
 
     def render_snapshot(self, snapshot: dict):
         """Render an `aio_reader` snapshot and adjust the poll cadence."""
@@ -309,6 +368,7 @@ class AioSection(QFrame):
         if available:
             self._data_ever = True
             self._degraded = False
+            self.sparkline.set_color(SERIES_CPU, COLOR_CPU)
             self._render_available(snapshot)
             self._set_interval(POLL_INTERVAL_MS)
         elif self._data_ever:
@@ -331,20 +391,21 @@ class AioSection(QFrame):
             self.cpu_row.hide()
         else:
             self.cpu_row.set_value(f"{cpu:.1f} °C")
-            self.cpu_row.set_color(None)
             self.cpu_row.show()
+            self.sparkline.add_sample(SERIES_CPU, self._ingest_cpu(cpu))
 
         coolant = snapshot.get("coolant_temp_c")
         self._last_coolant = coolant
         if coolant is None:
             self.coolant_row.hide()
-            self.sparkline.hide()
         else:
             self.coolant_row.set_value(f"{coolant:.1f} °C")
             self.coolant_row.show()
-            self.sparkline.add_sample(coolant)
-            self.sparkline.show()
-        self._apply_coolant_color(coolant)
+            self.sparkline.add_sample(SERIES_COOLANT, coolant)
+        # The CPU row's value carries the CPU trace colour. That is the legend;
+        # there is no room for a real one.
+        self._apply_row_colors()
+        self.sparkline.setVisible(self.sparkline.has_data())
 
         fans = snapshot.get("fans") or []
         avg = aio_reader.average_fan_rpm(fans)
@@ -362,15 +423,31 @@ class AioSection(QFrame):
             self.fan_row.set_color(None)
             self.fan_row.show()
 
+    def _ingest_cpu(self, cpu: float) -> float:
+        """Record a raw CPU reading and return the trailing mean to plot.
+
+        A partial window is averaged as-is, so the trace starts on the first
+        sample instead of after a minute of blank graph.
+        """
+        self._cpu_raw.append(cpu)
+        if len(self._cpu_raw) > CPU_AVERAGE_WINDOW:
+            del self._cpu_raw[: len(self._cpu_raw) - CPU_AVERAGE_WINDOW]
+        return sum(self._cpu_raw) / len(self._cpu_raw)
+
     def _apply_coolant_color(self, coolant: float | None):
         color = COLOR_DIM if self._degraded else coolant_color(coolant)
         self.coolant_row.set_color(color)
-        self.sparkline.set_color(color)
+        self.sparkline.set_color(SERIES_COOLANT, color)
+
+    def _apply_row_colors(self):
+        """Row value colours. CPU matches its trace, coolant matches its band."""
+        self.cpu_row.set_color(COLOR_DIM if self._degraded else COLOR_CPU)
+        self._apply_coolant_color(self._last_coolant)
 
     def _apply_dimming(self):
-        self.cpu_row.set_color(COLOR_DIM)
         self.fan_row.set_color(COLOR_DIM)
-        self._apply_coolant_color(self._last_coolant)
+        self.sparkline.set_color(SERIES_CPU, COLOR_DIM)
+        self._apply_row_colors()
 
     def _apply_visibility(self):
         should_show = self._user_enabled and self._data_ever
