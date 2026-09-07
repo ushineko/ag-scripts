@@ -1,7 +1,7 @@
 # Peripheral Battery Monitor
-Version 1.13.0
+Version 1.14.0
 
-A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), plus optional Claude Code API usage tracking.
+A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), liquid-cooler thermals, plus optional Claude Code API usage tracking.
 
 ![Peripheral Battery Monitor](assets/screenshot.png)
 
@@ -11,6 +11,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - [Quick Start](#quick-start)
 - [Manual Usage](#manual-usage)
 - [Bandwidth Monitoring](#bandwidth-monitoring)
+- [AIO Monitoring](#aio-monitoring)
 - [Logging](#logging)
 - [Changelog](#changelog)
 
@@ -27,6 +28,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
+- **AIO Monitoring**: CPU temperature, coolant temperature with a 5-minute sparkline, and fan/pump speeds, read from a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon. The section stays hidden unless OpenLinkHub reports something, so a machine without it is unaffected. See [AIO Monitoring](#aio-monitoring) for details.
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Position Restore**: Reappears at its last on-screen position on the next launch. On KDE Wayland this is done via the KWin Scripting D-Bus API (`kwin_window_position.py`), because `move()`, Qt geometry, and KWin "Remember" position rules do not work reliably on Wayland. See the [Changelog](#changelog) for details.
@@ -42,6 +44,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - `python-dbus` (BlueZ D-Bus interface)
 - `python-bleak` (for AirPods BLE scanning)
 - `python-structlog` (for structured logging)
+- `openlinkhub` (optional, for the AIO section)
 
 ## Quick Start
 1. Ensure your Logitech mouse is connected (Unifying/Bolt receiver) and Keychron keyboard is paired via **Bluetooth**.
@@ -93,12 +96,70 @@ To reset, right-click → **Bandwidth** → **`<iface>`** → **Reset cumulative
 
 Toggle visibility via **Bandwidth** → **Show Bandwidth Section**. When hidden, the polling timer stops, so a hidden section has no runtime cost.
 
+## AIO Monitoring
+
+The AIO section sits between the bandwidth section and the Claude Code section. It shows liquid-cooler thermals read from a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon:
+
+- **CPU**: CPU package temperature, from OpenLinkHub's `/api/cpuTemp`.
+- **Coolant**: liquid temperature reported by the cooler, with a colour band and a sparkline.
+- **Fans**: mean RPM across the cooler's fans, the fan count, and pump RPM.
+
+The sparkline plots coolant temperature only, 60 samples at a 5-second cadence, so it covers the last 5 minutes. CPU temperature is deliberately not plotted: on a boosting CPU it spikes to 100 °C routinely and reads as noise at this size. Coolant moves slowly and is the signal worth watching.
+
+### Coolant colour bands
+
+| Coolant | Colour | Meaning |
+| ------- | ------ | ------- |
+| below 50 °C | green | normal |
+| 50–55 °C | amber | warming; heat-soaked case |
+| 55 °C and above | red | warning band |
+
+The thresholds come from the behaviour of a Corsair H150i ELITE LCD on this machine. Its pump-head over-temperature alarm tripped at 57.1 °C and cleared near 50 °C. CPU temperature is not colour-graded, because a high boost temperature is normal and grading it would flag every compile.
+
+### Data source and supported devices
+
+Only devices OpenLinkHub itself can report on are supported. Nothing else is consulted: not `liquidctl`, not `lm_sensors`, not sysfs `hwmon`. Classification is by the daemon's channel `description`, so no device serial or product name is hardcoded. A controller with fans but no cooler shows the fan row and no coolant row.
+
+The data layer (`aio_reader.py`) is runnable as a CLI for debugging:
+
+```bash
+python3 aio_reader.py --json
+```
+
+Set `OPENLINKHUB_API` to override the default endpoint (`http://127.0.0.1:27003/api`).
+
+### Read-only
+
+The section reads; it never writes. Fan and pump duty writes are silently discarded by Commander ST firmware 2.x. Both OpenLinkHub and liquidctl report success and change nothing, so a fan control here would lie about working.
+
+### Degradation
+
+- **OpenLinkHub not installed, not running, or managing no supported device**: the section stays hidden and the window is unchanged. A slow 30-second probe keeps running, so starting the daemon later brings the section in without restarting the app.
+- **Daemon disappears after working**: the section stays visible with its last values dimmed and `(unavailable)` in the header. Sparkline history is kept and the gap is not interpolated. Recovery clears the marker.
+- **Partial data**: any metric that cannot be read hides its own row. The section stays up as long as one row has data.
+
+Fetching uses `QNetworkAccessManager` with a 2-second transfer timeout, so a hung daemon cannot stall the UI.
+
+### Hiding the section
+
+Toggle visibility via right-click → **AIO** → **Show AIO Section**. When hidden, the polling timer stops, so a hidden section has no runtime cost.
+
 ## Logging
 Logs are automatically saved in JSON format for debugging:
 - **Location**: `~/.local/state/peripheral-battery-monitor/peripheral_battery.log`
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.14.0
+
+- **New AIO section.** CPU temperature, coolant temperature, and fan/pump speeds from a running OpenLinkHub daemon, with a 5-minute coolant sparkline. Coolant is colour-banded at 50 °C and 55 °C, thresholds taken from the observed pump-head alarm on a Corsair H150i ELITE LCD (tripped at 57.1 °C, cleared near 50 °C). Toggle from right-click → **AIO**.
+  - `aio_reader.py` is the data layer and is runnable as a CLI (`--json`). All parsing lives there; the widget does transport and rendering only.
+  - Classification is by OpenLinkHub channel `description`, not by channel index or device serial, so the section is not tied to one cooler model.
+  - The section stays hidden until the daemon reports something, so a machine without OpenLinkHub sees no change. It polls at 30 seconds while there is nothing to show and 5 seconds once there is.
+  - When a working daemon goes away, the last values stay on screen dimmed with `(unavailable)` in the header rather than the window resizing on every blip.
+  - Read-only by design. Fan and pump duty writes are silently discarded by Commander ST firmware 2.x, so a control would report success and change nothing.
+  - Fetching uses `QNetworkAccessManager` rather than blocking HTTP on the GUI thread or a worker thread, so a hung daemon cannot freeze the widget and there is no thread to orphan.
 
 ### v1.13.0
 

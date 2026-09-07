@@ -9,7 +9,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | Project | Description |
 | :--- | :--- |
 | [audio-source-switcher](audio-source-switcher/) | Feature-rich PyQt6 audio manager with priority auto-switching, mic association, Bluetooth device management, JamesDSP integration, global hotkeys, and a custom on-screen volume indicator (OSD). A good example of PipeWire/PulseAudio graph manipulation and KDE Wayland window rules. |
-| [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring, plus configurable real-time/cumulative network bandwidth with Tailscale exit-node awareness. Demonstrates BLE scanning, upower/solaar integration, `/proc/net/dev` parsing, and KDE Wayland window rules. |
+| [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring, plus configurable real-time/cumulative network bandwidth with Tailscale exit-node awareness and AIO liquid-cooler thermals via OpenLinkHub. Demonstrates BLE scanning, upower/solaar integration, `/proc/net/dev` parsing, and KDE Wayland window rules. |
 | [game-desktop-creator](game-desktop-creator/) | PyQt6 GUI for creating start menu launchers for Steam, Epic (via Heroic), and GOG games. Useful for Linux gaming setups. |
 | [claude-code-global](claude-code-global/) | Global `CLAUDE.md` config implementing the Ralph Wiggum autonomous coding methodology—spec-driven, iterative development with quality gates and fresh context per iteration. |
 | [windows-setup-scripts](windows-setup-scripts/) | PowerShell scripts to automate Windows dev environment setup. Installs MSYS2, Neovim, Claude Code, Oh My Posh, and more with idempotent, one-liner installation. |
@@ -33,7 +33,7 @@ A couple of projects that may be of broader interest—either as standalone util
 | [kvm-setup](kvm-setup/) | Setup scripts for KVM (QEMU/libvirt) on CachyOS. Configures libvirt group and permissions. |
 | [megabonker](megabonker/) | PyQt6 save editor for the Steam game Megabonk. Decrypts the AES-256-CBC save files into an editable JSON tree with typed edits, backups and atomic writes, and can re-derive the game's baked-in encryption key from its own IL2CPP metadata when an update rotates it. |
 | [misc](misc/) | General utilities for NTFS mount fixing and fstab generation during Windows-to-Linux migration. |
-| [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring, plus configurable real-time/cumulative network bandwidth with Tailscale exit-node awareness. |
+| [peripheral-battery-monitor](peripheral-battery-monitor/) | Compact always-on-top dashboard for Logitech, Keychron, Arctis, and AirPods battery monitoring, plus configurable real-time/cumulative network bandwidth with Tailscale exit-node awareness and AIO liquid-cooler thermals via OpenLinkHub. |
 | [pinball-fx](pinball-fx/) | Tiny gamescope wrapper for Heroic-launched Pinball FX. Heroic handles Wine/Proton + Epic auth + DLC; this adds gamescope, HDR, and KWin pinning to the portrait monitor. Configured in Heroic's per-game "Wrapper Command" setting. |
 | [plasmashell-restart](plasmashell-restart/) | Restarts or refreshes the KDE Plasma 6 shell via systemd or D-Bus. |
 | [qbittorrent-vpn-wrapper](qbittorrent-vpn-wrapper/) | Secure wrapper for qBittorrent with VPN binding, IP geolocation check, idle auto-shutdown, and status dashboard. |

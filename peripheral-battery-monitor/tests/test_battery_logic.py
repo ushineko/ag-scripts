@@ -117,7 +117,8 @@ class MockQProgressBar(MockQWidget):
 # Re-importing a shadowed Qt C-extension is unsafe, so we restore the original
 # objects rather than deleting the entries.
 _SHADOWED = ('PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui',
-             'PyQt6.QtDBus', 'kwin_window_position', 'bandwidth_section', 'pb')
+             'PyQt6.QtDBus', 'PyQt6.QtNetwork', 'kwin_window_position',
+             'bandwidth_section', 'aio_section', 'pb')
 _ORIG_MODULES = {name: sys.modules.get(name) for name in _SHADOWED}
 
 mock_qt_widgets = MagicMock()
@@ -141,6 +142,8 @@ sys.modules['PyQt6.QtWidgets'] = mock_qt_widgets
 sys.modules['PyQt6.QtCore'] = MagicMock()
 sys.modules['PyQt6.QtGui'] = MagicMock()
 sys.modules['PyQt6.QtDBus'] = MagicMock()
+# aio_section fetches over QNetworkAccessManager (spec 017).
+sys.modules['PyQt6.QtNetwork'] = MagicMock()
 # peripheral-battery.py imports the KWinWindowPosition helper, which subclasses
 # QObject and talks to D-Bus. Stub the whole module so the monitor constructs
 # cleanly under the mocked Qt namespace (mirrors the QtWidgets stubbing above).
@@ -150,6 +153,12 @@ sys.modules['kwin_window_position'] = MagicMock()
 # real PyQt6), drop its cached reference so peripheral-battery.py re-imports it
 # under the mocked Qt namespace below.
 sys.modules.pop('bandwidth_section', None)
+
+# The AIO section is stubbed whole rather than re-imported under mocked Qt: it
+# paints with QPainter and fetches with QNetworkAccessManager, neither of which
+# survives the mock namespace, and it has its own real-Qt tests in
+# test_aio_section.py. Same treatment as kwin_window_position above.
+sys.modules['aio_section'] = MagicMock()
 
 # 3. Import BatteryInfo (real class)
 import battery_reader

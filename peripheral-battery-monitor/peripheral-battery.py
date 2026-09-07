@@ -22,6 +22,7 @@ from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 import battery_reader
 import accounts
 import usage_cache
+from aio_section import AioSection
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
 from usage_shape import (
@@ -34,7 +35,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.13.0"
+__version__ = "1.14.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -603,6 +604,7 @@ class PeripheralMonitor(QWidget):
             "bandwidth_section_enabled": True,
             "bandwidth_interfaces": [],
             "bandwidth_cumulative": {},
+            "aio_section_enabled": True,
             "window_x": None,  # last on-screen position (KWin-reported); None => default
             "window_y": None,
             "slot_left": DEFAULT_SLOT_LEFT,    # device type shown in the left cell
@@ -689,6 +691,15 @@ class PeripheralMonitor(QWidget):
         self.bandwidth_section.set_visible(
             self.settings.get("bandwidth_section_enabled", True)
         )
+
+        # AIO Section (between bandwidth and Claude). Always constructed so it
+        # can be toggled at runtime; it keeps itself hidden until OpenLinkHub
+        # actually reports something, so machines without it see no change.
+        self.aio_section = AioSection(initial_settings=self.settings, parent=self)
+        self.aio_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        main_layout.addWidget(self.aio_section)
 
         # Claude Code Section (conditionally shown)
         self.claude_section_visible = False
@@ -1054,6 +1065,9 @@ class PeripheralMonitor(QWidget):
         if hasattr(self, "bandwidth_section") and self.bandwidth_section is not None:
             self.bandwidth_section.update_style(alpha, scale)
 
+        if hasattr(self, "aio_section") and self.aio_section is not None:
+            self.aio_section.update_style(alpha, scale)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.windowHandle():
@@ -1234,6 +1248,14 @@ class PeripheralMonitor(QWidget):
                 )
                 ifaceMenu.addAction(resetAct)
 
+        # AIO submenu. Read-only: fan/pump duty writes are silently discarded by
+        # Commander ST fw 2.x, so a control here would lie about succeeding.
+        aioMenu = contextMenu.addMenu("AIO")
+        toggleAioAct = QAction("Show AIO Section", self, checkable=True)
+        toggleAioAct.setChecked(self.settings.get("aio_section_enabled", True))
+        toggleAioAct.triggered.connect(self.toggle_aio_section)
+        aioMenu.addAction(toggleAioAct)
+
         contextMenu.addSeparator()
 
         refreshAct = QAction("Refresh Now", self)
@@ -1304,6 +1326,13 @@ class PeripheralMonitor(QWidget):
         """Persist bandwidth state coming from BandwidthSection."""
         self.settings.update(partial)
         self.save_settings()
+
+    def toggle_aio_section(self, checked):
+        """Toggle the AIO section visibility from the context menu."""
+        self.settings["aio_section_enabled"] = checked
+        self.aio_section.set_visible(checked)
+        self.save_settings()
+        self.adjustSize()
 
     def toggle_claude_section(self, checked):
         """Toggle Claude Code section visibility."""
