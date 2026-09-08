@@ -22,6 +22,7 @@ from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 import battery_reader
 import accounts
 import usage_cache
+import aio_color
 from aio_section import AioSection
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
@@ -35,7 +36,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.15.0"
+__version__ = "1.16.0"
 
 CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
 
@@ -1248,13 +1249,15 @@ class PeripheralMonitor(QWidget):
                 )
                 ifaceMenu.addAction(resetAct)
 
-        # AIO submenu. Read-only: fan/pump duty writes are silently discarded by
-        # Commander ST fw 2.x, so a control here would lie about succeeding.
+        # AIO submenu. Colour and brightness are writable; fan/pump duty is not,
+        # because Commander ST fw 2.x silently discards duty writes, so such a
+        # control would lie about succeeding (specs 017, 019).
         aioMenu = contextMenu.addMenu("AIO")
         toggleAioAct = QAction("Show AIO Section", self, checkable=True)
         toggleAioAct.setChecked(self.settings.get("aio_section_enabled", True))
         toggleAioAct.triggered.connect(self.toggle_aio_section)
         aioMenu.addAction(toggleAioAct)
+        self._build_aio_rgb_menu(aioMenu)
 
         contextMenu.addSeparator()
 
@@ -1326,6 +1329,77 @@ class PeripheralMonitor(QWidget):
         """Persist bandwidth state coming from BandwidthSection."""
         self.settings.update(partial)
         self.save_settings()
+
+    def _build_aio_rgb_menu(self, parent_menu):
+        """Colour / Effect / Brightness, when the daemon reports RGB channels.
+
+        Omitted entirely when it does not: an effect name that the device has
+        not implemented is rejected, so the menu never guesses one.
+        """
+        device, channels = self.aio_section.rgb_target()
+        if not device or not channels:
+            return
+
+        parent_menu.addSeparator()
+
+        colourMenu = parent_menu.addMenu("Colour")
+        for name in sorted(aio_color.NAMED_COLORS):
+            if name == "off":
+                continue
+            action = QAction(name.capitalize(), self)
+            action.triggered.connect(
+                lambda checked=False, n=name: self._set_aio_color(n)
+            )
+            colourMenu.addAction(action)
+        colourMenu.addSeparator()
+        customAct = QAction("Custom…", self)
+        customAct.triggered.connect(self._prompt_aio_color)
+        colourMenu.addAction(customAct)
+        offAct = QAction("Off", self)
+        offAct.triggered.connect(lambda checked=False: self._set_aio_color("off"))
+        colourMenu.addAction(offAct)
+
+        effects = self.aio_section.effects()
+        if effects:
+            effectMenu = parent_menu.addMenu("Effect")
+            for name in effects:
+                action = QAction(name, self)
+                action.triggered.connect(
+                    lambda checked=False, n=name: self.aio_section.apply_effect(n)
+                )
+                effectMenu.addAction(action)
+
+        brightnessMenu = parent_menu.addMenu("Brightness")
+        for label, level in (("33%", 1), ("66%", 2), ("100%", 3)):
+            action = QAction(label, self)
+            action.triggered.connect(
+                lambda checked=False, v=level: self.aio_section.set_brightness(v)
+            )
+            brightnessMenu.addAction(action)
+
+    def _set_aio_color(self, value: str):
+        rgb = aio_color.parse_color(value)
+        if rgb is None:
+            return
+        self.aio_section.apply_color(rgb)
+
+    def _prompt_aio_color(self):
+        """Ask for a hex colour, following the Add Interface… pattern."""
+        value, ok = QInputDialog.getText(
+            self,
+            "AIO Colour",
+            "Hex colour (e.g. #ff8800):",
+        )
+        if not ok:
+            return
+        value = value.strip()
+        if not value:
+            return
+        if aio_color.parse_color(value) is None:
+            # Matches this file's convention: the logger is bound locally.
+            structlog.get_logger().warning("aio_rgb_bad_colour", value=value)
+            return
+        self._set_aio_color(value)
 
     def toggle_aio_section(self, checked):
         """Toggle the AIO section visibility from the context menu."""

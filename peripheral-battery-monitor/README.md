@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.15.0
+Version 1.16.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), liquid-cooler thermals, plus optional Claude Code API usage tracking.
 
@@ -28,7 +28,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
-- **AIO Monitoring**: CPU temperature, coolant temperature with a 5-minute sparkline, and fan/pump speeds, read from a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon. The section stays hidden unless OpenLinkHub reports something, so a machine without it is unaffected. See [AIO Monitoring](#aio-monitoring) for details.
+- **AIO Monitoring**: CPU temperature, coolant temperature with a 5-minute sparkline, and fan/pump speeds, read from a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon. Cooler RGB colour, effects, and brightness can be set from the context menu. The section stays hidden unless OpenLinkHub reports something, so a machine without it is unaffected. See [AIO Monitoring](#aio-monitoring) for details.
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Position Restore**: Reappears at its last on-screen position on the next launch. On KDE Wayland this is done via the KWin Scripting D-Bus API (`kwin_window_position.py`), because `move()`, Qt geometry, and KWin "Remember" position rules do not work reliably on Wayland. See the [Changelog](#changelog) for details.
@@ -139,9 +139,28 @@ python3 aio_reader.py --json
 
 Set `OPENLINKHUB_API` to override the default endpoint (`http://127.0.0.1:27003/api`).
 
-### Read-only
+### RGB control
 
-The section reads; it never writes. Fan and pump duty writes are silently discarded by Commander ST firmware 2.x. Both OpenLinkHub and liquidctl report success and change nothing, so a fan control here would lie about working.
+Right-click → **AIO** gives three submenus, present only when OpenLinkHub reports RGB channels:
+
+| Menu | Does |
+| ---- | ---- |
+| **Colour** | 12 named colours, `Custom…` for any `#rrggbb`, and `Off` |
+| **Effect** | the effects the device itself implements (26 on this cooler) |
+| **Brightness** | 33% · 66% · 100% |
+
+This replaces reaching for `sysadmin/scripts/aio-color.sh` for the common case. Both use the same colour names and values, so "teal" means the same thing in each.
+
+Two things are non-obvious enough to be worth stating, because each fails **silently** rather than returning an error:
+
+- **Colour lives in the device's per-channel `RGBOverride`, not in the `static` profile.** The order that works is: set the override, then select `static`. Reversed, the profile applies cleanly, survives a restart, and changes no LED. Selecting an *effect* is the mirror image: the override must be disabled first, or it masks the animation.
+- **Brightness 0 blacks every LED out**, after which colour commands succeed and nothing lights up. When brightness is 0 and you pick a colour, the monitor raises brightness to 100% first, since a dark LED cannot show the colour you asked for. Levels 1–3 are left alone.
+
+Effect names are read from the daemon per device (`GET /api/color/`), not from the global `database/rgb.json`. That file lists profiles a given device does not implement, and selecting one is rejected. If the effect list has not loaded, the Effect submenu is omitted rather than guessing a name.
+
+### No speed control
+
+Colour is writable; **fan and pump duty is not**, and no control for it exists. Commander ST firmware 2.x silently discards duty writes from both OpenLinkHub and liquidctl: they report success and change nothing. A speed slider here would lie about working. A test asserts that no speed-write endpoint appears in any AIO module.
 
 ### Degradation
 
@@ -161,6 +180,15 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.16.0
+
+- **RGB control from the context menu.** Right-click → **AIO** now offers Colour, Effect, and Brightness submenus, bringing the capability of `sysadmin/scripts/aio-color.sh` into the widget. Colour names and values match the script exactly.
+  - `aio_color.py` builds the request sequences; the section executes them over the existing `QNetworkAccessManager`. Requests are grouped into ordered stages, and a stage is dispatched only once the previous one has finished — the override must land before the profile select, and reversing that is a silent no-op on the hardware.
+  - When brightness is 0, applying a colour raises it to 100% first. At 0 every LED is dark and the colour command would otherwise succeed while nothing lit up. Levels 1–3 are untouched.
+  - Effect names come from `GET /api/color/`, which is per device, rather than the global `database/rgb.json` the shell script reads. That file offers this cooler effects it does not implement. If the list has not loaded, the Effect submenu is omitted rather than guessing a name the daemon would reject.
+  - RGB channels are discovered from the `rgbDevices` map already present in the poll response, instead of probing channels 0–15 with `getOverride` as the script does.
+- **The read-only rule narrowed to speed.** v1.14.0 asserted that no write existed anywhere in the AIO code. That was about fan and pump duty, which this firmware silently discards. RGB writes do land, so the guard now forbids `/api/speed`, `/api/psu/speed`, and the `/api/temperatures/` curve endpoints specifically, and still covers every AIO module.
 
 ### v1.15.0
 

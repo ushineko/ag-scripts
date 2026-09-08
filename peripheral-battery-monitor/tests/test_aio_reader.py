@@ -315,6 +315,96 @@ class TestMalformedResponses(unittest.TestCase):
                 self.assertFalse(snap["available"])
 
 
+class TestRgbTarget(unittest.TestCase):
+    """Spec 019: the RGB write target, discovered from `rgbDevices`."""
+
+    @staticmethod
+    def _device(*, serial, aio=False, rgb_channels=(), brightness=None):
+        detail = {
+            "product": "Test Device",
+            "serial": serial,
+            "devices": {},
+            "rgbDevices": {
+                str(c): {"channelId": c, "description": "LED"} for c in rgb_channels
+            },
+        }
+        if aio:
+            detail["devices"] = {
+                "0": {
+                    "name": "Cooler",
+                    "rpm": 2000,
+                    "temperature": 45.0,
+                    "description": "AIO",
+                    "HasSpeed": True,
+                    "HasTemps": True,
+                }
+            }
+        if brightness is not None:
+            detail["DeviceProfile"] = {"Brightness": brightness}
+        return detail
+
+    def _payload(self, *details):
+        return {
+            "code": 200,
+            "status": 0,
+            "devices": {d["serial"]: {"GetDevice": d} for d in details},
+        }
+
+    def test_live_fixture(self):
+        """AC1: against the captured response, with rgbDevices attached."""
+        payload = json.loads(json.dumps(DEVICES_FIXTURE))
+        detail = payload["devices"]["207132833748"]["GetDevice"]
+        detail["rgbDevices"] = {str(c): {"channelId": c} for c in range(7)}
+        detail["DeviceProfile"] = {"Brightness": 3}
+        snap = aio_reader.build_snapshot(CPU_TEMP_FIXTURE, payload)
+        self.assertEqual(snap["device_id"], "207132833748")
+        self.assertEqual(snap["rgb_channels"], [0, 1, 2, 3, 4, 5, 6])
+        self.assertEqual(snap["brightness"], 3)
+
+    def test_prefers_the_device_owning_the_aio_channel(self):
+        """AC2: not merely the first device with RGB."""
+        payload = self._payload(
+            self._device(serial="mousepad", rgb_channels=(0,)),
+            self._device(serial="cooler", aio=True, rgb_channels=(0, 1, 2), brightness=2),
+        )
+        snap = aio_reader.build_snapshot(None, payload)
+        self.assertEqual(snap["device_id"], "cooler")
+        self.assertEqual(snap["rgb_channels"], [0, 1, 2])
+        self.assertEqual(snap["brightness"], 2)
+
+    def test_falls_back_to_the_first_rgb_device(self):
+        payload = self._payload(
+            self._device(serial="mousepad", rgb_channels=(0, 1)),
+            self._device(serial="strip", rgb_channels=(0,)),
+        )
+        snap = aio_reader.build_snapshot(None, payload)
+        self.assertEqual(snap["device_id"], "mousepad")
+        self.assertEqual(snap["rgb_channels"], [0, 1])
+
+    def test_no_rgb_anywhere(self):
+        payload = self._payload(self._device(serial="fanhub", aio=True))
+        snap = aio_reader.build_snapshot(None, payload)
+        self.assertIsNone(snap["device_id"])
+        self.assertEqual(snap["rgb_channels"], [])
+        self.assertIsNone(snap["brightness"])
+
+    def test_channels_are_numerically_sorted(self):
+        payload = self._payload(
+            self._device(serial="strip", rgb_channels=(0, 1, 2, 9, 10, 11))
+        )
+        snap = aio_reader.build_snapshot(None, payload)
+        self.assertEqual(snap["rgb_channels"], [0, 1, 2, 9, 10, 11])
+
+    def test_missing_brightness_is_none(self):
+        payload = self._payload(self._device(serial="strip", rgb_channels=(0,)))
+        self.assertIsNone(aio_reader.build_snapshot(None, payload)["brightness"])
+
+    def test_unreachable_daemon_has_no_target(self):
+        snap = aio_reader.build_snapshot(None, None)
+        self.assertIsNone(snap["device_id"])
+        self.assertEqual(snap["rgb_channels"], [])
+
+
 class TestEndpointsAndDecoding(unittest.TestCase):
     def test_endpoint_urls(self):
         urls = aio_reader.endpoint_urls("http://127.0.0.1:27003/api/")
@@ -368,15 +458,33 @@ class TestCli(unittest.TestCase):
         self.assertEqual(snap["error"], "openlinkhub unreachable")
 
 
-class TestReadOnly(unittest.TestCase):
-    def test_no_write_calls_in_new_modules(self):
-        """AC18: fan/pump duty writes are silently discarded by this firmware,
-        so the section must never issue one."""
-        for name in ("aio_reader.py", "aio_section.py"):
-            with self.subTest(module=name):
-                source = open(os.path.join(PROJECT_DIR, name)).read()
-                for forbidden in ('"POST"', "'POST'", ".post(", "setSpeed", "/api/speed"):
-                    self.assertNotIn(forbidden, source)
+class TestNoSpeedWrites(unittest.TestCase):
+    """019 AC12, superseding 017 AC18.
+
+    The reader itself still issues no write of any kind; the narrowed guard
+    against speed endpoints applies to every AIO module.
+    """
+
+    SPEED_ENDPOINTS = (
+        "/api/speed",
+        "/api/psu/speed",
+        "/api/temperatures/new",
+        "/api/temperatures/update",
+        "/api/temperatures/updateGraph",
+        "setSpeed",
+    )
+
+    def test_no_speed_write_path(self):
+        for name in ("aio_reader.py", "aio_section.py", "aio_color.py"):
+            source = open(os.path.join(PROJECT_DIR, name)).read()
+            for endpoint in self.SPEED_ENDPOINTS:
+                with self.subTest(module=name, endpoint=endpoint):
+                    self.assertNotIn(endpoint, source)
+
+    def test_reader_issues_no_writes(self):
+        source = open(os.path.join(PROJECT_DIR, "aio_reader.py")).read()
+        for forbidden in ('"POST"', "'POST'", "method=", ".post("):
+            self.assertNotIn(forbidden, source)
 
 
 if __name__ == "__main__":

@@ -117,11 +117,8 @@ def _channel_sort_key(key) -> tuple[int, str]:
         return (2**31, str(key))
 
 
-def _iter_channels(devices_json: dict | None):
-    """Yield (device_name, channel_dict) for every channel of every real device.
-
-    Skips pseudo-devices such as the "cluster" entry, which carry no channels.
-    """
+def _iter_devices(devices_json: dict | None):
+    """Yield each device's `GetDevice` detail dict."""
     if not isinstance(devices_json, dict):
         return
     devices = devices_json.get("devices")
@@ -131,12 +128,20 @@ def _iter_channels(devices_json: dict | None):
         if not isinstance(device, dict):
             continue
         detail = device.get("GetDevice")
-        if not isinstance(detail, dict):
-            continue
+        if isinstance(detail, dict):
+            yield detail
+
+
+def _iter_channels(devices_json: dict | None):
+    """Yield (device_name, channel_dict) for every channel of every real device.
+
+    Skips pseudo-devices such as the "cluster" entry, which carry no channels.
+    """
+    for detail in _iter_devices(devices_json):
         channels = detail.get("devices")
         if not isinstance(channels, dict) or not channels:
             continue
-        product = detail.get("product") or device.get("Product") or "?"
+        product = detail.get("product") or "?"
         # Channel keys are stringified ints; sort numerically so fan order is
         # stable and matches the daemon's own display order.
         for key in sorted(channels, key=_channel_sort_key):
@@ -191,6 +196,53 @@ def _extract_cooler(devices_json: dict | None) -> tuple[float | None, int | None
     return None, None, None
 
 
+def _extract_rgb_target(devices_json: dict | None) -> tuple[str | None, list[int], int | None]:
+    """Return (device_id, rgb_channels, brightness) for the RGB write target.
+
+    Prefers the device owning the AIO channel, matching how aio-color.sh picks
+    its default device. Falls back to the first device that has RGB channels, so
+    a non-cooler RGB device is still addressable.
+
+    Channels come from the `rgbDevices` map rather than by probing channels
+    0..15 with `getOverride`, which is what the shell script has to do. The map
+    is already in the response this snapshot is built from.
+    """
+    fallback: tuple[str | None, list[int], int | None] | None = None
+
+    for detail in _iter_devices(devices_json):
+        rgb = detail.get("rgbDevices")
+        if not isinstance(rgb, dict) or not rgb:
+            continue
+        channels = []
+        for key in sorted(rgb, key=_channel_sort_key):
+            try:
+                channels.append(int(key))
+            except (TypeError, ValueError):
+                continue
+        if not channels:
+            continue
+
+        serial = detail.get("serial")
+        profile = detail.get("DeviceProfile")
+        brightness = None
+        if isinstance(profile, dict):
+            value = profile.get("Brightness")
+            if isinstance(value, int) and not isinstance(value, bool):
+                brightness = value
+
+        target = (serial, channels, brightness)
+        own_channels = detail.get("devices")
+        if isinstance(own_channels, dict) and any(
+            isinstance(c, dict) and c.get("description") == DESC_AIO
+            for c in own_channels.values()
+        ):
+            return target
+        if fallback is None:
+            fallback = target
+
+    return fallback if fallback is not None else (None, [], None)
+
+
 def _extract_fans(devices_json: dict | None) -> list[dict]:
     """Return [{"name", "rpm"}] for every fan channel across all devices.
 
@@ -229,6 +281,7 @@ def build_snapshot(cpu_json: dict | None, devices_json: dict | None) -> dict:
     cpu_temp = _extract_cpu_temp(cpu_json)
     coolant_temp, pump_rpm, coolant_label = _extract_cooler(devices_json)
     fans = _extract_fans(devices_json)
+    device_id, rgb_channels, brightness = _extract_rgb_target(devices_json)
 
     available = cpu_temp is not None or coolant_temp is not None or bool(fans)
     if available:
@@ -247,6 +300,11 @@ def build_snapshot(cpu_json: dict | None, devices_json: dict | None) -> dict:
         "coolant_label": coolant_label,
         "pump_rpm": pump_rpm,
         "fans": fans,
+        # RGB write target (spec 019). Present whenever the daemon reports RGB
+        # channels, independent of whether any temperature was readable.
+        "device_id": device_id,
+        "rgb_channels": rgb_channels,
+        "brightness": brightness,
     }
 
 

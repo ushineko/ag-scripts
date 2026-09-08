@@ -20,13 +20,16 @@ QThread. Two blocking HTTP calls per poll would freeze the widget for up to
 the lifetime hazards that produced the spec 010 crash. QNAM is event-loop
 native — nothing to orphan.
 
-Read-only by design: fan and pump duty writes are silently discarded by
-Commander ST firmware 2.x, so a control here would report success and change
-nothing. See the AIO runbook in ~/git/sysadmin/runbooks/.
+Reads thermals; writes RGB only. Fan and pump duty writes are silently discarded
+by Commander ST firmware 2.x, so a speed control here would report success and
+change nothing, and none exists. RGB writes do land, and `apply_color` /
+`apply_effect` / `set_brightness` drive them from the context menu (spec 019).
+See the AIO runbook in ~/git/sysadmin/runbooks/.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 
 from PyQt6.QtCore import QPointF, Qt, QTimer, QUrl
@@ -34,6 +37,7 @@ from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+import aio_color
 import aio_reader
 
 _log = logging.getLogger(__name__)
@@ -261,6 +265,16 @@ class AioSection(QFrame):
         self._last_coolant: float | None = None
         # Raw CPU readings behind the plotted trailing mean.
         self._cpu_raw: list[float] = []
+        # RGB write target and the device's own effect list (spec 019).
+        self._rgb_device: str | None = None
+        self._rgb_channels: list[int] = []
+        self._brightness: int | None = None
+        self._effects: list[str] = []
+        self._effects_fetched_for: str | None = None
+        # Staged RGB writes. `_write_generation` invalidates the tail of a
+        # sequence that a newer request has superseded.
+        self._pending_stages: list[list] = []
+        self._write_generation = 0
 
         self._root_layout = QVBoxLayout(self)
         self._root_layout.setContentsMargins(15, 8, 15, 10)
@@ -313,6 +327,47 @@ class AioSection(QFrame):
         else:
             self._timer.stop()
         self._apply_visibility()
+
+    def rgb_target(self) -> tuple[str | None, list[int]]:
+        """(device_id, channels) the RGB menu would write to."""
+        return self._rgb_device, list(self._rgb_channels)
+
+    def effects(self) -> list[str]:
+        """Effect names this device implements, empty until they are known."""
+        return list(self._effects)
+
+    def apply_color(self, rgb: tuple[int, int, int]):
+        """Set every RGB channel to one solid colour."""
+        device, channels = self.rgb_target()
+        if not device or not channels:
+            return
+        _log.info("aio_rgb_apply_color rgb=%s channels=%d", rgb, len(channels))
+        self._run_stages(
+            aio_color.solid_requests(device, channels, rgb, brightness=self._brightness)
+        )
+
+    def apply_effect(self, profile: str):
+        """Select an animated effect on every RGB channel."""
+        device, channels = self.rgb_target()
+        if not device or not channels:
+            return
+        _log.info("aio_rgb_apply_effect profile=%s channels=%d", profile, len(channels))
+        self._run_stages(
+            aio_color.effect_requests(device, channels, profile, brightness=self._brightness)
+        )
+
+    def set_brightness(self, level: int):
+        device, _channels = self.rgb_target()
+        if not device:
+            return
+        try:
+            request = aio_color.brightness_request(device, level)
+        except ValueError:
+            _log.warning("aio_rgb_bad_brightness level=%r", level)
+            return
+        _log.info("aio_rgb_set_brightness level=%s", level)
+        self._brightness = level
+        self._run_stages([[request]])
 
     def update_style(self, alpha: int, font_scale: float):
         self._font_scale = font_scale
@@ -386,6 +441,11 @@ class AioSection(QFrame):
     # ---- internals ----
 
     def _render_available(self, snapshot: dict):
+        self._rgb_device = snapshot.get("device_id")
+        self._rgb_channels = list(snapshot.get("rgb_channels") or [])
+        self._brightness = snapshot.get("brightness")
+        self._maybe_fetch_effects()
+
         cpu = snapshot.get("cpu_temp_c")
         if cpu is None:
             self.cpu_row.hide()
@@ -469,6 +529,81 @@ class AioSection(QFrame):
         if self._timer.interval() != interval_ms:
             self._timer.setInterval(interval_ms)
 
+    def _maybe_fetch_effects(self):
+        """Fetch the device's own effect list once. Names cannot be guessed."""
+        device = self._rgb_device
+        if not device or self._effects_fetched_for == device:
+            return
+        self._effects_fetched_for = device
+        base = aio_reader.DEFAULT_BASE_URL.rstrip("/")
+        request = self._build_request(f"{base}/{aio_color.PATH_PROFILES}")
+        reply = self._nam.get(request)
+        reply.finished.connect(lambda r=reply, d=device: self._on_effects_reply(r, d))
+
+    def _on_effects_reply(self, reply: QNetworkReply, device: str):
+        payload = None
+        if reply.error() == QNetworkReply.NetworkError.NoError:
+            payload = aio_reader.decode_payload(bytes(reply.readAll()))
+        else:
+            # Retry on the next snapshot rather than leaving the menu empty
+            # forever after one transient failure.
+            self._effects_fetched_for = None
+            _log.debug("aio_effects_fetch_failed err=%s", reply.errorString())
+        reply.deleteLater()
+        if payload is None:
+            return
+        self._effects = aio_color.effects_for_device(payload, device)
+        _log.debug("aio_effects_loaded count=%d", len(self._effects))
+
+    def _run_stages(self, stages: list[list]):
+        """Dispatch ordered stages, each only after the previous one finishes.
+
+        The ordering is the point: an override written after its profile select
+        is the documented silent failure.
+        """
+        self._write_generation += 1
+        self._pending_stages = [list(stage) for stage in stages]
+        self._dispatch_next_stage(self._write_generation)
+
+    def _dispatch_next_stage(self, generation: int):
+        if generation != self._write_generation or not self._pending_stages:
+            return
+        stage = self._pending_stages.pop(0)
+        if not stage:
+            self._dispatch_next_stage(generation)
+            return
+        remaining = {"count": len(stage)}
+        for path, payload in stage:
+            self._post(path, payload, remaining, generation)
+
+    def _post(self, path: str, payload: dict, remaining: dict, generation: int):
+        base = aio_reader.DEFAULT_BASE_URL.rstrip("/")
+        request = self._build_request(f"{base}/{path}")
+        request.setHeader(
+            QNetworkRequest.KnownHeaders.ContentTypeHeader, "application/json"
+        )
+        reply = self._nam.post(request, json.dumps(payload).encode("utf-8"))
+        reply.finished.connect(
+            lambda r=reply, p=path: self._on_write_reply(r, p, remaining, generation)
+        )
+
+    def _on_write_reply(self, reply: QNetworkReply, path: str, remaining: dict,
+                        generation: int):
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            _log.warning("aio_rgb_write_failed path=%s err=%s", path, reply.errorString())
+        else:
+            body = aio_reader.decode_payload(bytes(reply.readAll()))
+            if not isinstance(body, dict) or body.get("status") != 1:
+                _log.warning("aio_rgb_write_rejected path=%s body=%s", path, body)
+        reply.deleteLater()
+
+        remaining["count"] -= 1
+        if remaining["count"] > 0:
+            return
+        # A failed stage still advances: the next stage may well succeed, and
+        # stalling would leave the device half-written.
+        self._dispatch_next_stage(generation)
+
     def _poll(self):
         if self._inflight is not None:
             # A previous poll is still outstanding (hung daemon). Skip rather
@@ -479,13 +614,18 @@ class AioSection(QFrame):
         for key, url in urls.items():
             self._request(url, key)
 
-    def _request(self, url: str, key: str):
+    @staticmethod
+    def _build_request(url: str) -> QNetworkRequest:
         request = QNetworkRequest(QUrl(url))
         request.setTransferTimeout(REQUEST_TIMEOUT_MS)
         request.setAttribute(
             QNetworkRequest.Attribute.CacheLoadControlAttribute,
             QNetworkRequest.CacheLoadControl.AlwaysNetwork,
         )
+        return request
+
+    def _request(self, url: str, key: str):
+        request = self._build_request(url)
         reply = self._nam.get(request)
         reply.finished.connect(lambda r=reply, k=key: self._on_reply(r, k))
 
