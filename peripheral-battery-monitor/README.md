@@ -98,11 +98,13 @@ Toggle visibility via **Bandwidth** → **Show Bandwidth Section**. When hidden,
 
 ## AIO Monitoring
 
-The AIO section sits between the bandwidth section and the Claude Code section. It shows liquid-cooler thermals read from a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon:
+The AIO section sits between the bandwidth section and the Claude Code section. It shows liquid-cooler thermals from two sources — `liquidctl` for the cooler, and a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon for the CPU package temperature:
 
 - **CPU**: CPU package temperature, from OpenLinkHub's `/api/cpuTemp`.
 - **Coolant**: liquid temperature reported by the cooler, with a colour band and a sparkline.
 - **Fans**: mean RPM across the cooler's fans, the fan count, and pump RPM.
+
+A **cooling alert** fires a desktop notification when the pump stops or the coolant runs hot. See [Cooling alerts](#cooling-alerts).
 
 ### The sparkline
 
@@ -129,7 +131,11 @@ The thresholds come from the behaviour of a Corsair H150i ELITE LCD on this mach
 
 ### Data source and supported devices
 
-Only devices OpenLinkHub itself can report on are supported. Nothing else is consulted: not `liquidctl`, not `lm_sensors`, not sysfs `hwmon`. Classification is by the daemon's channel `description`, so no device serial or product name is hardcoded. A controller with fans but no cooler shows the fan row and no coolant row.
+The cooler is read from `liquidctl --json status` first, falling back to OpenLinkHub. `lm_sensors` and sysfs `hwmon` are not consulted, and for this hardware they could not be: the NZXT Kraken Elite V2 (`1e71:3012`) is not matched by the kernel's `nzxt-kraken3` driver — which covers `2007/2014/3008/300C/300E` — so no hwmon node exists and `sensors` reports nothing for it. liquidctl is the only source of pump RPM and coolant temperature.
+
+OpenLinkHub classification is by the daemon's channel `description`, so no device serial or product name is hardcoded. A controller with fans but no cooler shows the fan row and no coolant row.
+
+**Only genuine cooler channels are accepted as coolant.** The OpenLinkHub fallback matches `AIO`, `Pump`, `Water Block` and `Liquid`, and deliberately ignores everything else. A Corsair HX1000i PSU reports `description: "Probe"` channels named "VRM Temperature" and "PSU Temperature"; accepting any channel carrying a temperature — as versions before 1.17.0 did — surfaced a PSU sensor as coolant beside a pump reading of `0`. That is indistinguishable from a stopped pump, and would equally have masked a real one.
 
 The data layer (`aio_reader.py`) is runnable as a CLI for debugging:
 
@@ -160,15 +166,34 @@ Effect names are read from the daemon per device (`GET /api/color/`), not from t
 
 ### No speed control
 
-Colour is writable; **fan and pump duty is not**, and no control for it exists. Commander ST firmware 2.x silently discards duty writes from both OpenLinkHub and liquidctl: they report success and change nothing. A speed slider here would lie about working. A test asserts that no speed-write endpoint appears in any AIO module.
+Colour is writable; **fan and pump duty is not**, and no control for it exists. A test asserts that no speed-write endpoint appears in any AIO module.
+
+Historical note: this restriction began as a hardware fact. Commander ST firmware 2.x silently discarded duty writes from both OpenLinkHub and liquidctl — they reported success and changed nothing — so a speed slider would have lied about working. That cooler has since been replaced by an NZXT Kraken Elite V2, whose liquidctl driver does expose working `set_speed_profile` on both the `pump` and `fan` channels. The restriction is now a scope decision rather than a firmware limit, and lifting it would be a new spec.
+
+RGB control in the menu still writes through OpenLinkHub and therefore **does nothing on the current cooler**: the Kraken is not an OpenLinkHub device, so the snapshot reports no RGB channels and the submenus stay hidden. liquidctl exposes `set_color` (channels `external`, `ring`, `logo`, `sync`) and `set_screen` for the LCD; porting the menu to it would be a new spec.
 
 ### Degradation
 
-- **OpenLinkHub not installed, not running, or managing no supported device**: the section stays hidden and the window is unchanged. A slow 30-second probe keeps running, so starting the daemon later brings the section in without restarting the app.
+- **OpenLinkHub not installed, not running, or managing no supported device**: the CPU row is hidden. If liquidctl still reports a cooler, the coolant and fan rows remain. A slow 30-second probe keeps running, so starting the daemon later brings the row in without restarting the app.
+- **liquidctl missing, failing, or reporting no cooler**: the coolant and pump rows fall back to OpenLinkHub, and are hidden if it has no cooler either. A missing pump reading never raises an alert — absence of evidence is not a stopped pump.
+- **Neither source available**: the section stays hidden and the window is unchanged.
 - **Daemon disappears after working**: the section stays visible with its last values dimmed and `(unavailable)` in the header. Sparkline history is kept and the gap is not interpolated. Recovery clears the marker.
 - **Partial data**: any metric that cannot be read hides its own row. The section stays up as long as one row has data, and the graph stays up as long as either trace has data.
 
-Fetching uses `QNetworkAccessManager` with a 2-second transfer timeout, so a hung daemon cannot stall the UI.
+Fetching uses `QNetworkAccessManager` with a 2-second transfer timeout, so a hung daemon cannot stall the UI. liquidctl runs through `QProcess` with a 5-second kill deadline for the same reason: it opens a hidraw node, and contention on that bus has produced multi-second stalls on this machine. A poll is skipped entirely while a previous one is still outstanding, so slow sources cannot queue up behind each other.
+
+### Cooling alerts
+
+The section raises a desktop notification (`notify-send`) when cooling looks wrong:
+
+| State | Condition |
+| --- | --- |
+| `critical` | coolant at or above 60 °C, or pump reporting 0 RPM |
+| `warning` | pump below 500 RPM, or coolant at or above 50 °C |
+
+A state must persist for three consecutive polls (~15 s) before it notifies, so a single partial read cannot fire one. While a condition persists it re-notifies at most every 10 minutes, and notifications replace rather than stack. Recovery sends one `Cooling recovered` notification.
+
+This exists because the previous cooler's pump died with no warning: the CPU reached 100 °C and hard-throttled to 0.20 GHz while the widget displayed a plausible number. Alerting deliberately does not depend on anyone looking at the widget.
 
 ### Hiding the section
 
@@ -180,6 +205,15 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.17.0
+
+- **liquidctl is now the primary cooler source.** The machine's cooler is an NZXT Kraken Elite V2 (`1e71:3012`), which the kernel's `nzxt-kraken3` driver does not match, so no hwmon node exists and `sensors` reports nothing. `liquidctl --json status` supplies coolant temperature, pump RPM and fan speed; OpenLinkHub remains the fallback cooler source and the only source of CPU package temperature.
+- **Fixed: a PSU sensor was being displayed as coolant.** The OpenLinkHub cooler fallback accepted any channel reporting a temperature. After the Corsair cooler was removed, the nearest match became the HX1000i PSU's `description: "Probe"` channels, so the section showed "VRM Temperature" as coolant with `pump_rpm: 0` beside it — a reading indistinguishable from a stopped pump, and one that would equally have masked a real pump failure. The fallback now matches only genuine cooler descriptions (`AIO`, `Pump`, `Water Block`, `Liquid`).
+- **`pump_rpm` now distinguishes "not reported" from "zero".** It is `None` when no source reports it and an int when one does, so `0` unambiguously means a pump reading zero.
+- **New: cooling alerts.** A desktop notification fires when the pump stops or coolant runs hot, debounced across three consecutive polls, rate-limited to one per 10 minutes while a condition persists, with a recovery notification when it clears. Missing pump data never alerts. This follows a real incident in which the previous pump died silently and the CPU reached 100 °C and hard-throttled to 0.20 GHz while the widget displayed a plausible number.
+- **liquidctl runs via `QProcess`**, never `subprocess`, on a 5-second kill deadline — the GUI thread is never blocked, matching the existing rule for HTTP fetches.
+- New `cooler_source` field in the snapshot records which source supplied the cooler reading (`liquidctl`, `openlinkhub`, or `None`), so logs can distinguish "no cooler" from "no daemon".
 
 ### v1.16.0
 

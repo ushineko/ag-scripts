@@ -441,10 +441,16 @@ class TestEndpointsAndDecoding(unittest.TestCase):
 
 class TestCli(unittest.TestCase):
     def test_json_output_without_a_daemon(self):
-        """AC9: the CLI prints valid JSON and exits 0 even with nothing to talk to."""
+        """AC9: the CLI prints valid JSON and exits 0 even with nothing to talk to.
+
+        Spec 020 isolates liquidctl as well. Before it, pointing only
+        OPENLINKHUB_API at a dead port was enough to starve the reader; liquidctl
+        is now an independent source, so a real cooler still answers.
+        """
         env = dict(os.environ)
         # Port 1 refuses instantly; no test should wait on a network timeout.
         env["OPENLINKHUB_API"] = "http://127.0.0.1:1/api"
+        env["LIQUIDCTL_BIN"] = "liquidctl-does-not-exist"
         proc = subprocess.run(
             [sys.executable, os.path.join(PROJECT_DIR, "aio_reader.py"), "--json"],
             capture_output=True,
@@ -455,7 +461,29 @@ class TestCli(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         snap = json.loads(proc.stdout)
         self.assertFalse(snap["available"])
-        self.assertEqual(snap["error"], "openlinkhub unreachable")
+        self.assertEqual(snap["error"], "no cooling source reachable")
+
+    def test_json_output_with_only_liquidctl(self):
+        """020 AC12: liquidctl alone is enough; OpenLinkHub may be absent."""
+        if not aio_reader.liquidctl_available():
+            self.skipTest("liquidctl not installed")
+        env = dict(os.environ)
+        env["OPENLINKHUB_API"] = "http://127.0.0.1:1/api"
+        proc = subprocess.run(
+            [sys.executable, os.path.join(PROJECT_DIR, "aio_reader.py"), "--json"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        snap = json.loads(proc.stdout)
+        # No cooler attached in CI is legitimate; assert only that a cooler
+        # reading, when present, is attributed to liquidctl and never to the
+        # unreachable daemon.
+        if snap["available"]:
+            self.assertIn(snap["cooler_source"], ("liquidctl", None))
+            self.assertIsNone(snap["cpu_temp_c"])
 
 
 class TestNoSpeedWrites(unittest.TestCase):
@@ -489,3 +517,217 @@ class TestNoSpeedWrites(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Spec 020: liquidctl source, PSU-probe exclusion, and pump alerting.
+# ---------------------------------------------------------------------------
+
+# Trimmed capture of `liquidctl --json --match kraken status` on njv-cachyos
+# (2026-09-16), NZXT Kraken Elite V2 (1e71:3012).
+LIQUIDCTL_FIXTURE = [
+    {
+        "bus": "hid",
+        "address": "/dev/hidraw14",
+        "description": "NZXT Kraken 2024 Elite RGB",
+        "status": [
+            {"key": "Liquid temperature", "value": 36.3, "unit": "°C"},
+            {"key": "Pump speed", "value": 1735, "unit": "rpm"},
+            {"key": "Pump duty", "value": 35, "unit": "%"},
+            {"key": "Fan speed", "value": 840, "unit": "rpm"},
+            {"key": "Fan duty", "value": 35, "unit": "%"},
+        ],
+    }
+]
+
+# The HX1000i as OpenLinkHub actually reports it. These "Probe" channels are the
+# ones that previously masqueraded as coolant.
+PSU_ONLY_DEVICES = {
+    "code": 200,
+    "status": 0,
+    "devices": {
+        "c19b64": {
+            "Product": "HX1000i",
+            "Serial": "c19b64",
+            "GetDevice": {
+                "product": "HX1000i",
+                "serial": "c19b64",
+                "devices": {
+                    "1": {"name": "Fan 1", "description": "", "temperature": 0,
+                          "rpm": 0, "HasSpeed": True, "HasTemps": False},
+                    "2": {"name": "VRM Temperature", "description": "Probe",
+                          "temperature": 45.25, "rpm": 0,
+                          "HasSpeed": False, "HasTemps": True},
+                    "3": {"name": "PSU Temperature", "description": "Probe",
+                          "temperature": 45.25, "rpm": 0,
+                          "HasSpeed": False, "HasTemps": True},
+                },
+            },
+        }
+    },
+}
+
+
+class TestLiquidctlParsing(unittest.TestCase):
+    """020 AC1."""
+
+    def test_parses_live_fixture(self):
+        cooler = aio_reader.parse_liquidctl(LIQUIDCTL_FIXTURE)
+        self.assertEqual(cooler["coolant_temp_c"], 36.3)
+        self.assertEqual(cooler["pump_rpm"], 1735)
+        self.assertEqual(cooler["label"], "NZXT Kraken 2024 Elite RGB")
+        self.assertEqual([f["rpm"] for f in cooler["fans"]], [840])
+
+    def test_accepts_raw_json_text(self):
+        cooler = aio_reader.parse_liquidctl(json.dumps(LIQUIDCTL_FIXTURE))
+        self.assertEqual(cooler["pump_rpm"], 1735)
+
+    def test_accepts_bytes(self):
+        cooler = aio_reader.parse_liquidctl(json.dumps(LIQUIDCTL_FIXTURE).encode())
+        self.assertEqual(cooler["pump_rpm"], 1735)
+
+    def test_unusable_input_is_none(self):
+        for bad in (None, b"", "", "not json", {}, [], [{"status": "nope"}]):
+            with self.subTest(bad=bad):
+                self.assertIsNone(aio_reader.parse_liquidctl(bad))
+
+    def test_device_without_cooler_metrics_is_skipped(self):
+        """A PSU that liquidctl can read is not a cooler."""
+        payload = [{"description": "Corsair HX1000i",
+                    "status": [{"key": "Total power", "value": 120, "unit": "W"}]}]
+        self.assertIsNone(aio_reader.parse_liquidctl(payload))
+
+    def test_pump_without_temperature_still_counts(self):
+        payload = [{"description": "Pump only",
+                    "status": [{"key": "Pump speed", "value": 1200, "unit": "rpm"}]}]
+        cooler = aio_reader.parse_liquidctl(payload)
+        self.assertEqual(cooler["pump_rpm"], 1200)
+        self.assertIsNone(cooler["coolant_temp_c"])
+
+
+class TestPsuProbeIsNotCoolant(unittest.TestCase):
+    """020 AC3/AC4 — the regression that motivated the spec."""
+
+    def test_psu_probes_are_not_reported_as_coolant(self):
+        snap = aio_reader.build_snapshot(None, PSU_ONLY_DEVICES)
+        self.assertIsNone(snap["coolant_temp_c"])
+        self.assertIsNone(snap["coolant_label"])
+        self.assertIsNone(snap["cooler_source"])
+
+    def test_psu_probes_do_not_fake_a_stopped_pump(self):
+        """The old fallback produced pump_rpm 0, which reads as a dead pump."""
+        snap = aio_reader.build_snapshot(None, PSU_ONLY_DEVICES)
+        self.assertIsNone(snap["pump_rpm"])
+        self.assertEqual(snap["alert_state"], aio_reader.ALERT_OK)
+
+    def test_genuine_cooler_descriptions_still_accepted(self):
+        for description in ("Pump", "Water Block", "Liquid"):
+            with self.subTest(description=description):
+                devices = _devices_with({
+                    "0": {"name": "Block", "rpm": 1800, "temperature": 33.5,
+                          "description": description,
+                          "HasSpeed": True, "HasTemps": True},
+                })
+                snap = aio_reader.build_snapshot(None, devices)
+                self.assertEqual(snap["coolant_temp_c"], 33.5)
+                self.assertEqual(snap["pump_rpm"], 1800)
+                self.assertEqual(snap["cooler_source"], "openlinkhub")
+
+
+class TestSourcePrecedence(unittest.TestCase):
+    """020 AC2 and AC11."""
+
+    def test_liquidctl_wins_over_openlinkhub(self):
+        devices = _devices_with({
+            "0": {"name": "AIO", "rpm": 2000, "temperature": 99.0,
+                  "description": "AIO", "HasSpeed": True, "HasTemps": True},
+        })
+        snap = aio_reader.build_snapshot(None, devices, LIQUIDCTL_FIXTURE)
+        self.assertEqual(snap["coolant_temp_c"], 36.3)
+        self.assertEqual(snap["pump_rpm"], 1735)
+        self.assertEqual(snap["cooler_source"], "liquidctl")
+
+    def test_openlinkhub_used_when_liquidctl_absent(self):
+        devices = _devices_with({
+            "0": {"name": "AIO", "rpm": 2000, "temperature": 41.0,
+                  "description": "AIO", "HasSpeed": True, "HasTemps": True},
+        })
+        snap = aio_reader.build_snapshot(None, devices, None)
+        self.assertEqual(snap["coolant_temp_c"], 41.0)
+        self.assertEqual(snap["cooler_source"], "openlinkhub")
+
+    def test_cpu_temp_still_comes_from_openlinkhub(self):
+        snap = aio_reader.build_snapshot(CPU_TEMP_FIXTURE, None, LIQUIDCTL_FIXTURE)
+        self.assertEqual(snap["cpu_temp_c"], 98.0)
+        self.assertEqual(snap["cooler_source"], "liquidctl")
+
+    def test_liquidctl_alone_is_available(self):
+        snap = aio_reader.build_snapshot(None, None, LIQUIDCTL_FIXTURE)
+        self.assertTrue(snap["available"])
+        self.assertIsNone(snap["error"])
+
+    def test_no_source_at_all(self):
+        snap = aio_reader.build_snapshot(None, None, None)
+        self.assertFalse(snap["available"])
+        self.assertEqual(snap["error"], "no cooling source reachable")
+
+    def test_snapshot_is_json_serializable(self):
+        snap = aio_reader.build_snapshot(CPU_TEMP_FIXTURE, PSU_ONLY_DEVICES,
+                                         LIQUIDCTL_FIXTURE)
+        json.dumps(snap)
+
+
+class TestAlertEvaluation(unittest.TestCase):
+    """020 AC6 and AC13."""
+
+    def _snap(self, **kw):
+        base = {"pump_rpm": 1700, "coolant_temp_c": 36.0}
+        base.update(kw)
+        return base
+
+    def test_healthy_is_ok(self):
+        state, reason = aio_reader.evaluate_alert(self._snap())
+        self.assertEqual(state, aio_reader.ALERT_OK)
+        self.assertIsNone(reason)
+
+    def test_stopped_pump_is_critical(self):
+        state, reason = aio_reader.evaluate_alert(self._snap(pump_rpm=0))
+        self.assertEqual(state, aio_reader.ALERT_CRITICAL)
+        self.assertIn("Pump stopped", reason)
+
+    def test_hot_coolant_is_critical(self):
+        state, reason = aio_reader.evaluate_alert(self._snap(coolant_temp_c=61.0))
+        self.assertEqual(state, aio_reader.ALERT_CRITICAL)
+        self.assertIn("Coolant", reason)
+
+    def test_slow_pump_is_warning(self):
+        state, reason = aio_reader.evaluate_alert(self._snap(pump_rpm=300))
+        self.assertEqual(state, aio_reader.ALERT_WARNING)
+
+    def test_warm_coolant_is_warning(self):
+        state, _ = aio_reader.evaluate_alert(self._snap(coolant_temp_c=52.0))
+        self.assertEqual(state, aio_reader.ALERT_WARNING)
+
+    def test_missing_pump_is_not_an_alert(self):
+        """AC13: absence of evidence is not a stopped pump."""
+        state, reason = aio_reader.evaluate_alert(
+            {"pump_rpm": None, "coolant_temp_c": None}
+        )
+        self.assertEqual(state, aio_reader.ALERT_OK)
+        self.assertIsNone(reason)
+
+    def test_critical_coolant_outranks_pump_warning(self):
+        state, reason = aio_reader.evaluate_alert(
+            self._snap(pump_rpm=300, coolant_temp_c=65.0)
+        )
+        self.assertEqual(state, aio_reader.ALERT_CRITICAL)
+        self.assertIn("Coolant", reason)
+
+    def test_booleans_are_not_readings(self):
+        state, _ = aio_reader.evaluate_alert(
+            {"pump_rpm": False, "coolant_temp_c": True}
+        )
+        self.assertEqual(state, aio_reader.ALERT_OK)
+
+    def test_non_dict_is_ok(self):
+        self.assertEqual(aio_reader.evaluate_alert(None)[0], aio_reader.ALERT_OK)

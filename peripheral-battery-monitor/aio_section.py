@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import logging
 
-from PyQt6.QtCore import QPointF, Qt, QTimer, QUrl
+from PyQt6.QtCore import QElapsedTimer, QPointF, QProcess, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -48,6 +48,21 @@ _log = logging.getLogger(__name__)
 POLL_INTERVAL_MS = 5000
 IDLE_POLL_INTERVAL_MS = 30000
 REQUEST_TIMEOUT_MS = 2000
+
+# liquidctl runs out of process (spec 020). It is driven through QProcess rather
+# than subprocess for the same reason the HTTP calls use QNetworkAccessManager:
+# a blocking call on the GUI thread freezes the widget. Measured at ~0.16 s on
+# this hardware, but it opens a hidraw node and contention on this machine has
+# produced multi-second stalls, so it gets a hard kill deadline.
+LIQUIDCTL_TIMEOUT_MS = 5000
+
+# Alert debounce. A single bad sample is not a cooling failure — liquidctl can
+# return a partial read while the device is busy — so a state must persist
+# across consecutive polls before it notifies. At a 5 s cadence three samples is
+# ~15 s, fast enough to matter for a stopped pump and slow enough to ignore a
+# blip. While a condition persists, re-notify at most every REPEAT interval.
+ALERT_CONFIRM_SAMPLES = 3
+ALERT_REPEAT_MS = 600000  # 10 minutes
 
 SPARKLINE_SAMPLES = 60
 
@@ -303,6 +318,15 @@ class AioSection(QFrame):
         self._root_layout.addWidget(self.sparkline)
 
         self._nam = QNetworkAccessManager(self)
+
+        # Cooling alert state (spec 020). `_alert_active` is the state currently
+        # notified about (None when healthy); `_alert_streak` counts consecutive
+        # samples agreeing with `_alert_streak_state` so one bad read cannot fire.
+        self._alert_active: str | None = None
+        self._alert_active_reason: str | None = None
+        self._alert_streak_state: str | None = None
+        self._alert_streak = 0
+        self._alert_timer = QElapsedTimer()
 
         self._timer = QTimer(self)
         self._timer.setInterval(IDLE_POLL_INTERVAL_MS)
@@ -606,13 +630,61 @@ class AioSection(QFrame):
 
     def _poll(self):
         if self._inflight is not None:
-            # A previous poll is still outstanding (hung daemon). Skip rather
-            # than queueing requests behind it.
+            # A previous poll is still outstanding (hung daemon, or a liquidctl
+            # blocked on a contended hidraw node). Skip rather than queueing
+            # requests behind it.
             return
         urls = aio_reader.endpoint_urls()
-        self._inflight = {"cpu": None, "devices": None, "pending": 2}
+        self._inflight = {"cpu": None, "devices": None, "liquid": None, "pending": 3}
         for key, url in urls.items():
             self._request(url, key)
+        self._request_liquidctl()
+
+    def _request_liquidctl(self):
+        """Start liquidctl asynchronously, settling the "liquid" slot when done.
+
+        Any failure — binary missing, non-zero exit, timeout, crash — settles the
+        slot with None, so the snapshot still builds from OpenLinkHub alone.
+        """
+        if not aio_reader.liquidctl_available():
+            self._settle("liquid", None)
+            return
+
+        argv = aio_reader.liquidctl_argv()
+        proc = QProcess(self)
+        proc.setProgram(argv[0])
+        proc.setArguments(argv[1:])
+        # One-shot guard: finished and errorOccurred can both fire.
+        done = {"settled": False}
+
+        def settle(payload):
+            if done["settled"]:
+                return
+            done["settled"] = True
+            killer.stop()
+            proc.deleteLater()
+            self._settle("liquid", payload)
+
+        def on_finished(code, _status):
+            if code != 0:
+                _log.debug("liquidctl_nonzero rc=%s", code)
+                settle(None)
+                return
+            settle(bytes(proc.readAllStandardOutput()) or None)
+
+        def on_error(err):
+            _log.debug("liquidctl_process_error err=%s", err)
+            settle(None)
+
+        killer = QTimer(self)
+        killer.setSingleShot(True)
+        killer.setInterval(LIQUIDCTL_TIMEOUT_MS)
+        killer.timeout.connect(lambda: (proc.kill(), settle(None)))
+
+        proc.finished.connect(on_finished)
+        proc.errorOccurred.connect(on_error)
+        killer.start()
+        proc.start()
 
     @staticmethod
     def _build_request(url: str) -> QNetworkRequest:
@@ -637,6 +709,14 @@ class AioSection(QFrame):
             _log.debug("aio_reply_failed key=%s err=%s", key, reply.errorString())
         reply.deleteLater()
 
+        self._settle(key, payload)
+
+    def _settle(self, key: str, payload):
+        """Record one source's result; build the snapshot once all have landed.
+
+        Shared by the HTTP replies and the liquidctl process so the "last one in
+        builds the snapshot" rule lives in exactly one place.
+        """
         state = self._inflight
         if state is None:
             return
@@ -647,9 +727,86 @@ class AioSection(QFrame):
 
         self._inflight = None
         try:
-            snapshot = aio_reader.build_snapshot(state["cpu"], state["devices"])
+            snapshot = aio_reader.build_snapshot(
+                state["cpu"], state["devices"], state["liquid"]
+            )
         except Exception:
             # Best-effort: a parse failure must not kill the timer.
             _log.warning("aio_snapshot_failed", exc_info=True)
             return
+        self._evaluate_alert(snapshot)
         self.render_snapshot(snapshot)
+
+    # ------------------------------------------------------------------
+    # Cooling alerts (spec 020)
+    # ------------------------------------------------------------------
+
+    def _evaluate_alert(self, snapshot: dict):
+        """Debounce the snapshot's alert state and notify on confirmed changes.
+
+        The pump that motivated this died silently while the widget showed a
+        plausible number, so the alert path deliberately does not depend on
+        anyone looking at the widget.
+        """
+        state = snapshot.get("alert_state", aio_reader.ALERT_OK)
+        reason = snapshot.get("alert_reason")
+
+        if state == aio_reader.ALERT_OK:
+            if self._alert_active:
+                prior = self._alert_active_reason
+                self._notify(
+                    "Cooling recovered",
+                    f"Resolved: {prior}" if prior else "Pump and coolant back to normal",
+                    critical=False,
+                )
+            self._alert_active = None
+            self._alert_active_reason = None
+            self._alert_streak = 0
+            self._alert_streak_state = None
+            return
+
+        # Count consecutive samples reporting the same state.
+        if state == self._alert_streak_state:
+            self._alert_streak += 1
+        else:
+            self._alert_streak_state = state
+            self._alert_streak = 1
+        if self._alert_streak < ALERT_CONFIRM_SAMPLES:
+            return
+
+        escalated = state != self._alert_active
+        elapsed = self._alert_timer.elapsed() if self._alert_timer.isValid() else None
+        due = elapsed is None or elapsed >= ALERT_REPEAT_MS
+        if not (escalated or due):
+            return
+
+        self._alert_active = state
+        self._alert_active_reason = reason
+        self._alert_timer.restart()
+        self._notify(
+            "CPU cooling critical" if state == aio_reader.ALERT_CRITICAL
+            else "CPU cooling warning",
+            reason or state,
+            critical=state == aio_reader.ALERT_CRITICAL,
+        )
+
+    def _notify(self, summary: str, body: str, critical: bool):
+        """Fire a desktop notification. Detached and best-effort by design.
+
+        QProcess.startDetached keeps this off the GUI thread and means a missing
+        or hung notify-send cannot stall or crash the poll loop.
+        """
+        args = [
+            "--app-name=peripheral-battery-monitor",
+            f"--urgency={'critical' if critical else 'normal'}",
+            # Replace rather than stack: a persistent condition should leave one
+            # notification, not one per repeat interval.
+            "--hint=string:x-canonical-private-synchronous:aio-cooling",
+            summary,
+            body,
+        ]
+        try:
+            QProcess.startDetached("notify-send", args)
+        except Exception:
+            _log.debug("aio_notify_failed", exc_info=True)
+        _log.warning("aio_alert summary=%s body=%s critical=%s", summary, body, critical)
