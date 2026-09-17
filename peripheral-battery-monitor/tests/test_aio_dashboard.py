@@ -84,3 +84,100 @@ class TestChangeGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPushGate(unittest.TestCase):
+    """The gate that decides how often the LCD is written at all.
+
+    Keying on CPU temperature at whole degrees was a design error: an idle
+    i9-14900K wanders continuously, so the gate never suppressed anything and
+    the screen was rewritten every interval.
+    """
+
+    BASE = {"coolant_temp_c": 36.8, "cpu_temp_c": 50.0, "pump_rpm": 1727,
+            "alert_state": "ok"}
+
+    def _v(self, **kw):
+        return dict(self.BASE, **kw)
+
+    def test_first_push_always_happens(self):
+        self.assertTrue(aio_dashboard.should_push(self.BASE, None))
+
+    def test_identical_snapshot_does_not_push(self):
+        self.assertFalse(aio_dashboard.should_push(self.BASE, self.BASE))
+
+    # -- the bug this fixes ------------------------------------------------
+
+    def test_small_cpu_wander_does_not_push(self):
+        """The actual regression: CPU drifting a few degrees forced a write."""
+        for cpu in (51.0, 52.5, 46.0, 54.9):
+            with self.subTest(cpu=cpu):
+                self.assertFalse(
+                    aio_dashboard.should_push(self._v(cpu_temp_c=cpu), self.BASE))
+
+    def test_large_cpu_change_does_push(self):
+        self.assertTrue(
+            aio_dashboard.should_push(self._v(cpu_temp_c=90.0), self.BASE))
+
+    def test_cpu_threshold_is_compared_against_what_is_on_screen(self):
+        """A value creeping up in small steps must still eventually redraw.
+
+        Comparing each sample against the previous *sample* would let CPU walk
+        arbitrarily far from the displayed figure without ever tripping.
+        """
+        last = self.BASE
+        for cpu in (52.0, 54.0, 56.0):
+            pushed = aio_dashboard.should_push(self._v(cpu_temp_c=cpu), last)
+        self.assertTrue(pushed, "56 C is >= 5 C from the displayed 50 C")
+
+    # -- things that must never be suppressed ------------------------------
+
+    def test_coolant_change_always_pushes(self):
+        self.assertTrue(
+            aio_dashboard.should_push(self._v(coolant_temp_c=37.8), self.BASE))
+
+    def test_subdegree_coolant_drift_does_not_push(self):
+        self.assertFalse(
+            aio_dashboard.should_push(self._v(coolant_temp_c=36.84), self.BASE))
+
+    def test_alert_state_change_always_pushes(self):
+        self.assertTrue(
+            aio_dashboard.should_push(self._v(alert_state="critical"), self.BASE))
+
+    def test_pump_stopping_always_pushes(self):
+        """The one transition that must never be thresholded away."""
+        self.assertTrue(
+            aio_dashboard.should_push(self._v(pump_rpm=0), self.BASE))
+
+    def test_pump_starting_always_pushes(self):
+        stopped = self._v(pump_rpm=0)
+        self.assertTrue(aio_dashboard.should_push(self.BASE, stopped))
+
+    def test_small_pump_jitter_does_not_push(self):
+        self.assertFalse(
+            aio_dashboard.should_push(self._v(pump_rpm=1740), self.BASE))
+
+    def test_large_pump_change_does_push(self):
+        self.assertTrue(
+            aio_dashboard.should_push(self._v(pump_rpm=1200), self.BASE))
+
+    # -- appearing / disappearing values -----------------------------------
+
+    def test_value_becoming_unavailable_pushes(self):
+        for field in ("cpu_temp_c", "pump_rpm", "coolant_temp_c"):
+            with self.subTest(field=field):
+                self.assertTrue(
+                    aio_dashboard.should_push(self._v(**{field: None}), self.BASE))
+
+    def test_value_becoming_available_pushes(self):
+        missing = self._v(cpu_temp_c=None)
+        self.assertTrue(aio_dashboard.should_push(self.BASE, missing))
+
+    def test_garbage_new_snapshot_does_not_push(self):
+        for bad in (None, "x", 5):
+            with self.subTest(bad=bad):
+                self.assertFalse(aio_dashboard.should_push(bad, self.BASE))
+
+    def test_booleans_are_not_readings(self):
+        self.assertTrue(
+            aio_dashboard.should_push(self._v(cpu_temp_c=True), self.BASE))

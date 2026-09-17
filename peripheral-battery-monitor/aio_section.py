@@ -391,7 +391,7 @@ class AioSection(QFrame):
         # change and the LCD's current content cannot be read back, so enabling
         # it is the user's call.
         self._lcd_dashboard_enabled = False
-        self._lcd_last_key = None
+        self._lcd_last_pushed: dict | None = None
         self._lcd_timer = QElapsedTimer()
         self._lcd_failures = 0
         self._lcd_interval_ms = LCD_PUSH_INTERVAL_MS
@@ -1078,7 +1078,7 @@ class AioSection(QFrame):
             return
         self._lcd_dashboard_enabled = enabled
         self._lcd_failures = 0
-        self._lcd_last_key = None
+        self._lcd_last_pushed = None
         if enabled:
             # Push immediately rather than waiting out the first interval.
             self._lcd_timer.invalidate()
@@ -1099,9 +1099,11 @@ class AioSection(QFrame):
         if self._lcd_timer.isValid() and self._lcd_timer.elapsed() < self._lcd_interval_ms:
             return
 
-        key = aio_dashboard.content_key(snapshot)
-        if key == self._lcd_last_key:
-            # Nothing visible changed; restart the clock and write nothing.
+        snapshot = self._lcd_snapshot(snapshot)
+        if not aio_dashboard.should_push(snapshot, self._lcd_last_pushed):
+            # Nothing worth redrawing; restart the clock and write nothing.
+            # This is the main defence against both LCD failure modes, so it is
+            # deliberately the cheapest check that can end the poll.
             self._lcd_timer.restart()
             return
 
@@ -1113,10 +1115,15 @@ class AioSection(QFrame):
         if not argv:
             return
 
+        pushed = dict(snapshot)
+
         def done(ok: bool, _out: bytes, err: str):
             if ok:
                 self._lcd_failures = 0
-                self._lcd_last_key = key
+                # Compare future snapshots against what is actually on screen,
+                # not against the newest sample: otherwise a value creeping past
+                # the threshold in small steps would never trigger a write.
+                self._lcd_last_pushed = pushed
                 return
             self._lcd_failures += 1
             _log.warning("aio_lcd_push_failed n=%d err=%s",
@@ -1127,6 +1134,27 @@ class AioSection(QFrame):
         self._lcd_timer.restart()
         self.queue.submit(argv, aio_queue.PRIORITY_IDLE, on_done=done,
                           coalesce_key="lcd")
+
+    def _lcd_snapshot(self, snapshot: dict) -> dict:
+        """The snapshot as the LCD should show it: CPU smoothed, not raw.
+
+        Raw CPU on this chip swings ~45 C between idle and any compile, which
+        made the push gate useless — it changed on nearly every sample, so the
+        screen was rewritten every interval and the firmware readout flashed
+        through constantly.
+
+        The sparkline already plots CPU as a 60 s trailing mean for exactly this
+        reason ("raw CPU is too spiky to read at this size"). Reusing that mean
+        here keeps the two displays consistent and gives the gate a value that
+        actually holds still. The mean is read, never appended to: feeding the
+        window from here would double-count every sample.
+        """
+        raw = getattr(self, "_cpu_raw", None)
+        if not raw:
+            return snapshot
+        smoothed = dict(snapshot)
+        smoothed["cpu_temp_c"] = sum(raw) / len(raw)
+        return smoothed
 
     def _surrender_dashboard(self):
         """Give up on the dashboard after repeated failures.

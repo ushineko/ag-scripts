@@ -7,11 +7,14 @@ is its dependency, not ours.
 
 Two design points worth keeping:
 
-- **`content_key()` gates pushes.** The LCD's bucket-switching fails
-  intermittently under repeated writes (liquidctl#774), so the cheapest
-  mitigation is not writing. The key is derived at *displayed* precision, so a
-  coolant temperature drifting 36.31 -> 36.34 C produces an identical key and no
-  push. A machine at a steady idle writes nothing at all.
+- **`should_push()` gates pushes.** The LCD misbehaves under repeated writes in
+  two ways — liquidctl#774 bucket-switch failures, and the firmware readout
+  showing through while a bucket is deleted and rewritten — so the cheapest
+  mitigation is not writing. Coolant, pump state and alert state are compared at
+  displayed precision; CPU temperature, which wanders continuously on this
+  hardware and would otherwise defeat the gate entirely, must move
+  `CPU_PUSH_DELTA_C` before it justifies a write. A machine at a steady idle
+  writes nothing at all.
 - **Rendering never raises.** A missing metric draws a placeholder. The LCD is
   decorative; a render failure must not disturb polling or alerting.
 """
@@ -69,11 +72,30 @@ def _fmt_rpm(value) -> str:
     return str(value)
 
 
+# How much a secondary value must move before it justifies an LCD write.
+#
+# Keying the gate on CPU temperature at whole-degree precision was a design
+# error: an idle i9-14900K wanders several degrees continuously, so the key
+# changed on essentially every sample and the gate never suppressed anything.
+# Coolant, which the gate was designed around, moves under a degree an hour.
+#
+# The consequence of a threshold is that the CPU figure on screen can lag the
+# true value by up to this much. It is never a *wrong* reading — it is a real
+# measurement taken at the last push — and CPU is the dashboard's secondary
+# metric. Coolant, pump state and alert state are NOT thresholded: those are
+# what the screen exists to report, and they change slowly enough to key on
+# directly.
+CPU_PUSH_DELTA_C = 5.0
+# Pump rpm jitters by a few counts at a fixed duty; ignore that, but never
+# ignore a transition to or from zero.
+PUMP_PUSH_DELTA_RPM = 50
+
+
 def content_key(snapshot: dict) -> tuple:
     """Identity of what would be drawn, at displayed precision.
 
-    Two snapshots with the same key render identically, so the caller can skip
-    the push entirely. This is the main defence against liquidctl#774.
+    Used for the values that are keyed directly. CPU temperature is compared
+    with a threshold instead — see `should_push`.
     """
     if not isinstance(snapshot, dict):
         return (_PLACEHOLDER, _PLACEHOLDER, _PLACEHOLDER, "ok")
@@ -83,6 +105,57 @@ def content_key(snapshot: dict) -> tuple:
         _fmt_rpm(snapshot.get("pump_rpm")),
         str(snapshot.get("alert_state") or "ok"),
     )
+
+
+def _number(value):
+    """A real number, or None for anything that is not one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def should_push(new: dict, last: dict | None) -> bool:
+    """True when `new` differs from the last pushed snapshot enough to redraw.
+
+    Not writing is the main mitigation for both LCD problems — liquidctl#774
+    bucket-switch failures, and the firmware readout showing through while a
+    bucket is deleted and rewritten — so this decides how often the screen is
+    touched at all.
+
+    Anything that changes what the screen *says* about cooling pushes
+    immediately. Only CPU temperature and small pump jitter are thresholded.
+    """
+    if not isinstance(new, dict):
+        return False
+    if last is None:
+        return True
+
+    # Coolant and alert state: any change at displayed precision is worth a
+    # write. These are the reason the dashboard exists.
+    if _fmt_temp(new.get("coolant_temp_c")) != _fmt_temp(last.get("coolant_temp_c")):
+        return True
+    if str(new.get("alert_state") or "ok") != str(last.get("alert_state") or "ok"):
+        return True
+
+    new_pump, last_pump = new.get("pump_rpm"), last.get("pump_rpm")
+    # A pump starting or stopping is never jitter, and never suppressed.
+    if (new_pump == 0) != (last_pump == 0):
+        return True
+    # Appearing or disappearing is a real change too.
+    if (new_pump is None) != (last_pump is None):
+        return True
+    a, b = _number(new_pump), _number(last_pump)
+    if a is not None and b is not None and abs(a - b) >= PUMP_PUSH_DELTA_RPM:
+        return True
+
+    new_cpu, last_cpu = _number(new.get("cpu_temp_c")), _number(last.get("cpu_temp_c"))
+    if (new_cpu is None) != (last_cpu is None):
+        return True
+    if new_cpu is not None and last_cpu is not None:
+        if abs(new_cpu - last_cpu) >= CPU_PUSH_DELTA_C:
+            return True
+
+    return False
 
 
 def render_dashboard(snapshot: dict) -> QImage:
