@@ -22,10 +22,13 @@ Two design points worth keeping:
 from __future__ import annotations
 
 import logging
+import math
 import os
+import random
 
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import (QColor, QFont, QImage, QPainter, QPen, QRadialGradient,
+                         QLinearGradient)
 
 _log = logging.getLogger(__name__)
 
@@ -48,6 +51,124 @@ _WARN = QColor(230, 180, 90)
 _CRIT = QColor(235, 110, 110)
 
 _PLACEHOLDER = "--"
+
+
+# Starfield background (spec 024).
+#
+# Rendered once and cached: a field regenerated per frame would shimmer between
+# updates, which on a screen that only redraws when something changes would read
+# as a fault rather than decoration. The seed is fixed so the sky is the same
+# after every restart.
+_BG_SEED = 0x5EED
+_STAR_COUNT = 420
+_NEBULAE = (
+    # (cx, cy, radius, rgb) as fractions of SIZE. Placed off-centre and kept
+    # dim: the middle of the panel carries the headline number and must stay the
+    # darkest part of the image.
+    (0.20, 0.22, 0.46, (96, 60, 190)),
+    (0.82, 0.30, 0.40, (30, 120, 170)),
+    (0.68, 0.84, 0.44, (150, 45, 120)),
+    (0.30, 0.78, 0.34, (40, 90, 160)),
+)
+_background_cache: QImage | None = None
+
+
+def _background() -> QImage:
+    """The starfield, built once per process."""
+    global _background_cache
+    if _background_cache is None:
+        _background_cache = _render_background()
+    return _background_cache
+
+
+def _render_background() -> QImage:
+    image = QImage(SIZE, SIZE, QImage.Format.Format_RGB888)
+    image.fill(QColor(6, 7, 12))
+    p = QPainter()
+    if not p.begin(image):
+        return image
+    try:
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Base gradient: slightly lifted at the top, near-black at the bottom.
+        sky = QLinearGradient(0, 0, 0, SIZE)
+        sky.setColorAt(0.0, QColor(14, 16, 30))
+        sky.setColorAt(0.6, QColor(8, 9, 16))
+        sky.setColorAt(1.0, QColor(4, 5, 9))
+        p.fillRect(0, 0, SIZE, SIZE, sky)
+
+        # Nebulae: wide, very low-alpha radial washes.
+        p.setPen(Qt.PenStyle.NoPen)
+        for fx, fy, fr, (r, g, b) in _NEBULAE:
+            cx, cy, rad = fx * SIZE, fy * SIZE, fr * SIZE
+            grad = QRadialGradient(cx, cy, rad)
+            grad.setColorAt(0.0, QColor(r, g, b, 58))
+            grad.setColorAt(0.45, QColor(r, g, b, 22))
+            grad.setColorAt(1.0, QColor(r, g, b, 0))
+            p.setBrush(grad)
+            p.drawEllipse(QPointF(cx, cy), rad, rad)
+
+        _draw_stars(p)
+        _draw_vignette(p)
+    except Exception:
+        _log.warning("background_render_failed", exc_info=True)
+    finally:
+        p.end()
+    return image
+
+
+def _draw_stars(p: QPainter):
+    """Scatter stars, thinned towards the centre so the readout stays legible."""
+    rng = random.Random(_BG_SEED)
+    centre = SIZE / 2.0
+    p.setPen(Qt.PenStyle.NoPen)
+    for _ in range(_STAR_COUNT):
+        x, y = rng.uniform(0, SIZE), rng.uniform(0, SIZE)
+        # Distance from centre, 0 at the middle and 1 at the corners.
+        d = math.hypot(x - centre, y - centre) / (centre * math.sqrt(2))
+        # Reject most stars near the middle rather than dimming them: a faint
+        # star behind a glyph still muddies it.
+        if rng.random() > 0.12 + d * 1.25:
+            continue
+
+        bright = rng.random()
+        radius = 0.4 + bright * 1.5
+        alpha = int(55 + bright * 190)
+        # Faint blue/amber tint on a minority, so it is not a grey pepper field.
+        tint = rng.random()
+        if tint < 0.18:
+            colour = QColor(170, 200, 255, alpha)
+        elif tint < 0.30:
+            colour = QColor(255, 220, 180, alpha)
+        else:
+            colour = QColor(235, 240, 250, alpha)
+        p.setBrush(colour)
+        p.drawEllipse(QPointF(x, y), radius, radius)
+
+        # A handful get a soft halo and a cross flare.
+        if bright > 0.93:
+            halo = QRadialGradient(x, y, radius * 7)
+            halo.setColorAt(0.0, QColor(colour.red(), colour.green(), colour.blue(), 70))
+            halo.setColorAt(1.0, QColor(colour.red(), colour.green(), colour.blue(), 0))
+            p.setBrush(halo)
+            p.drawEllipse(QPointF(x, y), radius * 7, radius * 7)
+            p.setPen(QPen(QColor(colour.red(), colour.green(), colour.blue(), 90), 0.7))
+            flare = radius * 4.5
+            p.drawLine(QPointF(x - flare, y), QPointF(x + flare, y))
+            p.drawLine(QPointF(x, y - flare), QPointF(x, y + flare))
+            p.setPen(Qt.PenStyle.NoPen)
+
+
+def _draw_vignette(p: QPainter):
+    """Darken the middle so white text on stars stays readable."""
+    centre = SIZE / 2.0
+    grad = QRadialGradient(centre, centre, SIZE * 0.52)
+    grad.setColorAt(0.0, QColor(0, 0, 0, 165))
+    grad.setColorAt(0.55, QColor(0, 0, 0, 90))
+    grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(grad)
+    p.drawRect(0, 0, SIZE, SIZE)
 
 
 def _coolant_color(value) -> QColor:
@@ -160,8 +281,7 @@ def should_push(new: dict, last: dict | None) -> bool:
 
 def render_dashboard(snapshot: dict) -> QImage:
     """Draw a snapshot at 640x640. Never raises."""
-    image = QImage(SIZE, SIZE, QImage.Format.Format_RGB888)
-    image.fill(_BG)
+    image = _background().copy()
 
     painter = QPainter()
     if not painter.begin(image):
@@ -186,7 +306,8 @@ def _draw(p: QPainter, snap: dict):
     # Coolant ring: a single arc carrying the headline value's severity, so the
     # state is legible from across a room without reading the number.
     ring = QRectF(_MARGIN, _MARGIN, SIZE - 2 * _MARGIN, SIZE - 2 * _MARGIN)
-    p.setPen(QPen(QColor(32, 36, 44), 14))
+    # Translucent: an opaque track cut a grey band through the starfield.
+    p.setPen(QPen(QColor(120, 132, 156, 70), 14))
     p.drawArc(ring, 0, 360 * 16)
 
     if isinstance(coolant, (int, float)) and not isinstance(coolant, bool):
@@ -210,8 +331,17 @@ def _draw(p: QPainter, snap: dict):
     _centered(p, _MUTED, 27, QRectF(0, 330, SIZE, 38), "°C")
 
     # Secondary row: CPU and pump.
+    #
+    # CPU is deliberately never colour-graded — an i9-14900K boosting to 100 C
+    # is normal here and reddening it would cry wolf on every compile. A pump
+    # reading zero is the opposite: it is the single most alarming number this
+    # screen can show, and drawing it in the calm accent colour while the rest
+    # of the panel turned red was actively misleading.
+    pump = snap.get("pump_rpm")
+    pump_stopped = isinstance(pump, int) and not isinstance(pump, bool) and pump == 0
     _metric(p, 0, "CPU", _fmt_temp(snap.get("cpu_temp_c")), "°C")
-    _metric(p, 1, "PUMP", _fmt_rpm(snap.get("pump_rpm")), "RPM")
+    _metric(p, 1, "PUMP", _fmt_rpm(pump), "RPM",
+            color=_CRIT if pump_stopped else None)
 
     # Alert banner only when something is wrong; a healthy screen stays clean.
     state = snap.get("alert_state")
@@ -235,14 +365,16 @@ def _centered(p: QPainter, color: QColor, size: int, rect: QRectF, text: str,
     p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
 
-def _metric(p: QPainter, slot: int, label: str, value: str, unit: str):
+def _metric(p: QPainter, slot: int, label: str, value: str, unit: str,
+            color: QColor | None = None):
     """One of the two bottom metrics; slot 0 is left, 1 is right."""
     width = (SIZE - 2 * _MARGIN) / 2
     x = _MARGIN + slot * width
 
+    if color is None:
+        color = _ACCENT if value != _PLACEHOLDER else _MUTED
     _centered(p, _MUTED, 18, QRectF(x, 416, width, 28), label)
-    _centered(p, _ACCENT if value != _PLACEHOLDER else _MUTED, 44,
-              QRectF(x, 446, width, 66), value, bold=True)
+    _centered(p, color, 44, QRectF(x, 446, width, 66), value, bold=True)
     _centered(p, _MUTED, 16, QRectF(x, 516, width, 26), unit)
 
 

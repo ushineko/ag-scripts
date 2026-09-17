@@ -1516,7 +1516,9 @@ class PeripheralMonitor(QWidget):
         )
         lcdMenu.addAction(liquidAct)
 
-        imageAct = QAction("Static image…", self)
+        # Labelled for what it accepts, not for one of the two modes it picks:
+        # set_lcd_image reads the file and animates it when it has frames.
+        imageAct = QAction("Image or animated GIF…", self)
         imageAct.triggered.connect(self._prompt_kraken_image)
         lcdMenu.addAction(imageAct)
 
@@ -1544,7 +1546,7 @@ class PeripheralMonitor(QWidget):
     def _prompt_kraken_image(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "LCD image", os.path.expanduser("~"),
-            "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
+            "Images and GIFs (*.png *.jpg *.jpeg *.bmp *.gif);;All files (*)")
         if path:
             # set_lcd_image animates a multi-frame file and uses the cheaper
             # static path otherwise.
