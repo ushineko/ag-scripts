@@ -900,12 +900,23 @@ class AioSection(QFrame):
         applied = False
 
         colour = scene.get("color")
-        if colour and self.apply_lighting_color(colour):
+        lit = bool(colour) and bool(self.apply_lighting_color(colour))
+        if lit:
             applied = True
 
         lcd = scene.get("lcd")
         if lcd:
             applied = self._apply_scene_lcd(lcd) or applied
+
+        # A scene naming a colour that reached no device has not been applied,
+        # whatever the LCD did. Reporting success there is what let a completely
+        # dark lighting stack look healthy from the hotkey, the menu and D-Bus
+        # alike. See spec 026.
+        if colour and not lit:
+            state, reason = self.lighting_health()
+            _log.warning("scene_lighting_failed slot=%s state=%s reason=%s",
+                         slot, state, reason)
+            return False
         return applied
 
     def _apply_scene_lcd(self, lcd: str) -> bool:
@@ -924,6 +935,36 @@ class AioSection(QFrame):
     # ------------------------------------------------------------------
     # Lighting profiles via OpenRGB (spec 023)
     # ------------------------------------------------------------------
+
+    LIGHTING_OK = "ok"
+    LIGHTING_NO_SERVER = "no-server"
+    LIGHTING_NO_DEVICES = "no-devices"
+    LIGHTING_NO_SCOPED = "no-scoped-devices"
+
+    def lighting_health(self) -> tuple[str, str]:
+        """Classify the lighting stack. Returns (state, human-readable reason).
+
+        Exists because every layer reported success against an empty device list
+        after a reboot: the OpenRGB server had started before its devices were
+        enumerable, and since it detects only once, the truncated list was frozen
+        for the session. Nothing downstream could tell "no devices" from "nothing
+        to do". See spec 026.
+        """
+        if not rgb_openrgb.server_alive():
+            return self.LIGHTING_NO_SERVER, (
+                "OpenRGB server is not reachable on "
+                f"{rgb_openrgb.OPENRGB_HOST}:{rgb_openrgb.OPENRGB_PORT}")
+        if not self._lighting_devices:
+            return self.LIGHTING_NO_DEVICES, (
+                "OpenRGB server is up but the monitor has no device list yet")
+        scoped = rgb_openrgb.scoped_devices(self._lighting_devices,
+                                            self._lighting_scope)
+        if not scoped:
+            return self.LIGHTING_NO_SCOPED, (
+                f"OpenRGB reports {len(self._lighting_devices)} device(s) but none "
+                "match the lighting scope - the server most likely started before "
+                "the RGB hardware was enumerable; restart openrgb-server.service")
+        return self.LIGHTING_OK, f"{len(scoped)} device(s) in scope"
 
     def lighting_available(self) -> bool:
         """True when the OpenRGB server is reachable.
@@ -985,7 +1026,12 @@ class AioSection(QFrame):
         devices = rgb_openrgb.scoped_devices(
             self._lighting_devices, scope or self._lighting_scope)
         if not devices:
-            _log.warning("lighting_no_devices_in_scope")
+            state, reason = self.lighting_health()
+            _log.warning("lighting_cannot_apply state=%s reason=%s", state, reason)
+            # Re-read the device list so a later attempt can succeed, but do not
+            # pretend this one did anything.
+            if state in (self.LIGHTING_NO_DEVICES, self.LIGHTING_NO_SCOPED):
+                self.refresh_lighting_devices()
             return 0
 
         sent = 0
@@ -1012,6 +1058,12 @@ class AioSection(QFrame):
                     None if ok else _log.warning(
                         "lighting_write_failed device=%s err=%s", n, (err or "")[:160])
                 ),
+                # Lighting is a state, not a sequence. Three scenes pressed in a
+                # second is 12 jobs against MAX_PENDING=8, and the overflow path
+                # was dropping writes arbitrarily. Keyed per device, a newer scene
+                # supersedes the pending one instead, so the result is whatever
+                # was asked for last. See spec 026.
+                coalesce_key=f"rgb:{name}",
             )
             sent += 1
 
@@ -1074,7 +1126,7 @@ class AioSection(QFrame):
         """
         return self._last_snapshot.get("cooler_source") == "liquidctl"
 
-    def _submit_write(self, argv, description: str):
+    def _submit_write(self, argv, description: str, coalesce_key: str | None = None):
         """Queue a user-initiated write ahead of polling."""
         if not argv:
             _log.warning("aio_write_rejected what=%s", description)
@@ -1084,7 +1136,8 @@ class AioSection(QFrame):
             if not ok:
                 _log.warning("aio_write_failed what=%s err=%s", description,
                              (err or "")[:200])
-        return self.queue.submit(argv, aio_queue.PRIORITY_WRITE, on_done=done)
+        return self.queue.submit(argv, aio_queue.PRIORITY_WRITE, on_done=done,
+                                 coalesce_key=coalesce_key)
 
     def set_lcd_brightness(self, level: int):
         return self._submit_write(
@@ -1097,15 +1150,16 @@ class AioSection(QFrame):
     def set_lcd_liquid(self):
         """Hand the LCD back to the firmware's own coolant readout."""
         self.set_dashboard_enabled(False)
-        return self._submit_write(aio_liquid.lcd_liquid_argv(), "lcd liquid")
+        return self._submit_write(aio_liquid.lcd_liquid_argv(), "lcd liquid", coalesce_key="lcd")
 
     def set_lcd_static(self, path: str):
         self.set_dashboard_enabled(False)
-        return self._submit_write(aio_liquid.lcd_static_argv(path), "lcd static")
+        return self._submit_write(
+            aio_liquid.lcd_static_argv(path), "lcd static", coalesce_key="lcd")
 
     def set_lcd_gif(self, path: str):
         self.set_dashboard_enabled(False)
-        return self._submit_write(aio_liquid.lcd_gif_argv(path), "lcd gif")
+        return self._submit_write(aio_liquid.lcd_gif_argv(path), "lcd gif", coalesce_key="lcd")
 
     def set_lcd_image(self, path: str):
         """Show an image, animating it when it actually has frames.

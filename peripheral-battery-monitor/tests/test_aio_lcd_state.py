@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+import unittest.mock
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(TEST_DIR)
@@ -67,7 +68,8 @@ class TestImageRouting(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.section = aio_section.AioSection()
         self.calls = []
-        self.section._submit_write = lambda argv, d: self.calls.append((d, argv))
+        self.section._submit_write = (
+            lambda argv, d, **kw: self.calls.append((d, argv)))
 
     def tearDown(self):
         self.dir.cleanup()
@@ -90,7 +92,7 @@ class TestDashboardStateIsSingleSourced(unittest.TestCase):
 
     def setUp(self):
         self.section = aio_section.AioSection()
-        self.section._submit_write = lambda argv, d: True
+        self.section._submit_write = lambda argv, d, **kw: True
         self.events = []
         self.section.dashboardChanged.connect(self.events.append)
 
@@ -192,7 +194,7 @@ class TestLightingPersistence(unittest.TestCase):
         import rgb_openrgb
         self.rgb = rgb_openrgb
         self.section = aio_section.AioSection()
-        self.section._submit_write = lambda argv, d: True
+        self.section._submit_write = lambda argv, d, **kw: True
         # apply_lighting submits through the queue directly, not _submit_write.
         # Without stubbing this seam the test spawns real openrgb processes and
         # Qt aborts when the section is destroyed while they are still running.
@@ -257,3 +259,102 @@ class TestLightingPersistence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLightingHealthAndHonesty(unittest.TestCase):
+    """026: the failures that hid behind reported success.
+
+    After a reboot the OpenRGB server had started before its devices were
+    enumerable. Every layer then operated correctly on an empty device list and
+    reported success, so lighting silently did nothing from the hotkeys, the
+    menu and D-Bus alike.
+    """
+
+    def setUp(self):
+        import rgb_openrgb
+        self.rgb = rgb_openrgb
+        self.section = aio_section.AioSection()
+        self.sent = []
+        self.section.queue.submit = (
+            lambda argv, pri, **k: self.sent.append((argv, k)) or True)
+        self.section._submit_write = lambda argv, d, **kw: True
+        self.devices = rgb_openrgb.parse_detailed(
+            "0: MSI GeForce RTX 4090 Suprim Liquid X\n"
+            "  Type:           GPU\n"
+            "  Modes: [Off] Direct Breathing\n"
+            "2: NZXT Kraken 2024 ELITE Series RGB\n"
+            "  Type:           LED Strip\n"
+            "  Modes: [Direct] Static Fading\n"
+        )
+
+    # -- health classification ------------------------------------------
+
+    def test_health_reports_no_server(self):
+        self.section._lighting_devices = []
+        with unittest.mock.patch.object(self.rgb, "server_alive", return_value=False):
+            state, reason = self.section.lighting_health()
+        self.assertEqual(state, self.section.LIGHTING_NO_SERVER)
+        self.assertIn("not reachable", reason)
+
+    def test_health_reports_no_devices(self):
+        self.section._lighting_devices = []
+        with unittest.mock.patch.object(self.rgb, "server_alive", return_value=True):
+            state, _ = self.section.lighting_health()
+        self.assertEqual(state, self.section.LIGHTING_NO_DEVICES)
+
+    def test_health_reports_devices_present_but_none_in_scope(self):
+        """The real post-reboot state: a server up, but only peripherals found."""
+        self.section._lighting_devices = self.rgb.parse_detailed(
+            "1: G502 X PLUS\n  Type:           Mouse\n  Modes: [Direct] Static\n")
+        with unittest.mock.patch.object(self.rgb, "server_alive", return_value=True):
+            state, reason = self.section.lighting_health()
+        self.assertEqual(state, self.section.LIGHTING_NO_SCOPED)
+        self.assertIn("restart openrgb-server", reason)
+
+    def test_health_ok(self):
+        self.section._lighting_devices = self.devices
+        with unittest.mock.patch.object(self.rgb, "server_alive", return_value=True):
+            state, _ = self.section.lighting_health()
+        self.assertEqual(state, self.section.LIGHTING_OK)
+
+    # -- a scene must not claim success it did not achieve ---------------
+
+    def test_scene_with_no_devices_reports_failure(self):
+        """The core regression: this returned True over D-Bus with nothing lit."""
+        self.section.set_scenes({"1": {"color": "red", "lcd": "dashboard"}})
+        self.section._lighting_devices = []
+        with unittest.mock.patch.object(self.rgb, "server_alive", return_value=True):
+            self.assertFalse(self.section.apply_scene(1))
+
+    def test_scene_succeeds_when_lighting_lands(self):
+        self.section.set_scenes({"1": {"color": "red", "lcd": "dashboard"}})
+        self.section._lighting_devices = self.devices
+        self.assertTrue(self.section.apply_scene(1))
+
+    def test_lcd_only_scene_still_succeeds_without_lighting(self):
+        """A scene naming no colour is not a lighting failure."""
+        self.section.set_scenes({"1": {"lcd": "dashboard"}})
+        self.section._lighting_devices = []
+        self.assertTrue(self.section.apply_scene(1))
+
+    def test_apply_lighting_with_no_devices_returns_zero(self):
+        self.section._lighting_devices = []
+        with unittest.mock.patch.object(self.rgb, "server_alive", return_value=True):
+            self.assertEqual(self.section.apply_lighting_color("red"), 0)
+
+    # -- coalescing ------------------------------------------------------
+
+    def test_lighting_writes_coalesce_per_device(self):
+        """Rapid scenes must converge on the last, not overflow the queue."""
+        self.section._lighting_devices = self.devices
+        self.section.apply_lighting_color("red")
+        keys = [k.get("coalesce_key") for _, k in self.sent]
+        self.assertTrue(all(k and k.startswith("rgb:") for k in keys), keys)
+        self.assertEqual(len(set(keys)), len(keys), "one key per device")
+
+    def test_three_scenes_do_not_exceed_one_key_per_device(self):
+        self.section._lighting_devices = self.devices
+        for colour in ("red", "green", "blue"):
+            self.section.apply_lighting_color(colour)
+        keys = {k.get("coalesce_key") for _, k in self.sent}
+        self.assertEqual(len(keys), 2, "two devices -> two keys regardless of presses")

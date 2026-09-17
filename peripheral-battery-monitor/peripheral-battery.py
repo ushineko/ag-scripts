@@ -446,6 +446,14 @@ def fetch_claude_usage(store_dir=None, use_usage_backoff: bool = True) -> dict |
 
 
 def setup_logging(debug_mode=False):
+    # Applied to stdlib records so they carry the same fields structlog adds to
+    # its own. Order matches the structlog chain below.
+    _FOREIGN_PRE_CHAIN = [
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+    ]
+
     log_file = os.path.expanduser("~/.local/state/peripheral-battery-monitor/peripheral_battery.log")
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     
@@ -456,10 +464,17 @@ def setup_logging(debug_mode=False):
             "json": {
                 "()": structlog.stdlib.ProcessorFormatter,
                 "processor": structlog.processors.JSONRenderer(),
+                # Records from logging.getLogger(__name__) - which is every module
+                # outside this file - do not pass through structlog's processor
+                # chain. Without this they render as a bare {"event": "..."} with
+                # no timestamp, level or logger name, which made a whole evening's
+                # lighting logs impossible to order in time or filter. See spec 026.
+                "foreign_pre_chain": _FOREIGN_PRE_CHAIN,
             },
             "console": {
                 "()": structlog.stdlib.ProcessorFormatter,
                 "processor": structlog.dev.ConsoleRenderer(colors=True),
+                "foreign_pre_chain": _FOREIGN_PRE_CHAIN,
             },
         },
         "handlers": {
@@ -715,6 +730,10 @@ class PeripheralMonitor(QWidget):
             self.settings.get("lighting_last_color"),
             self.settings.get("lighting_scope"))
         self.aio_section.lightingChanged.connect(self._on_lighting_changed)
+        # Populate the lighting device list up front. It used to be filled only
+        # when the menu was first opened, so a scene fired from a hotkey before
+        # that found an empty list and silently did nothing. See spec 026.
+        QTimer.singleShot(5000, self._prime_lighting_devices)
         # Scenes (spec 025): seed defaults once, then publish the D-Bus endpoint
         # the numpad shortcuts call. A registration failure costs the shortcuts
         # and nothing else.
@@ -1525,6 +1544,22 @@ class PeripheralMonitor(QWidget):
             lambda checked=False: self.aio_section.refresh_lighting_devices()
         )
         lightingMenu.addAction(refreshAct)
+
+    def _prime_lighting_devices(self):
+        """Read the OpenRGB device list once at startup and report a bad one.
+
+        Deferred a few seconds because OpenRGB's own detection takes ~9 s from
+        its service start; priming immediately would just cache the same empty
+        list this is meant to avoid.
+        """
+        def done(devices):
+            state, reason = self.aio_section.lighting_health()
+            log = structlog.get_logger()
+            if state == self.aio_section.LIGHTING_OK:
+                log.info("lighting_ready", detail=reason)
+            else:
+                log.warning("lighting_degraded", state=state, detail=reason)
+        self.aio_section.refresh_lighting_devices(on_done=done)
 
     def _on_lighting_changed(self, value: str):
         """Persist the last applied lighting colour, however it was applied."""
