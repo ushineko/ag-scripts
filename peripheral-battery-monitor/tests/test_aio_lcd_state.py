@@ -165,42 +165,79 @@ class TestRefreshInterval(unittest.TestCase):
                                 aio_section.POLL_INTERVAL_MS)
 
 
-class TestMultiDeviceColour(unittest.TestCase):
-    """022 AC9/AC10/AC11 — not verifiable on this hardware; stubs stand in."""
+class TestLightingPersistence(unittest.TestCase):
+    """023 AC7 - scope and last-applied colour survive a restart.
 
-    def tearDown(self):
-        aio_liquid._color_devices_cache = None
+    Lives here rather than in test_rgb_openrgb.py because it needs an
+    AioSection, and this module already owns the module-level QApplication.
+    Creating one per TestCase aborts Qt during teardown.
+    """
 
-    def test_match_tokens_are_unique(self):
-        devices = [
-            {"match": None, "description": "NZXT Kraken 2024 Elite RGB", "channels": ["r"]},
-            {"match": None, "description": "NZXT RGB & Fan Controller", "channels": ["led1"]},
-        ]
-        aio_liquid._assign_match_tokens(devices)
-        for device in devices:
-            hits = sum(1 for d in devices
-                       if device["match"] in d["description"].lower())
-            self.assertEqual(hits, 1, f"{device['match']!r} must select one device")
+    def setUp(self):
+        import rgb_openrgb
+        self.rgb = rgb_openrgb
+        self.section = aio_section.AioSection()
+        self.section._submit_write = lambda argv, d: True
+        # apply_lighting submits through the queue directly, not _submit_write.
+        # Without stubbing this seam the test spawns real openrgb processes and
+        # Qt aborts when the section is destroyed while they are still running.
+        self.sent = []
+        self.section.queue.submit = (
+            lambda argv, pri, **k: self.sent.append(argv) or True)
+        self.events = []
+        self.section.lightingChanged.connect(self.events.append)
+        self.detailed = rgb_openrgb.parse_detailed(
+            "0: MSI GeForce RTX 4090 Suprim Liquid X\n"
+            "  Type:           GPU\n"
+            "  Modes: [Off] Direct Breathing\n"
+            "2: NZXT Kraken 2024 ELITE Series RGB\n"
+            "  Type:           LED Strip\n"
+            "  Modes: [Direct] Static Fading\n"
+        )
 
-    def test_ambiguous_names_fall_back_to_address(self):
-        """"NZXT HUE 2" is a substring of "NZXT HUE 2 Ambient"."""
-        devices = [
-            {"match": None, "address": "/dev/hidraw9",
-             "description": "NZXT HUE 2", "channels": ["led"]},
-            {"match": None, "address": "/dev/hidraw10",
-             "description": "NZXT HUE 2 Ambient", "channels": ["led"]},
-        ]
-        aio_liquid._assign_match_tokens(devices)
-        selector = aio_liquid.device_selector(devices[0])
-        self.assertEqual(selector, {"address": "/dev/hidraw9"})
-        aio_liquid._color_devices_cache = devices
-        argv = aio_liquid.color_argv("led", "fixed", [(255, 0, 0)], **selector)
-        self.assertEqual(argv[:3], ["liquidctl", "--address", "/dev/hidraw9"])
+    def test_scope_defaults_to_case_interior(self):
+        self.assertEqual(self.section.lighting_scope, self.rgb.DEFAULT_SCOPE)
 
-    def test_unambiguous_device_uses_match_not_address(self):
-        device = {"match": "kraken", "address": "/dev/hidraw1",
-                  "ambiguous": False, "description": "NZXT Kraken", "channels": ["ring"]}
-        self.assertEqual(aio_liquid.device_selector(device), {"match": "kraken"})
+    def test_scope_can_be_replaced(self):
+        self.assertTrue(self.section.set_lighting_scope(("g502",)))
+        self.assertEqual(self.section.lighting_scope, ("g502",))
+
+    def test_bad_scope_rejected(self):
+        before = self.section.lighting_scope
+        for bad in ((), None, ("", "x"), (1, 2)):
+            with self.subTest(bad=bad):
+                self.assertFalse(self.section.set_lighting_scope(bad))
+        self.assertEqual(self.section.lighting_scope, before)
+
+    def test_applying_a_colour_emits_for_persistence(self):
+        self.section._lighting_devices = self.detailed
+        self.assertGreater(self.section.apply_lighting_color("red"), 0)
+        self.assertEqual(self.events, ["red"])
+        self.assertEqual(self.section.lighting_last_color, "red")
+
+    def test_failed_apply_does_not_persist(self):
+        self.section._lighting_devices = []
+        self.assertEqual(self.section.apply_lighting_color("red"), 0)
+        self.assertEqual(self.events, [])
+        self.assertIsNone(self.section.lighting_last_color)
+
+    def test_per_device_modes_are_used(self):
+        """The GPU has no Static; it must get Direct, not a broadcast mode."""
+        self.section._lighting_devices = self.detailed
+        self.section.apply_lighting_color("red")
+        modes = [a[a.index("--mode") + 1] for a in self.sent]
+        self.assertIn("Direct", modes)
+        self.assertIn("Static", modes)
+
+    def test_restore_seeds_state_without_touching_hardware(self):
+        self.section.restore_lighting_state("blue", ("kraken",))
+        self.assertEqual(self.section.lighting_last_color, "blue")
+        self.assertEqual(self.section.lighting_scope, ("kraken",))
+        self.assertEqual(self.sent, [], "restore must not re-apply on startup")
+
+    def test_restore_ignores_an_unparseable_colour(self):
+        self.section.restore_lighting_state("not-a-colour")
+        self.assertIsNone(self.section.lighting_last_color)
 
 
 if __name__ == "__main__":

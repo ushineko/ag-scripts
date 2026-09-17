@@ -24,6 +24,7 @@ import accounts
 import usage_cache
 import aio_color
 import aio_liquid
+import rgb_openrgb
 import aio_section as aio_section_mod
 from aio_section import AioSection
 from bandwidth_section import BandwidthSection
@@ -707,6 +708,10 @@ class PeripheralMonitor(QWidget):
         self.aio_section.set_dashboard_enabled(
             bool(self.settings.get("aio_lcd_dashboard", False)))
         self.aio_section.dashboardChanged.connect(self._on_aio_dashboard_changed)
+        self.aio_section.restore_lighting_state(
+            self.settings.get("lighting_last_color"),
+            self.settings.get("lighting_scope"))
+        self.aio_section.lightingChanged.connect(self._on_lighting_changed)
         self.aio_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -1404,49 +1409,83 @@ class PeripheralMonitor(QWidget):
         not supported by the device" — so on this hardware the menu is LCD only.
         Offering buttons that cannot work is worse than offering none.
         """
-        if aio_liquid.color_supported():
-            self._build_kraken_color_menus(parent_menu)
+        self._build_lighting_menu(parent_menu)
         self._build_kraken_lcd_menu(parent_menu)
 
-    def _build_kraken_color_menus(self, parent_menu):
-        colourMenu = parent_menu.addMenu("Colour")
-        for name in sorted(aio_liquid.NAMED_COLORS):
+    def _build_lighting_menu(self, parent_menu):
+        """Lighting profiles across every in-scope device (spec 023).
+
+        Driven by OpenRGB, not liquidctl: liquidctl has no colour channels for
+        this cooler, while OpenRGB reaches the Kraken (and the fans chained into
+        it), the GPU and the motherboard. Default scope is the case interior;
+        peripherals keep their own lighting.
+        """
+        if not self.aio_section.lighting_available():
+            action = QAction("Lighting unavailable (OpenRGB server down)", self)
+            action.setEnabled(False)
+            parent_menu.addAction(action)
+            return
+
+        devices = self.aio_section.lighting_devices
+        if not devices:
+            # First open after start: kick a refresh so the next open is populated.
+            self.aio_section.refresh_lighting_devices()
+            action = QAction("Lighting (detecting…)", self)
+            action.setEnabled(False)
+            parent_menu.addAction(action)
+            return
+
+        lightingMenu = parent_menu.addMenu("Lighting")
+        in_scope = rgb_openrgb.scoped_devices(devices)
+        header = QAction(f"{len(in_scope)} device(s): "
+                         + ", ".join(d["name"].split()[0] for d in in_scope), self)
+        header.setEnabled(False)
+        lightingMenu.addAction(header)
+        lightingMenu.addSeparator()
+
+        for name in sorted(aio_color.NAMED_COLORS):
             if name == "off":
                 continue
             action = QAction(name.capitalize(), self)
             action.triggered.connect(
-                lambda checked=False, n=name: self.aio_section.kraken_color(n)
+                lambda checked=False, n=name: self.aio_section.apply_lighting_color(n)
             )
-            colourMenu.addAction(action)
-        colourMenu.addSeparator()
+            lightingMenu.addAction(action)
+
+        lightingMenu.addSeparator()
         customAct = QAction("Custom…", self)
-        customAct.triggered.connect(self._prompt_kraken_color)
-        colourMenu.addAction(customAct)
+        customAct.triggered.connect(self._prompt_lighting_color)
+        lightingMenu.addAction(customAct)
         offAct = QAction("Off", self)
         offAct.triggered.connect(
-            lambda checked=False: self.aio_section.kraken_color("off")
+            lambda checked=False: self.aio_section.apply_lighting("off")
         )
-        colourMenu.addAction(offAct)
+        lightingMenu.addAction(offAct)
 
-        modes = aio_liquid.effect_modes()
-        if modes["plain"] or modes["colored"]:
-            effectMenu = parent_menu.addMenu("Effect")
-            # Plain effects ignore colour entirely (rainbow/spectrum variants).
-            for name in modes["plain"]:
-                action = QAction(name, self)
-                action.triggered.connect(
-                    lambda checked=False, n=name: self.aio_section.kraken_effect(n)
-                )
-                effectMenu.addAction(action)
-            if modes["plain"] and modes["colored"]:
-                effectMenu.addSeparator()
-            # Colour-taking effects are paired with the last chosen colour.
-            for name in modes["colored"]:
-                action = QAction(f"{name}…", self)
-                action.triggered.connect(
-                    lambda checked=False, n=name: self._prompt_kraken_effect(n)
-                )
-                effectMenu.addAction(action)
+        lightingMenu.addSeparator()
+        refreshAct = QAction("Re-detect devices", self)
+        refreshAct.triggered.connect(
+            lambda checked=False: self.aio_section.refresh_lighting_devices()
+        )
+        lightingMenu.addAction(refreshAct)
+
+    def _on_lighting_changed(self, value: str):
+        """Persist the last applied lighting colour, however it was applied."""
+        if self.settings.get("lighting_last_color") == value:
+            return
+        self.settings["lighting_last_color"] = value
+        self.save_settings()
+
+    def _prompt_lighting_color(self):
+        value, ok = QInputDialog.getText(
+            self, "Lighting Colour", "Colour name or hex (e.g. red, #ff8800):")
+        if not ok or not value.strip():
+            return
+        value = value.strip()
+        if aio_color.parse_color(value) is None:
+            structlog.get_logger().warning("lighting_bad_colour", value=value)
+            return
+        self.aio_section.apply_lighting_color(value)
 
     def _build_kraken_lcd_menu(self, parent_menu):
         lcdMenu = parent_menu.addMenu("LCD")
@@ -1501,25 +1540,6 @@ class PeripheralMonitor(QWidget):
     def _toggle_aio_dashboard(self, checked: bool):
         # Persistence happens in _on_aio_dashboard_changed, via the signal.
         self.aio_section.set_dashboard_enabled(bool(checked))
-
-    def _prompt_kraken_color(self):
-        value, ok = QInputDialog.getText(
-            self, "AIO Colour", "Hex colour (e.g. #ff8800):")
-        if not ok or not value.strip():
-            return
-        value = value.strip()
-        if aio_color.parse_color(value) is None:
-            structlog.get_logger().warning("aio_rgb_bad_colour", value=value)
-            return
-        self.aio_section.kraken_color(value)
-
-    def _prompt_kraken_effect(self, mode: str):
-        """Colour-taking effects need a colour; ask for one."""
-        value, ok = QInputDialog.getText(
-            self, f"AIO Effect: {mode}", "Colour name or hex (e.g. red, #ff8800):")
-        if not ok or not value.strip():
-            return
-        self.aio_section.kraken_effect(mode, value.strip())
 
     def _prompt_kraken_image(self):
         path, _ = QFileDialog.getOpenFileName(

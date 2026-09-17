@@ -54,6 +54,7 @@ import aio_dashboard
 import aio_liquid
 import aio_queue
 import aio_reader
+import rgb_openrgb
 
 _log = logging.getLogger(__name__)
 
@@ -302,6 +303,9 @@ class AioSection(QFrame):
     # both follow this rather than tracking the state separately — two copies of
     # one fact is exactly the bug spec 022 fixes.
     dashboardChanged = pyqtSignal(bool)
+    # Emitted with the colour name whenever a lighting profile is applied,
+    # so settings persistence follows the section rather than each call site.
+    lightingChanged = pyqtSignal(str)
 
     """AIO section frame. See the module docstring for the public API."""
 
@@ -380,6 +384,10 @@ class AioSection(QFrame):
         self._lcd_failures = 0
         self._lcd_interval_ms = LCD_PUSH_INTERVAL_MS
         self._last_snapshot: dict = {}
+        # OpenRGB device list, populated asynchronously (spec 023).
+        self._lighting_devices: list[dict] = []
+        self._lighting_scope: tuple = rgb_openrgb.DEFAULT_SCOPE
+        self._lighting_last_color: str | None = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(IDLE_POLL_INTERVAL_MS)
@@ -849,6 +857,129 @@ class AioSection(QFrame):
         _log.warning("aio_alert summary=%s body=%s critical=%s", summary, body, critical)
 
     # ------------------------------------------------------------------
+    # Lighting profiles via OpenRGB (spec 023)
+    # ------------------------------------------------------------------
+
+    def lighting_available(self) -> bool:
+        """True when the OpenRGB server is reachable.
+
+        Checked by socket rather than by running a command: with the server
+        down, `openrgb --client` silently falls back to a ~9 s local detection
+        and still exits 0, so success proves nothing about the server.
+        """
+        return rgb_openrgb.server_alive()
+
+    def refresh_lighting_devices(self, on_done=None):
+        """Re-read the device list, modes included, through the queue."""
+        def done(ok: bool, out: bytes, err: str):
+            devices = rgb_openrgb.parse_detailed(out) if ok else []
+            if not ok:
+                _log.warning("lighting_list_failed err=%s", (err or "")[:200])
+            self._lighting_devices = devices
+            if on_done is not None:
+                on_done(devices)
+
+        return self.queue.submit(rgb_openrgb.detail_argv(),
+                                 aio_queue.PRIORITY_READ, on_done=done,
+                                 coalesce_key="rgb-list")
+
+    @property
+    def lighting_devices(self) -> list[dict]:
+        return list(self._lighting_devices)
+
+    def apply_lighting(self, intent: str, rgb: tuple[int, int, int] | None = None,
+                       scope: tuple[str, ...] | None = None) -> int:
+        """Apply one lighting intent across every in-scope device.
+
+        Each device gets the mode *it* supports for the intent, because mode
+        vocabularies do not overlap: the RTX 4090 has no `Static` and the Kraken
+        has no `Off`. Broadcasting a single mode is how the GPU was switched off
+        during investigation — it rejected the mode and went dark regardless. A
+        device that cannot express the intent is skipped and logged, rather than
+        failing the whole profile.
+
+        Returns how many devices were addressed.
+        """
+        devices = rgb_openrgb.scoped_devices(
+            self._lighting_devices, scope or self._lighting_scope)
+        if not devices:
+            _log.warning("lighting_no_devices_in_scope")
+            return 0
+
+        sent = 0
+        for device in devices:
+            mode = rgb_openrgb.resolve_mode(device.get("modes", []), intent)
+            if mode is None:
+                _log.warning("lighting_intent_unsupported device=%s intent=%s",
+                             device.get("name"), intent)
+                continue
+
+            colour = rgb
+            if intent == "off":
+                # A device with no Off mode expresses it as its solid mode set
+                # to black; the Kraken is exactly this case.
+                colour = (0, 0, 0) if mode.lower() != "off" else None
+
+            argv = rgb_openrgb.set_color_argv(device["name"], mode, colour)
+            if argv is None:
+                continue
+            name = device["name"]
+            self.queue.submit(
+                argv, aio_queue.PRIORITY_WRITE,
+                on_done=lambda ok, out, err, n=name: (
+                    None if ok else _log.warning(
+                        "lighting_write_failed device=%s err=%s", n, (err or "")[:160])
+                ),
+            )
+            sent += 1
+        return sent
+
+    def apply_lighting_color(self, value: str,
+                             scope: tuple[str, ...] | None = None) -> int:
+        """Solid colour by name or #rrggbb across the scope; 'off' blanks it."""
+        rgb = aio_color.parse_color(value)
+        if rgb is None:
+            _log.warning("lighting_bad_color value=%r", value)
+            return 0
+        if rgb == (0, 0, 0):
+            count = self.apply_lighting("off", scope=scope)
+        else:
+            count = self.apply_lighting("solid", rgb, scope=scope)
+        if count:
+            self._lighting_last_color = value
+            self.lightingChanged.emit(value)
+        return count
+
+    @property
+    def lighting_last_color(self) -> str | None:
+        """Last colour applied, for the menu to mark and settings to persist."""
+        return self._lighting_last_color
+
+    @property
+    def lighting_scope(self) -> tuple:
+        return tuple(self._lighting_scope)
+
+    def set_lighting_scope(self, scope) -> bool:
+        """Replace the device scope a profile drives."""
+        if not scope or not all(isinstance(t, str) and t for t in scope):
+            _log.warning("lighting_bad_scope scope=%r", scope)
+            return False
+        self._lighting_scope = tuple(scope)
+        return True
+
+    def restore_lighting_state(self, last_color: str | None, scope=None):
+        """Re-seed remembered state at startup without touching the hardware.
+
+        Deliberately does not re-apply: lighting is physical state that survived
+        the restart, and stamping over whatever the devices are showing just
+        because the app restarted would be surprising.
+        """
+        if scope:
+            self.set_lighting_scope(scope)
+        if last_color and aio_color.parse_color(last_color) is not None:
+            self._lighting_last_color = last_color
+
+    # ------------------------------------------------------------------
     # Kraken RGB and LCD control (spec 021)
     # ------------------------------------------------------------------
 
@@ -871,24 +1002,6 @@ class AioSection(QFrame):
                 _log.warning("aio_write_failed what=%s err=%s", description,
                              (err or "")[:200])
         return self.queue.submit(argv, aio_queue.PRIORITY_WRITE, on_done=done)
-
-    def kraken_color(self, value: str, channel: str = aio_liquid.DEFAULT_COLOR_CHANNEL):
-        """Solid colour by name or #rrggbb; 'off' blanks the channel."""
-        return self._submit_write(
-            aio_liquid.solid_color_argv(channel, value), f"color {value}")
-
-    def kraken_effect(self, mode: str, value: str | None = None,
-                      channel: str = aio_liquid.DEFAULT_COLOR_CHANNEL):
-        """Named effect, optionally carrying a colour for modes that take one."""
-        colors = []
-        if value:
-            rgb = aio_color.parse_color(value)
-            if rgb is None:
-                _log.warning("aio_effect_bad_color value=%r", value)
-                return False
-            colors = [rgb]
-        return self._submit_write(
-            aio_liquid.color_argv(channel, mode, colors), f"effect {mode}")
 
     def set_lcd_brightness(self, level: int):
         return self._submit_write(
