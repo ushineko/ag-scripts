@@ -1,11 +1,13 @@
 """Unit tests for herdr-resurrect pure logic (no live herdr needed)."""
 
+import argparse
 import os
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
+import herdr_api  # noqa: E402
 import snapshot  # noqa: E402
 import whitelist  # noqa: E402
 from snapshot import PaneSnap  # noqa: E402
@@ -316,6 +318,257 @@ class TestRestoreFromLabels(unittest.TestCase):
         pr.assert_called_once_with("default", "w1:p2", "py -m app")
         self.assertEqual(result.labels_restored,
                          [("panel:usage", "w1:p2", "py -m app")])
+
+
+class TestMergePreservingUnscannedSessions(unittest.TestCase):
+    """A session herdr has not started reports no panes. That silence must not
+    read as 'its panes were closed' -- the bug that deleted every `work` entry
+    from the snapshot ~31 min after each boot (spec 002)."""
+
+    def test_unscanned_session_preserved_past_grace_without_mass_drop(self):
+        # 3 work entries out of 24: ratio 0.125, well under the mass-drop
+        # threshold, and long past boot grace. Old code dropped them for good.
+        prev = ([_snap(session="default", pane=f"w1:p{i}", name="btop")
+                 for i in range(1, 22)]
+                + [_snap(session="work", pane=f"w1:q{i}", name="yazi")
+                   for i in range(1, 4)])
+        new = [s for s in prev if s.session == "default"]
+        live = [_live(pane=f"w1:p{i}", fg=("btop", ["btop"])) for i in range(1, 22)]
+        merged = resurrect._merge_preserving(
+            new, prev, live, uptime_sec=99999, scanned_sessions={"default"})
+        self.assertEqual(len(merged), 24)
+        self.assertEqual(
+            sorted(s.pane_id for s in merged if s.session == "work"),
+            ["w1:q1", "w1:q2", "w1:q3"])
+
+    def test_unscanned_session_excluded_from_mass_drop_ratio(self):
+        # 1 of 4 scanned panes closed (0.25) plus 4 unscanned entries. Counting
+        # the unscanned ones would give 5/8 >= 0.5 and wrongly resurrect the
+        # deliberately-closed yazi.
+        default = [_snap(session="default", pane=f"w1:p{i}", name=n)
+                   for i, n in enumerate(["btop", "nvtop", "lazygit", "yazi"], 1)]
+        work = [_snap(session="work", pane=f"w1:q{i}", name="btop")
+                for i in range(1, 5)]
+        prev = default + work
+        new = [s for s in default if s.name != "yazi"]
+        live = [_live(pane=f"w1:p{i}", fg=("x", ["x"])) for i in range(1, 4)]
+        live.append(_live(pane="w1:p4", fg=None))
+        merged = resurrect._merge_preserving(
+            new, prev, live, uptime_sec=99999, scanned_sessions={"default"})
+        self.assertNotIn("yazi", [s.name for s in merged])
+        self.assertEqual(len(merged), 7)  # 3 default + 4 work carried forward
+
+    def test_scanned_session_still_drops_a_deliberate_close(self):
+        # Unchanged steady-state behaviour for a session we did scan.
+        prev = [_snap(session="work", pane=f"w1:q{i}", name=n)
+                for i, n in enumerate(["btop", "nvtop", "lazygit", "yazi"], 1)]
+        new = [s for s in prev if s.name != "yazi"]
+        live = [_live(session="work", pane=f"w1:q{i}", fg=("x", ["x"]))
+                for i in range(1, 4)]
+        live.append(_live(session="work", pane="w1:q4", fg=None))
+        merged = resurrect._merge_preserving(
+            new, prev, live, uptime_sec=99999, scanned_sessions={"work"})
+        self.assertNotIn("yazi", [s.name for s in merged])
+
+    def test_no_sessions_scanned_preserves_everything(self):
+        # herdr up but every pane query failed: nothing was learned, keep all.
+        prev = [_snap(session="default", pane="w1:p1", name="btop")]
+        merged = resurrect._merge_preserving(
+            [], prev, [], uptime_sec=99999, scanned_sessions=set())
+        self.assertEqual([s.name for s in merged], ["btop"])
+
+    def test_none_keeps_legacy_all_scanned_behaviour(self):
+        prev = [_snap(session="work", pane=f"w1:q{i}", name=n)
+                for i, n in enumerate(["btop", "nvtop", "lazygit", "yazi"], 1)]
+        new = [s for s in prev if s.name != "yazi"]
+        merged = resurrect._merge_preserving(new, prev, [], uptime_sec=99999,
+                                             scanned_sessions=None)
+        self.assertNotIn("yazi", [s.name for s in merged])
+
+
+class TestAnnotatedLivePanes(unittest.TestCase):
+    def _sessions(self, *specs):
+        return [herdr_api.Session(name=n, default=(n == "default"), running=r)
+                for n, r in specs]
+
+    def test_reports_scanned_sessions_and_skips_stopped(self):
+        with mock.patch.object(resurrect.herdr_api, "list_sessions",
+                               return_value=self._sessions(
+                                   ("default", True), ("work", False))), \
+             mock.patch.object(resurrect.herdr_api, "list_workspace_labels",
+                               return_value={"w1": "proj"}), \
+             mock.patch.object(resurrect.herdr_api, "list_panes",
+                               return_value=[{"pane_id": "w1:p1",
+                                              "workspace_id": "w1"}]), \
+             mock.patch.object(resurrect.herdr_api, "pane_process_info",
+                               return_value={}):
+            panes, scanned = resurrect._annotated_live_panes()
+        self.assertEqual(scanned, {"default"})
+        self.assertEqual([p["_session"] for p in panes], ["default"])
+
+    def test_failed_pane_query_is_unscanned(self):
+        with mock.patch.object(resurrect.herdr_api, "list_sessions",
+                               return_value=self._sessions(("work", True))), \
+             mock.patch.object(resurrect.herdr_api, "list_workspace_labels",
+                               side_effect=herdr_api.HerdrError("boom")):
+            panes, scanned = resurrect._annotated_live_panes()
+        self.assertEqual(scanned, set())
+        self.assertEqual(panes, [])
+
+
+class TestRestoreSessionScope(unittest.TestCase):
+    def _restore(self, sessions):
+        snaps = [_snap(session="default", pane="w1:p1", name="btop"),
+                 _snap(session="work", pane="w1:q1", name="nvtop")]
+        live = [_live(session="default", pane="w1:p1", fg=None),
+                _live(session="work", pane="w1:q1", fg=None)]
+        for p in live:
+            p["label"] = "panel:yazi"
+            p["_shell_pid"] = 1
+            p["agent_status"] = "unknown"
+        with mock.patch.object(resurrect.config, "load",
+                               return_value={"label_commands": {"panel:yazi": "yazi"}}), \
+             mock.patch.object(resurrect.snapshot, "load_snaps",
+                               return_value=(snaps, 0.0)), \
+             mock.patch.object(resurrect, "_annotated_live_panes",
+                               return_value=(live, {"default", "work"})), \
+             mock.patch.object(resurrect.pane_busy, "shell_child_names",
+                               return_value=set()):
+            return resurrect.restore(dry_run=True, sessions=sessions)
+
+    def test_scoped_restore_touches_only_that_session(self):
+        r = self._restore({"work"})
+        self.assertEqual([s.name for s, _pid in r.restored], ["nvtop"])
+        self.assertEqual([pid for _l, pid, _c in r.labels_restored], ["w1:q1"])
+
+    def test_unscoped_restore_touches_both(self):
+        r = self._restore(None)
+        self.assertEqual(sorted(s.name for s, _pid in r.restored),
+                         ["btop", "nvtop"])
+        self.assertEqual(len(r.labels_restored), 2)
+
+
+import cli  # noqa: E402
+
+
+class TestAutorestoreTargets(unittest.TestCase):
+    def test_snapshot_sessions_are_targets(self):
+        snaps = [_snap(session="default"), _snap(session="work")]
+        with mock.patch.object(cli.snapshot, "load_snaps",
+                               return_value=(snaps, 0.0)):
+            self.assertEqual(cli._autorestore_targets({"default"}, {}),
+                             {"default", "work"})
+
+    def test_label_commands_add_running_sessions_only(self):
+        # A stopped session the user may never attach must not be a target, or
+        # the run would poll to its full window waiting for it.
+        with mock.patch.object(cli.snapshot, "load_snaps", return_value=([], 0.0)):
+            self.assertEqual(
+                cli._autorestore_targets({"default"}, {"panel:yazi": "yazi"}),
+                {"default"})
+            self.assertEqual(cli._autorestore_targets({"default"}, {}), set())
+
+
+class TestAutorestoreLoop(unittest.TestCase):
+    """The loop that fixes the real failure: `work` appearing hours after login."""
+
+    def _run(self, session_seq, **kw):
+        """Drive _cmd_autorestore over a scripted sequence of running-session
+        sets, one per poll. Returns the sessions each restore pass was scoped to."""
+        calls: list[set[str]] = []
+        clock = {"t": 0.0}
+        seq = list(session_seq)
+
+        def fake_list_sessions():
+            running = seq.pop(0) if seq else set()
+            return [herdr_api.Session(n, n == "default", True) for n in running]
+
+        def fake_restore(*, sessions=None, dry_run=False):
+            calls.append(sessions)
+            return resurrect.RestoreResult()
+
+        args = argparse.Namespace(window=kw.get("window", 10_000.0),
+                                  interval=kw.get("interval", 30.0),
+                                  settle=kw.get("settle", 60.0))
+        with mock.patch.object(cli.herdr_api, "list_sessions", fake_list_sessions), \
+             mock.patch.object(cli.resurrect, "restore", fake_restore), \
+             mock.patch.object(cli.config, "load",
+                               return_value={"label_commands": {}}), \
+             mock.patch.object(cli.snapshot, "load_snaps",
+                               return_value=(kw["snaps"], 0.0)), \
+             mock.patch.object(cli.time, "monotonic", lambda: clock["t"]), \
+             mock.patch.object(cli.time, "sleep",
+                               lambda s: clock.__setitem__("t", clock["t"] + s)):
+            rc = cli._cmd_autorestore(args)
+        return rc, calls
+
+    def test_session_appearing_late_is_still_restored(self):
+        # default up from the start; work's server appears on the 4th poll --
+        # the exact shape of the 2026-09-17 failure, just compressed.
+        snaps = [_snap(session="default"), _snap(session="work")]
+        rc, calls = self._run(
+            [{"default"}, {"default"}, {"default"},
+             {"default", "work"}, {"default", "work"}, {"default", "work"}],
+            snaps=snaps, settle=60.0)
+        self.assertEqual(rc, 0)
+        self.assertIn({"work"}, calls)
+
+    def test_each_session_stops_being_restored_after_settling(self):
+        # With settle=0 a session is done after one pass, so it is never
+        # restored twice -- what stops label_commands relaunching a quit btop.
+        snaps = [_snap(session="default")]
+        rc, calls = self._run([{"default"}] * 5, snaps=snaps, settle=0.0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [{"default"}])
+
+    def test_settle_window_gives_repeated_passes(self):
+        snaps = [_snap(session="default")]
+        rc, calls = self._run([{"default"}] * 10, snaps=snaps,
+                              settle=60.0, interval=30.0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [{"default"}, {"default"}, {"default"}])
+
+    def test_returns_when_all_targets_done(self):
+        snaps = [_snap(session="default"), _snap(session="work")]
+        rc, calls = self._run([{"default", "work"}] * 5, snaps=snaps, settle=0.0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(map(repr, calls)),
+                         sorted(map(repr, [{"default"}, {"work"}])))
+
+    def test_window_cap_ends_a_run_whose_target_never_appears(self):
+        snaps = [_snap(session="work")]
+        rc, calls = self._run([{"default"}] * 50, snaps=snaps,
+                              window=90.0, interval=30.0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [])
+
+    def test_herdr_down_is_not_fatal(self):
+        snaps = [_snap(session="default")]
+        clock = {"t": 0.0}
+        state = {"n": 0}
+
+        def flaky():
+            state["n"] += 1
+            if state["n"] < 3:
+                raise herdr_api.HerdrError("herdr not up")
+            return [herdr_api.Session("default", True, True)]
+
+        args = argparse.Namespace(window=10_000.0, interval=30.0, settle=0.0)
+        calls = []
+        with mock.patch.object(cli.herdr_api, "list_sessions", flaky), \
+             mock.patch.object(cli.resurrect, "restore",
+                               lambda **kw: calls.append(kw.get("sessions"))
+                               or resurrect.RestoreResult()), \
+             mock.patch.object(cli.config, "load",
+                               return_value={"label_commands": {}}), \
+             mock.patch.object(cli.snapshot, "load_snaps",
+                               return_value=(snaps, 0.0)), \
+             mock.patch.object(cli.time, "monotonic", lambda: clock["t"]), \
+             mock.patch.object(cli.time, "sleep",
+                               lambda s: clock.__setitem__("t", clock["t"] + s)):
+            rc = cli._cmd_autorestore(args)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [{"default"}])
 
 
 if __name__ == "__main__":

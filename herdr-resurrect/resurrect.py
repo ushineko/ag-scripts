@@ -41,10 +41,16 @@ def _uptime_sec() -> float:
         return float("inf")
 
 
-def _annotated_live_panes() -> list[dict]:
+def _annotated_live_panes() -> tuple[list[dict], set[str]]:
     """All live panes across running sessions, each annotated with its session,
-    workspace label, and current foreground program (`_fg` = (name, argv)|None)."""
+    workspace label, and current foreground program (`_fg` = (name, argv)|None).
+
+    Also returns the set of sessions actually scanned. A session herdr has not
+    started (its server is spawned lazily, when a terminal attaches it) or whose
+    pane query failed contributes no panes, and the caller must not read that
+    silence as "its panes were closed" -- see _merge_preserving."""
     panes: list[dict] = []
+    scanned: set[str] = set()
     for sess in herdr_api.list_sessions():
         if not sess.running:
             continue
@@ -53,6 +59,7 @@ def _annotated_live_panes() -> list[dict]:
             raw = herdr_api.list_panes(sess.name)
         except herdr_api.HerdrError:
             continue
+        scanned.add(sess.name)
         for p in raw:
             p["_session"] = sess.name
             p["_workspace_label"] = labels.get(p.get("workspace_id", ""),
@@ -64,11 +71,12 @@ def _annotated_live_panes() -> list[dict]:
             p["_fg"] = whitelist.foreground_program(pinfo)
             p["_shell_pid"] = pinfo.get("shell_pid")
             panes.append(p)
-    return panes
+    return panes, scanned
 
 
 def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
                       live: list[dict], *, uptime_sec: float,
+                      scanned_sessions: set[str] | None = None,
                       boot_grace_sec: float = BOOT_GRACE_SEC,
                       restart_drop_ratio: float = RESTART_DROP_RATIO,
                       ) -> list[PaneSnap]:
@@ -92,18 +100,37 @@ def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
     clobber this guard exists to prevent. An entry whose pane never comes back is
     harmless: restore() finds no idle pane to match and simply skips it, and once
     uptime clears the grace window a genuinely-removed pane is dropped on the next
-    steady-state save."""
+    steady-state save.
+
+    `scanned_sessions` names the sessions this cycle actually queried. Entries
+    belonging to any other session are carried forward unconditionally, and are
+    excluded from the restart ratio on both sides. herdr starts a named session's
+    server only when a terminal attaches it, so an unattached session reports no
+    panes all day; reading that silence as "closed" is what used to delete a whole
+    session's programs from the snapshot once the boot grace expired, leaving both
+    autorestore and `prefix+ctrl+r` with nothing to restore. Absence of evidence
+    is not evidence of closure. Passing None keeps the old all-sessions-scanned
+    behaviour."""
     new_by_pane = {(s.session, s.pane_id) for s in new_snaps}
     absent = [s for s in prev_snaps
               if (s.session, s.pane_id) not in new_by_pane]
     if not absent:
         return new_snaps
-    mass_drop = (len(prev_snaps) > 0
-                 and len(absent) / len(prev_snaps) >= restart_drop_ratio)
+    if scanned_sessions is None:
+        unscanned, absent_scanned, considered_prev = [], absent, prev_snaps
+    else:
+        unscanned = [s for s in absent if s.session not in scanned_sessions]
+        absent_scanned = [s for s in absent if s.session in scanned_sessions]
+        considered_prev = [s for s in prev_snaps
+                           if s.session in scanned_sessions]
+    # An unscanned session told us nothing, so keep its entries verbatim: there
+    # is no live pane to re-match them against either.
+    preserved: list[PaneSnap] = list(unscanned)
+    mass_drop = (len(considered_prev) > 0
+                 and len(absent_scanned) / len(considered_prev) >= restart_drop_ratio)
     if not (mass_drop or uptime_sec < boot_grace_sec):
-        return new_snaps
-    preserved: list[PaneSnap] = []
-    for s in absent:
+        return new_snaps + preserved
+    for s in absent_scanned:
         pane = snapshot.match_live_pane(s, live)
         if pane is not None and pane.get("_fg") is not None:
             continue  # pane already runs a different program; don't shadow it
@@ -123,7 +150,7 @@ def save() -> list[PaneSnap]:
     cfg = config.load()
     wl = whitelist.effective_whitelist(cfg)
     patterns = whitelist.cmdline_patterns(cfg)
-    live = _annotated_live_panes()
+    live, scanned = _annotated_live_panes()
     new_snaps: list[PaneSnap] = []
     for p in live:
         if whitelist.is_agent_pane(p.get("agent_status", "")):
@@ -146,7 +173,8 @@ def save() -> list[PaneSnap]:
         ))
     prev_snaps, _ = snapshot.load_snaps()
     snaps = _merge_preserving(new_snaps, prev_snaps, live,
-                              uptime_sec=_uptime_sec())
+                              uptime_sec=_uptime_sec(),
+                              scanned_sessions=scanned)
     snapshot.write_snapshot(snaps, history=int(cfg.get("history", 3)))
     return snaps
 
@@ -242,14 +270,24 @@ def _restore_from_labels(label_commands: dict[str, str], live: list[dict],
         result.labels_restored.append((label, pane["pane_id"], cmd))
 
 
-def restore(*, dry_run: bool = False) -> RestoreResult:
+def restore(*, dry_run: bool = False,
+            sessions: set[str] | None = None) -> RestoreResult:
+    """Relaunch saved (and label-configured) programs into their idle panes.
+
+    `sessions` limits the pass to the named herdr sessions; None means all of
+    them. Scoping matters for autorestore, which restores each session once, as
+    that session's server comes up -- they do not come up together."""
     cfg = config.load()
     label_commands = cfg.get("label_commands", {}) or {}
     snaps, _saved_at = snapshot.load_snaps()
     result = RestoreResult(dry_run=dry_run)
+    if sessions is not None:
+        snaps = [s for s in snaps if s.session in sessions]
     if not snaps and not label_commands:
         return result
-    live = _annotated_live_panes()
+    live, _scanned = _annotated_live_panes()
+    if sessions is not None:
+        live = [p for p in live if p["_session"] in sessions]
     _restore_from_snapshot(snaps, live, result, dry_run=dry_run)
     if label_commands:
         _restore_from_labels(label_commands, live, result, dry_run=dry_run)

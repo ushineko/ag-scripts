@@ -3,7 +3,7 @@
 
   herdr-resurrect save              # snapshot running programs (all sessions)
   herdr-resurrect restore [--dry-run]
-  herdr-resurrect autorestore [--window S] [--interval S]  # poll then restore
+  herdr-resurrect autorestore [--window S] [--interval S] [--settle S]
   herdr-resurrect status            # last snapshot age + contents
   herdr-resurrect list              # what the snapshot would relaunch
 """
@@ -75,27 +75,77 @@ def _cmd_restore(a) -> int:
     return 0
 
 
+def _autorestore_targets(running: set[str], label_commands: dict) -> set[str]:
+    """Sessions this autorestore run is responsible for.
+
+    Every session named in the snapshot, plus -- only when label_commands are
+    configured, since those restore by pane label and need no snapshot entry --
+    the sessions currently running. Deliberately *not* every session herdr knows
+    about: a long-stopped session the user never attaches would otherwise hold
+    the run open to its full window for nothing."""
+    snaps, _saved_at = snapshot.load_snaps()
+    targets = {s.session for s in snaps}
+    if label_commands:
+        targets |= running
+    return targets
+
+
 def _cmd_autorestore(a) -> int:
     """Poll for herdr readiness after a boot/restart and relaunch pane programs.
 
     herdr has no systemd unit and no post-restore hook, and each named session's
-    server is spawned lazily when its terminal is opened. So rather than fire
-    once at a fixed time, poll: retry restore across a window, no-op while herdr
-    is down, and re-run so sessions attached later in the window still get filled.
-    restore() only fills idle panes, so repeated passes are safe once programs
-    are back."""
-    interval = max(5, a.interval)
+    server is spawned lazily when its terminal is opened -- which for a session
+    like `work` can be hours after login, not seconds. So rather than restore
+    everything inside one fixed clock window, track sessions individually:
+    restore a session the first time it is seen running, keep re-running for a
+    short settle window while herdr materializes its layout, then mark it done
+    and leave it alone. Exit once every target session is done, or at the window
+    cap.
+
+    Marking a session done is what keeps label_commands honest. Those restore by
+    pane label with no snapshot involved, so a run that kept passing over a live
+    session forever would relaunch btop every interval after the user quit it."""
+    interval = max(5.0, a.interval)
+    settle = max(0.0, a.settle)
     deadline = time.monotonic() + max(interval, a.window)
+    first_seen: dict[str, float] = {}
+    done: set[str] = set()
     while True:
         try:
-            r = resurrect.restore()
-            for snap, pid in r.restored:
-                print(f"[autorestore] {pid:8} {snap.cmdline}", flush=True)
-            for label, pid, cmd in r.labels_restored:
-                print(f"[autorestore] {pid:8} {label} -> {cmd}", flush=True)
+            running = {s.name for s in herdr_api.list_sessions() if s.running}
         except herdr_api.HerdrError:
-            pass  # herdr not up yet (or mid-restore); keep polling
+            running = None  # herdr not up yet; keep polling, decide nothing
+        if running is not None:
+            label_commands = config.load().get("label_commands", {}) or {}
+            targets = _autorestore_targets(running, label_commands)
+            if not targets:
+                print("[autorestore] nothing to restore (empty snapshot, no "
+                      "label_commands)", flush=True)
+                return 0
+            now = time.monotonic()
+            for name in sorted((targets - done) & running):
+                if name not in first_seen:
+                    first_seen[name] = now
+                    print(f"[autorestore] session {name!r} is up", flush=True)
+                try:
+                    r = resurrect.restore(sessions={name})
+                except herdr_api.HerdrError:
+                    continue  # session went away mid-pass; retry next interval
+                for snap, pid in r.restored:
+                    print(f"[autorestore] {name:8} {pid:8} {snap.cmdline}",
+                          flush=True)
+                for label, pid, cmd in r.labels_restored:
+                    print(f"[autorestore] {name:8} {pid:8} {label} -> {cmd}",
+                          flush=True)
+                if now - first_seen[name] >= settle:
+                    done.add(name)
+                    print(f"[autorestore] session {name!r} settled", flush=True)
+            if targets <= done:
+                return 0
         if time.monotonic() >= deadline:
+            pending = sorted(set(first_seen) | done)
+            print(f"[autorestore] window elapsed; handled {pending}",
+                  flush=True)
             return 0
         time.sleep(interval)
 
@@ -132,10 +182,16 @@ def main(argv: list[str] | None = None) -> int:
     r.set_defaults(func=_cmd_restore)
     ar = sub.add_parser("autorestore",
                         help="poll for herdr after boot, then restore (for the timer)")
-    ar.add_argument("--window", type=float, default=900.0,
-                    help="seconds to keep polling (default 900)")
+    # Default window spans a working day: a named session's server does not exist
+    # until its terminal is attached, which may be hours after login. The run
+    # exits early as soon as every target session has been restored.
+    ar.add_argument("--window", type=float, default=43200.0,
+                    help="seconds to keep polling for sessions (default 43200)")
     ar.add_argument("--interval", type=float, default=30.0,
                     help="seconds between restore attempts (default 30)")
+    ar.add_argument("--settle", type=float, default=120.0,
+                    help="seconds to keep re-restoring a session after it first "
+                         "appears, while herdr rebuilds its layout (default 120)")
     ar.set_defaults(func=_cmd_autorestore)
     sub.add_parser("status").set_defaults(func=_cmd_status)
     sub.add_parser("list").set_defaults(func=_cmd_list)

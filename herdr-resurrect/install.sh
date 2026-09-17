@@ -55,7 +55,15 @@ EOF
 [Unit]
 Description=Auto-restore herdr pane programs after a boot/restart (herdr-resurrect)
 [Service]
+# Long-lived by design, not a quick one-shot. A named herdr session's server is
+# spawned only when a terminal attaches it, which can be hours after login, so
+# the run polls for each session it owes a restore and exits as soon as they
+# have all been handled -- typically within a couple of minutes, but up to the
+# 12h window if a session is never opened. Type=oneshot already means
+# TimeoutStartSec=infinity; it is stated here so the long runtime reads as
+# intentional.
 Type=oneshot
+TimeoutStartSec=infinity
 ExecStart=$BIN_DIR/$APP autorestore
 EOF
 
