@@ -127,9 +127,19 @@ class TestScope(unittest.TestCase):
         self.assertIn("MSI GeForce RTX 4090 Suprim Liquid X", names)
         self.assertIn("ASUS ROG MAXIMUS Z790 HERO", names)
 
-    def test_peripherals_are_excluded(self):
+    def test_mouse_is_in_scope(self):
+        """032/035: the mouse joined the default scope.
+
+        Solaar cannot set its colour - its CLI takes the effect name and drops
+        the colour - so OpenRGB drives it like every other device.
+        """
         names = [d["name"] for d in rgb_openrgb.scoped_devices(self.devices)]
-        self.assertNotIn("G502 X PLUS", names)
+        self.assertIn("G502 X PLUS", names)
+
+    def test_keyboard_stays_out_of_scope(self):
+        """Per-application lighting; a scene should not fight it."""
+        names = [d["name"] for d in rgb_openrgb.scoped_devices(self.devices)]
+        self.assertNotIn("Keychron K4 HE", names)
 
     def test_custom_scope(self):
         names = [d["name"] for d in

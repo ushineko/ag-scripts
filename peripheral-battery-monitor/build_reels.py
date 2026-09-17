@@ -8,40 +8,49 @@ Run after adding or reframing photos:
 
 Why the reels look the way they do
 ----------------------------------
-**What spends the budget.** liquidctl re-encodes the GIF at the panel's 640x640
-and asserts the result is under 24MB. What matters is how well *that* re-encode
-compresses, and GIF delta-encodes between frames. Measured on this content:
+**Author at 640, not 480.** The driver resizes every frame to the panel's
+640x640 *in palette mode* - nearest neighbour - and re-encodes. Feeding it a
+480px source therefore does not save anything: the upscale invents noise that
+will not delta-encode, and costs more than the smaller source saved. Measured on
+corgis at identical settings: 480 source 28.25MB, 640 source 20.43MB.
 
-    zoom on every frame   0.304 MB/frame   ->  80 frames
-    static hold           0.058 MB/frame   -> 418 frames
-    static + crossfade    0.185 MB/frame   -> 131 frames
+An earlier version of this file advised shrinking the source to buy frames. That
+was measured on the file on disk rather than on what the driver actually sends,
+and it is backwards.
 
-A continuous pan/zoom resamples every pixel of every frame, so nothing
-delta-encodes and it burns the entire budget on motion. Held frames are five
-times cheaper. So each photo is held perfectly still and the budget goes into
-long, smooth crossfades, which is where motion actually reads.
+**One palette for the whole reel.** `convert("P", palette=ADAPTIVE)` gives every
+frame its own colour table, so consecutive frames cannot delta-encode - which is
+precisely what a crossfade needs. Quantising every frame onto a single shared
+palette took the same reel from 20.43MB to 14.17MB. 64 colours with
+Floyd-Steinberg dithering is visually indistinguishable here from 96.
 
-Shrinking the source was the other candidate — 240px instead of 480px buys about
-18% more frames — but it softens family photos for a fraction of what dropping
-the zoom gives, so the reels stay at 480.
+**Per-frame durations.** A held photo is one frame carrying the whole hold
+(Pillow merges identical consecutive frames and sums their duration), and each
+crossfade step carries only FADE_MS. With one global duration, a fade could be
+made smoother only by making it slower; separating them buys smoothness for
+free. This is what fixed transitions that looked "very chunky": corgis went from
+5 crossfade steps to 24 at the same 0.84s transition.
 
-**Smoothness costs upload time, and that is the real tension.** Held frames
-collapse to a single long-duration frame, so a reel's on-device size is set
-almost entirely by FADE — its crossfade frames. Measured push cost is roughly
-1.5s fixed plus 0.22s per MB, and the panel is *blank for the whole transfer*
-because the device stops displaying while it receives. So a luxuriously smooth
-dissolve buys a longer black gap every time the scene changes. FADE is that
-trade, made explicit.
+**The budget is the real ceiling.** liquidctl asserts the re-encoded GIF is
+under 24.32MB (`_LCD_TOTAL_MEMORY`), so frames are the currency and crossfades
+spend nearly all of them. Reels differ in length, so `build` steps the fade count
+down from MAX_FADE until it fits rather than using a fixed value that would waste
+headroom on short reels and overrun on long ones.
 
-Neither palette size nor source resolution moves it: the driver re-encodes at
-640x640 with its own palette, discarding both. Frame count is the only lever.
+**Smoothness costs upload time.** Push is roughly 1.5s fixed plus 0.22s per MB,
+and the panel is *blank for the whole transfer*. A smoother reel means a longer
+black gap on every scene change - about 5.8s for a 19.6MB reel against 4.0s for
+an 11MB one. That is the trade, and it is the only real argument for restraint.
 
-**Slowness is duration.** FRAME_MS sets seconds per photo.
+**The loop is seamless by construction.** The last photo crossfades back into the
+first, which is where the GIF restarts. Verified by comparing the RMS pixel
+difference across the wrap against the median difference between adjacent frames:
+the seam is smaller than an ordinary fade step in every reel.
 
 **The panel is round.** A plain centre crop decapitated several subjects, so
 every photo carries a hand-chosen crop centre in CENTRES, picked by eye from a
 contact sheet rendered with the circular cut-off dimmed. Photos are indexed by
-position in the sorted source listing, so adding files shifts the indices —
+position in the sorted source listing, so adding files shifts the indices -
 re-check the framing when the set changes.
 """
 
@@ -55,9 +64,12 @@ from PIL import Image, ImageOps, ImageSequence
 SRC = os.path.expanduser("~/Dropbox/Documents/iphoto_exports")
 OUT = os.path.expanduser("~/Pictures/LcdAnimations")
 
-SIZE = 480            # liquidctl upscales to the panel's 640x640
+SIZE = 640            # the panel's native size - see "Author at 640" below
 FRAME_MS = 180        # per-frame hold; the speed dial
-COLORS = 96
+FADE_MS = 35          # per-frame during a crossfade; smoothness, not duration
+MAX_FADE = 28         # ceiling on crossfade steps; each reel fits under this
+MIN_FADE = 6          # below this a dissolve reads as a slideshow again
+COLORS = 64
 # Measured, not guessed: build() weighs each reel through the driver's own
 # encoder. The driver's assert is fatal, so keep headroom under it.
 LIMIT_BYTES = 24320 * 1000
@@ -112,37 +124,78 @@ def encoded_size(path: str) -> int:
     return len(buf.getvalue())
 
 
-def build(name, idxs, hold, fade) -> str:
-    paths = photos()
-    imgs = [square(paths, i) for i in idxs]
+def render(imgs, hold, fade) -> tuple[list, list]:
+    """Frames and per-frame durations for one reel.
 
-    frames = []
+    The loop is seamless by construction: the last photo crossfades back into
+    imgs[0], which is where the GIF restarts.
+
+    Durations are per frame, not global. A held photo is one frame carrying the
+    whole hold, and each crossfade step carries only FADE_MS - so smoothness and
+    pacing stop fighting each other. With a single global duration a fade could
+    only be made smoother by making it slower.
+    """
+    frames, durs = [], []
     for i, im in enumerate(imgs):
         nxt = imgs[(i + 1) % len(imgs)]
-        # Identical frames delta-encode to almost nothing; that is what pays for
-        # the long crossfade that follows.
-        frames.extend(im.copy() for _ in range(hold))
-        frames.extend(Image.blend(im, nxt, (k + 1) / (fade + 1)) for k in range(fade))
+        # One held frame, not `hold` copies: Pillow merges identical consecutive
+        # frames and sums their duration, so emitting copies just wasted work.
+        frames.append(im.copy())
+        durs.append(FRAME_MS * hold)
+        for k in range(fade):
+            frames.append(Image.blend(im, nxt, (k + 1) / (fade + 1)))
+            durs.append(FADE_MS)
+    return frames, durs
 
-    pal = [f.convert("P", palette=Image.ADAPTIVE, colors=COLORS) for f in frames]
-    dst = f"{OUT}/{name}.gif"
+
+def quantise(frames) -> list:
+    """Map every frame onto ONE palette.
+
+    Per-frame ADAPTIVE palettes were costing about a third of the file. Each
+    frame then carries its own colour table and cannot delta-encode against its
+    neighbour, which is exactly what a crossfade needs to do.
+    """
+    base = frames[0].quantize(colors=COLORS, method=Image.MEDIANCUT)
+    return [f.quantize(colors=COLORS, palette=base,
+                       dither=Image.Dither.FLOYDSTEINBERG) for f in frames]
+
+
+def write(dst, pal, durs):
     os.makedirs(OUT, exist_ok=True)
-    pal[0].save(dst, save_all=True, append_images=pal[1:], duration=FRAME_MS,
+    pal[0].save(dst, save_all=True, append_images=pal[1:], duration=durs,
                 loop=0, optimize=True)
 
-    size = encoded_size(dst)
-    budget = LIMIT_BYTES * SAFETY
-    if size > budget:
-        os.unlink(dst)
-        raise SystemExit(
-            f"{name}: {size/1e6:.1f}MB re-encoded at 640x640 exceeds the "
-            f"{budget/1e6:.1f}MB working budget; shorten hold/fade or drop a photo")
 
-    secs = len(pal) * FRAME_MS / 1000
-    print(f"  {name+'.gif':16} {len(idxs)} photos  {len(pal):>3} frames  "
-          f"{size/1e6:>5.1f}MB on device  {secs:>5.1f}s loop  "
-          f"({secs/len(idxs):.1f}s per photo, {fade*FRAME_MS/1000:.1f}s fades)")
-    return dst
+def build(name, idxs, hold, fade=MAX_FADE) -> str:
+    """Build `name`, using the smoothest crossfade that fits the budget.
+
+    `fade` is a ceiling rather than a setting. Reels differ in length - three
+    photos to eight - so one fixed value either wastes headroom on the short
+    reels or overruns on the long ones. Stepping down from the ceiling spends
+    whatever each reel has.
+    """
+    paths = photos()
+    imgs = [square(paths, i) for i in idxs]
+    dst = f"{OUT}/{name}.gif"
+    budget = LIMIT_BYTES * SAFETY
+
+    for attempt in range(fade, MIN_FADE - 1, -2):
+        frames, durs = render(imgs, hold, attempt)
+        pal = quantise(frames)
+        write(dst, pal, durs)
+        size = encoded_size(dst)
+        if size <= budget:
+            secs = sum(durs) / 1000
+            print(f"  {name+'.gif':16} {len(idxs)} photos  {len(pal):>3} frames  "
+                  f"{attempt:>2} fade steps  {size/1e6:>5.1f}MB on device  "
+                  f"{secs:>5.1f}s loop  ({attempt*FADE_MS/1000:.2f}s fades, "
+                  f"~{1.5 + 0.22*size/1e6:.1f}s blank on push)")
+            return dst
+
+    os.unlink(dst)
+    raise SystemExit(
+        f"{name}: will not fit {budget/1e6:.1f}MB even at {MIN_FADE} fade steps; "
+        f"drop a photo or shorten the hold")
 
 
 def main(argv):
@@ -151,7 +204,7 @@ def main(argv):
     if unknown:
         raise SystemExit(f"unknown reel(s): {', '.join(unknown)}")
     for name in wanted:
-        build(name, *REELS[name])
+        build(name, *REELS[name][:2])
     return 0
 
 

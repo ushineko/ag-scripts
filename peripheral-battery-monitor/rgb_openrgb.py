@@ -55,7 +55,12 @@ OPENRGB_PORT = int(os.environ.get("OPENRGB_PORT", "6742"))
 # device can fight, and OpenLinkHub can reassert its own colour. If the mousepad
 # ignores scenes or reverts, exclude it there (the `exclude` list in
 # ~/.config/OpenLinkHub or /var/lib/openlinkhub/config.json) so OpenRGB owns it.
-DEFAULT_SCOPE = ("kraken", "geforce", "maximus", "mm700")
+# The mouse is driven through OpenRGB like everything else. Solaar - already used
+# here for battery levels - exposes the G502's rgb_zone_1, but its CLI accepts
+# only the effect NAME and silently drops the colour argument in every form, so
+# `rgb_zone_1 Static FF0000` sets Static with no colour, which is black. It
+# reports success while turning the mouse off.
+DEFAULT_SCOPE = ("kraken", "geforce", "maximus", "mm700", "g502")
 
 # Intent -> the modes that can express it, best first. Resolution picks the
 # first one a given device actually supports.

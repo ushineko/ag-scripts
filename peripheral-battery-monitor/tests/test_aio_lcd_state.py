@@ -303,9 +303,13 @@ class TestLightingHealthAndHonesty(unittest.TestCase):
         self.assertEqual(state, self.section.LIGHTING_NO_DEVICES)
 
     def test_health_reports_devices_present_but_none_in_scope(self):
-        """The real post-reboot state: a server up, but only peripherals found."""
+        """The real post-reboot state: a server up, but nothing in scope found.
+
+        Uses the keyboard: the mouse joined the default scope in 035, so it no
+        longer demonstrates an out-of-scope device.
+        """
         self.section._lighting_devices = self.rgb.parse_detailed(
-            "1: G502 X PLUS\n  Type:           Mouse\n  Modes: [Direct] Static\n")
+            "1: Keychron K4 HE\n  Type:           Keyboard\n  Modes: [Direct] Static\n")
         with unittest.mock.patch.object(self.rgb, "server_alive", return_value=True):
             state, reason = self.section.lighting_health()
         self.assertEqual(state, self.section.LIGHTING_NO_SCOPED)
