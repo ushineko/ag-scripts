@@ -43,7 +43,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.18.1"
+__version__ = "1.18.2"
 
 # Lighting device-list priming. The first read is deferred because OpenRGB's own
 # detection takes ~9 s, and its unit now additionally waits for every RGB device

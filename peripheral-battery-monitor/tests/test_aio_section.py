@@ -793,3 +793,48 @@ class TestScopeCompleteness:
         section._lighting_scope = ("kraken", "geforce")
         section._lighting_devices = []
         assert set(section.unmatched_scope_entries()) == {"kraken", "geforce"}
+
+
+class TestLightingReassert:
+    """037: the mouse loses a host-set colour when it sleeps."""
+
+    @staticmethod
+    def _dev(name):
+        return {"name": name, "modes": ["Direct", "Static"]}
+
+    def test_reasserts_only_the_scoped_device(self, section):
+        section._lighting_devices = [
+            self._dev("G502 X PLUS"),
+            self._dev("NZXT Kraken 2024 ELITE Series RGB"),
+            self._dev("ASUS ROG MAXIMUS Z790 HERO"),
+        ]
+        section._lighting_last_color = "green"
+        sent = section.reassert_lighting()
+        assert sent == 1, "only the mouse should be re-sent; the rest hold colour"
+
+    def test_no_colour_yet_is_a_no_op(self, section):
+        section._lighting_devices = [self._dev("G502 X PLUS")]
+        section._lighting_last_color = None
+        assert section.reassert_lighting() == 0
+
+    def test_empty_device_list_is_a_silent_no_op(self, section):
+        """Would otherwise warn and refresh once a minute while OpenRGB is down."""
+        section._lighting_devices = []
+        section._lighting_last_color = "green"
+        assert section.reassert_lighting() == 0
+
+    def test_reassert_does_not_re_emit_or_repersist(self, section):
+        """It re-sends a colour already chosen; it is not a new choice."""
+        section._lighting_devices = [self._dev("G502 X PLUS")]
+        section._lighting_last_color = "green"
+        emitted = []
+        section.lightingChanged.connect(emitted.append)
+        section.reassert_lighting()
+        assert emitted == []
+
+    def test_a_real_choice_still_emits(self, section):
+        section._lighting_devices = [self._dev("G502 X PLUS")]
+        emitted = []
+        section.lightingChanged.connect(emitted.append)
+        section.apply_lighting_color("green")
+        assert emitted == ["green"]

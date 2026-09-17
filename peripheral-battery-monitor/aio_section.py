@@ -122,6 +122,18 @@ LCD_DIAGNOSTIC_INTERVALS_MS = (1000,)
 # 5 s status poll, and straight down the liquidctl#774 path. Pushing a GIF
 # instead removes the need entirely: the firmware retains it. This remains only
 # as an escape hatch for firmware that retains neither.
+# Devices that do not hold a host-set colour across a sleep/wake cycle, and the
+# interval at which their colour is re-sent. The G502 is wireless: OpenRGB sets a
+# volatile effect, and the mouse restores onboard state when it wakes, so the
+# scene colour is silently lost. Nothing re-asserted it before, which is exactly
+# what "keeps reverting to red" was.
+#
+# Scoped deliberately. Every other lit device here holds its colour indefinitely,
+# and re-sending to all of them would be a write per device per minute for no
+# gain. The interval sits under the mouse's 5-minute sleep timeout.
+LIGHTING_REASSERT_SCOPE = ("g502",)
+LIGHTING_REASSERT_MS = 60_000
+
 LCD_KEEPALIVE_MS = 0
 LCD_KEEPALIVE_OPTIONS_MS = (0, 3000, 5000, 10000, 30000)
 # After this many consecutive push failures, give up, fall back to the
@@ -435,6 +447,14 @@ class AioSection(QFrame):
         self._timer = QTimer(self)
         self._timer.setInterval(IDLE_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self._poll)
+
+        # Re-send the colour to devices that lose it on sleep. Independent of the
+        # poll timer: it must keep running whether or not the cooler section is
+        # visible, because the mouse forgets its colour regardless.
+        self._reassert_timer = QTimer(self)
+        self._reassert_timer.setInterval(LIGHTING_REASSERT_MS)
+        self._reassert_timer.timeout.connect(self.reassert_lighting)
+        self._reassert_timer.start()
 
         self._apply_visibility()
         if self._user_enabled:
@@ -1120,15 +1140,39 @@ class AioSection(QFrame):
         return sent
 
     def apply_lighting_color(self, value: str,
-                             scope: tuple[str, ...] | None = None) -> int:
-        """Solid colour by name or #rrggbb across the scope; 'off' blanks it."""
+                             scope: tuple[str, ...] | None = None,
+                             remember: bool = True) -> int:
+        """Solid colour by name or #rrggbb across the scope; 'off' blanks it.
+
+        `remember=False` applies without persisting or emitting lightingChanged -
+        for a periodic re-assert, which is re-sending a colour the user already
+        chose rather than a new choice.
+        """
         rgb = aio_color.parse_color(value)
         if rgb is None:
             _log.warning("lighting_bad_color value=%r", value)
             return 0
+        keep = value if remember else None
         if rgb == (0, 0, 0):
-            return self.apply_lighting("off", scope=scope, remember=value)
-        return self.apply_lighting("solid", rgb, scope=scope, remember=value)
+            return self.apply_lighting("off", scope=scope, remember=keep)
+        return self.apply_lighting("solid", rgb, scope=scope, remember=keep)
+
+    def reassert_lighting(self) -> int:
+        """Re-send the current colour to devices that do not hold it.
+
+        Returns the number of devices written, so a caller (and a test) can tell
+        a real re-assert from a no-op.
+        """
+        value = self._lighting_last_color
+        if not value:
+            return 0
+        # Skip silently when the device list is empty: apply would log a warning
+        # and trigger a refresh, and doing that once a minute while OpenRGB is
+        # down would bury the log in noise for no benefit.
+        if not self._lighting_devices:
+            return 0
+        return self.apply_lighting_color(
+            value, scope=LIGHTING_REASSERT_SCOPE, remember=False)
 
     @property
     def lighting_last_color(self) -> str | None:
