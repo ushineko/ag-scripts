@@ -60,6 +60,11 @@ DEFAULT_BASE_URL = os.environ.get("OPENLINKHUB_API", "http://127.0.0.1:27003/api
 DEFAULT_TIMEOUT = 2.0
 
 CPU_TEMP_PATH = "cpuTemp"
+# OpenLinkHub reports the GPU too, in the same shape as cpuTemp (spec 031).
+# Taken from here rather than nvidia-smi: the daemon is already polled every
+# cycle over HTTP, so this is one more parallel request instead of a
+# subprocess, and it degrades exactly like the CPU reading already does.
+GPU_TEMP_PATH = "gpuTemp"
 DEVICES_PATH = "devices/"
 
 # OpenLinkHub's channel `description` values we care about. Matching on these
@@ -95,13 +100,17 @@ _log = logging.getLogger(__name__)
 
 
 def endpoint_urls(base_url: str = DEFAULT_BASE_URL) -> dict[str, str]:
-    """The two URLs a snapshot needs, keyed by their `build_snapshot` argument.
+    """The URLs a snapshot needs, keyed by their `build_snapshot` argument.
 
     Shared by `read_aio` and by the Qt section's async fetch so the endpoint
     layout is described once.
     """
     base = base_url.rstrip("/")
-    return {"cpu": f"{base}/{CPU_TEMP_PATH}", "devices": f"{base}/{DEVICES_PATH}"}
+    return {
+        "cpu": f"{base}/{CPU_TEMP_PATH}",
+        "gpu": f"{base}/{GPU_TEMP_PATH}",
+        "devices": f"{base}/{DEVICES_PATH}",
+    }
 
 
 def decode_payload(raw: bytes | str | None) -> dict | None:
@@ -443,6 +452,7 @@ def build_snapshot(
     cpu_json: dict | None,
     devices_json: dict | None,
     liquid_json: bytes | str | dict | list | None = None,
+    gpu_json: dict | None = None,
 ) -> dict:
     """Build the snapshot dict from the decoded source responses. Pure; no I/O.
 
@@ -457,6 +467,8 @@ def build_snapshot(
     empty frame.
     """
     cpu_temp = _extract_cpu_temp(cpu_json)
+    # Same envelope as cpuTemp, so the same extractor applies.
+    gpu_temp = _extract_cpu_temp(gpu_json)
     coolant_temp, pump_rpm, coolant_label = _extract_cooler(devices_json)
     fans = _extract_fans(devices_json)
     device_id, rgb_channels, brightness = _extract_rgb_target(devices_json)
@@ -474,10 +486,12 @@ def build_snapshot(
             fans = liquid["fans"]
         source = "liquidctl"
 
-    available = cpu_temp is not None or coolant_temp is not None or bool(fans)
+    available = (cpu_temp is not None or gpu_temp is not None
+                 or coolant_temp is not None or bool(fans))
     if available:
         error = None
-    elif cpu_json is None and devices_json is None and liquid_json is None:
+    elif (cpu_json is None and devices_json is None and liquid_json is None
+          and gpu_json is None):
         error = "no cooling source reachable"
     else:
         error = "no supported device"
@@ -487,6 +501,7 @@ def build_snapshot(
         "error": error,
         "timestamp": time.time(),
         "cpu_temp_c": cpu_temp,
+        "gpu_temp_c": gpu_temp,
         "coolant_temp_c": coolant_temp,
         "coolant_label": coolant_label,
         "pump_rpm": pump_rpm,
@@ -550,6 +565,7 @@ def read_aio(base_url: str = DEFAULT_BASE_URL, timeout: float = DEFAULT_TIMEOUT)
         _fetch_json(urls["cpu"], timeout),
         _fetch_json(urls["devices"], timeout),
         _run_liquidctl(),
+        _fetch_json(urls["gpu"], timeout),
     )
 
 

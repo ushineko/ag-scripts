@@ -412,7 +412,7 @@ class TestEndpointsAndDecoding(unittest.TestCase):
         self.assertEqual(urls["devices"], "http://127.0.0.1:27003/api/devices/")
 
     def test_endpoint_keys_match_build_snapshot_arguments(self):
-        self.assertEqual(set(aio_reader.endpoint_urls()), {"cpu", "devices"})
+        self.assertEqual(set(aio_reader.endpoint_urls()), {"cpu", "gpu", "devices"})
 
     def test_decode_payload(self):
         self.assertEqual(aio_reader.decode_payload(b'{"a": 1}'), {"a": 1})

@@ -42,6 +42,22 @@ _log = logging.getLogger(__name__)
 SIZE = 640
 _MARGIN = 40
 
+# Bottom metric row (spec 031). Three columns since the GPU joined CPU and PUMP.
+# Fonts shrink with the column count because a 44pt four-digit pump reading
+# overflows a one-third column and collides with its neighbour.
+_METRIC_SLOTS = 3
+_METRIC_FONTS = {          # slots -> (label pt, value pt, unit pt)
+    2: (18, 44, 16),
+    3: (16, 34, 14),
+}
+# The metric row needs a wider inset than _MARGIN, because the coolant ring
+# curves inward at that height. Measured on the 640px canvas: at the unit row
+# (y=530) the ring spans x 135..505, so a row laid out from
+# _MARGIN=40 puts its outer columns straight through the arc — "RPM" was drawn
+# over the ring. The inset clears the COLUMN bounds, not just the centred text,
+# so a long value cannot grow into the ring either.
+_METRIC_INSET = 140
+
 # Dark ground: the panel is viewed in a case, and a mostly-black frame draws far
 # less attention than a bright one when the machine is idle.
 _BG = QColor(12, 14, 18)
@@ -316,6 +332,7 @@ def content_key(snapshot: dict) -> tuple:
     return (
         _fmt_temp(snapshot.get("coolant_temp_c")),
         _fmt_temp(snapshot.get("cpu_temp_c")),
+        _fmt_temp(snapshot.get("gpu_temp_c")),
         _fmt_rpm(snapshot.get("pump_rpm")),
         str(snapshot.get("alert_state") or "ok"),
     )
@@ -362,11 +379,11 @@ def should_push(new: dict, last: dict | None) -> bool:
     if a is not None and b is not None and abs(a - b) >= PUMP_PUSH_DELTA_RPM:
         return True
 
-    new_cpu, last_cpu = _number(new.get("cpu_temp_c")), _number(last.get("cpu_temp_c"))
-    if (new_cpu is None) != (last_cpu is None):
-        return True
-    if new_cpu is not None and last_cpu is not None:
-        if abs(new_cpu - last_cpu) >= CPU_PUSH_DELTA_C:
+    for key in ("cpu_temp_c", "gpu_temp_c"):
+        a, b = _number(new.get(key)), _number(last.get(key))
+        if (a is None) != (b is None):
+            return True
+        if a is not None and b is not None and abs(a - b) >= CPU_PUSH_DELTA_C:
             return True
 
     return False
@@ -435,9 +452,10 @@ def _draw(p: QPainter, snap: dict, tint: tuple[int, int, int] | None = None):
     pump_stopped = isinstance(pump, int) and not isinstance(pump, bool) and pump == 0
     accent, _ = _tint_palette(tint)
     _metric(p, 0, "CPU", _fmt_temp(snap.get("cpu_temp_c")), "°C", accent=accent)
+    _metric(p, 1, "GPU", _fmt_temp(snap.get("gpu_temp_c")), "°C", accent=accent)
     # A stopped pump keeps the critical colour whatever the tint: that reading is
     # the point of the screen and must not be restyled by a lighting scene.
-    _metric(p, 1, "PUMP", _fmt_rpm(pump), "RPM",
+    _metric(p, 2, "PUMP", _fmt_rpm(pump), "RPM",
             color=_CRIT if pump_stopped else None, accent=accent)
 
     # Alert banner only when something is wrong; a healthy screen stays clean.
@@ -463,16 +481,22 @@ def _centered(p: QPainter, color: QColor, size: int, rect: QRectF, text: str,
 
 
 def _metric(p: QPainter, slot: int, label: str, value: str, unit: str,
-            color: QColor | None = None, accent: QColor | None = None):
-    """One of the two bottom metrics; slot 0 is left, 1 is right."""
-    width = (SIZE - 2 * _MARGIN) / 2
-    x = _MARGIN + slot * width
+            color: QColor | None = None, accent: QColor | None = None,
+            slots: int = _METRIC_SLOTS):
+    """One of the bottom metrics, laid out left to right across `slots` columns.
+
+    The value font shrinks with the column count: at three columns a 44pt "1735"
+    overflows its width and collides with its neighbour.
+    """
+    width = (SIZE - 2 * _METRIC_INSET) / slots
+    x = _METRIC_INSET + slot * width
 
     if color is None:
         color = (accent or _ACCENT) if value != _PLACEHOLDER else _MUTED
-    _centered(p, _MUTED, 18, QRectF(x, 416, width, 28), label)
-    _centered(p, color, 44, QRectF(x, 446, width, 66), value, bold=True)
-    _centered(p, _MUTED, 16, QRectF(x, 516, width, 26), unit)
+    label_pt, value_pt, unit_pt = _METRIC_FONTS.get(slots, _METRIC_FONTS[2])
+    _centered(p, _MUTED, label_pt, QRectF(x, 416, width, 28), label)
+    _centered(p, color, value_pt, QRectF(x, 446, width, 66), value, bold=True)
+    _centered(p, _MUTED, unit_pt, QRectF(x, 516, width, 26), unit)
 
 
 def write_gif(image: QImage, path: str) -> bool:

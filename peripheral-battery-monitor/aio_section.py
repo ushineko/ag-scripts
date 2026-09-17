@@ -739,7 +739,8 @@ class AioSection(QFrame):
             # requests behind it.
             return
         urls = aio_reader.endpoint_urls()
-        self._inflight = {"cpu": None, "devices": None, "liquid": None, "pending": 3}
+        self._inflight = {"cpu": None, "gpu": None, "devices": None,
+                          "liquid": None, "pending": 4}
         for key, url in urls.items():
             self._request(url, key)
         self._request_liquidctl()
@@ -814,7 +815,7 @@ class AioSection(QFrame):
         self._inflight = None
         try:
             snapshot = aio_reader.build_snapshot(
-                state["cpu"], state["devices"], state["liquid"]
+                state["cpu"], state["devices"], state["liquid"], state["gpu"]
             )
         except Exception:
             # Best-effort: a parse failure must not kill the timer.
@@ -1315,9 +1316,9 @@ class AioSection(QFrame):
                 # only failures were recorded, so "the screen reverted" could not
                 # be correlated with whether a write had just happened, or with
                 # how long the image survived between writes.
-                _log.info("aio_lcd_pushed coolant=%s cpu=%s pump=%s",
+                _log.info("aio_lcd_pushed coolant=%s cpu=%s gpu=%s pump=%s",
                           pushed.get("coolant_temp_c"), pushed.get("cpu_temp_c"),
-                          pushed.get("pump_rpm"))
+                          pushed.get("gpu_temp_c"), pushed.get("pump_rpm"))
                 return
             self._lcd_failures += 1
             _log.warning("aio_lcd_push_failed n=%d err=%s",

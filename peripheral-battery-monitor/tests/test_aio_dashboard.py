@@ -391,3 +391,64 @@ class TestComplementaryTint(unittest.TestCase):
             with self.subTest(bad=bad):
                 img = aio_dashboard.render_dashboard(HEALTHY, bad)
                 self.assertFalse(img.isNull())
+
+
+class TestGpuMetric(unittest.TestCase):
+    """031: GPU temperature joins CPU and PUMP on the bottom row."""
+
+    WITH_GPU = dict(HEALTHY, gpu_temp_c=47.0)
+
+    def test_gpu_changes_the_render(self):
+        without = aio_dashboard.render_dashboard(dict(HEALTHY, gpu_temp_c=None))
+        with_gpu = aio_dashboard.render_dashboard(self.WITH_GPU)
+        self.assertNotEqual(without.bits().asstring(without.sizeInBytes()),
+                            with_gpu.bits().asstring(with_gpu.sizeInBytes()))
+
+    def test_missing_gpu_draws_a_placeholder(self):
+        key = aio_dashboard.content_key(dict(HEALTHY, gpu_temp_c=None))
+        self.assertIn("--", key)
+
+    def test_gpu_is_in_the_content_key(self):
+        a = aio_dashboard.content_key(dict(HEALTHY, gpu_temp_c=47.0))
+        b = aio_dashboard.content_key(dict(HEALTHY, gpu_temp_c=70.0))
+        self.assertNotEqual(a, b)
+
+    def test_gpu_is_thresholded_like_cpu(self):
+        """It must not redraw on every degree; a GPU wanders under load."""
+        base = dict(self.WITH_GPU)
+        small = dict(base, gpu_temp_c=base["gpu_temp_c"] + 1.0)
+        self.assertFalse(aio_dashboard.should_push(small, base))
+        big = dict(base, gpu_temp_c=base["gpu_temp_c"] + aio_dashboard.CPU_PUSH_DELTA_C)
+        self.assertTrue(aio_dashboard.should_push(big, base))
+
+    def test_gpu_appearing_or_disappearing_pushes(self):
+        present = dict(self.WITH_GPU)
+        absent = dict(HEALTHY, gpu_temp_c=None)
+        self.assertTrue(aio_dashboard.should_push(present, absent))
+        self.assertTrue(aio_dashboard.should_push(absent, present))
+
+    def test_metric_row_clears_the_coolant_ring(self):
+        """The row is inset because the ring curves in at that height.
+
+        Laid out from _MARGIN the outer columns were drawn straight through the
+        arc - "RPM" overlapped the ring. Checked arithmetically against the
+        ring geometry rather than by eye.
+        """
+        import math
+        radius = (aio_dashboard.SIZE - 2 * aio_dashboard._MARGIN) / 2
+        centre = aio_dashboard.SIZE / 2
+        unit_row_y = 530          # bottom of the unit text
+        half_chord = math.sqrt(radius ** 2 - (unit_row_y - centre) ** 2)
+        left_limit, right_limit = centre - half_chord, centre + half_chord
+        self.assertGreaterEqual(aio_dashboard._METRIC_INSET, left_limit)
+        self.assertLessEqual(aio_dashboard.SIZE - aio_dashboard._METRIC_INSET,
+                             right_limit)
+
+    def test_fonts_defined_for_the_slot_count(self):
+        self.assertIn(aio_dashboard._METRIC_SLOTS, aio_dashboard._METRIC_FONTS)
+
+    def test_renders_with_everything_missing(self):
+        img = aio_dashboard.render_dashboard(
+            {"coolant_temp_c": None, "cpu_temp_c": None, "gpu_temp_c": None,
+             "pump_rpm": None, "alert_state": "ok"})
+        self.assertFalse(img.isNull())
