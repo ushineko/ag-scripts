@@ -55,6 +55,7 @@ import aio_dashboard
 import aio_liquid
 import aio_queue
 import aio_reader
+import aio_scenes
 import rgb_openrgb
 
 _log = logging.getLogger(__name__)
@@ -400,6 +401,7 @@ class AioSection(QFrame):
         self._lighting_devices: list[dict] = []
         self._lighting_scope: tuple = rgb_openrgb.DEFAULT_SCOPE
         self._lighting_last_color: str | None = None
+        self._scenes: dict = {}
 
         self._timer = QTimer(self)
         self._timer.setInterval(IDLE_POLL_INTERVAL_MS)
@@ -867,6 +869,57 @@ class AioSection(QFrame):
         except Exception:
             _log.debug("aio_notify_failed", exc_info=True)
         _log.warning("aio_alert summary=%s body=%s critical=%s", summary, body, critical)
+
+    # ------------------------------------------------------------------
+    # Scenes (spec 025)
+    # ------------------------------------------------------------------
+
+    def set_scenes(self, scenes: dict):
+        """Install the scene table, normally from settings."""
+        self._scenes = dict(scenes or {})
+
+    @property
+    def scenes(self) -> dict:
+        return dict(self._scenes)
+
+    def apply_scene(self, slot) -> bool:
+        """Apply the scene bound to `slot`. True when something was applied.
+
+        Both halves are attempted independently: a scene whose LCD file has been
+        moved should still change the lighting rather than doing nothing at all.
+        """
+        if not aio_scenes.valid_slot(slot):
+            _log.warning("scene_bad_slot slot=%r", slot)
+            return False
+        scene = self._scenes.get(str(int(slot)))
+        if scene is None:
+            _log.warning("scene_missing slot=%s", slot)
+            return False
+
+        _log.warning("scene_apply slot=%s scene=%s", slot, aio_scenes.summarise(scene))
+        applied = False
+
+        colour = scene.get("color")
+        if colour and self.apply_lighting_color(colour):
+            applied = True
+
+        lcd = scene.get("lcd")
+        if lcd:
+            applied = self._apply_scene_lcd(lcd) or applied
+        return applied
+
+    def _apply_scene_lcd(self, lcd: str) -> bool:
+        """The LCD half of a scene."""
+        if lcd == aio_scenes.LCD_DASHBOARD:
+            self.set_dashboard_enabled(True)
+            return True
+        if lcd == aio_scenes.LCD_LIQUID:
+            return bool(self.set_lcd_liquid())
+        if not os.path.exists(lcd):
+            # Reported, not fatal: the colour half of the scene still applied.
+            _log.warning("scene_lcd_missing path=%s", lcd)
+            return False
+        return bool(self.set_lcd_image(lcd))
 
     # ------------------------------------------------------------------
     # Lighting profiles via OpenRGB (spec 023)

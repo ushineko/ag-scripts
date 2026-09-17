@@ -148,6 +148,9 @@ sys.modules['PyQt6.QtNetwork'] = MagicMock()
 # QObject and talks to D-Bus. Stub the whole module so the monitor constructs
 # cleanly under the mocked Qt namespace (mirrors the QtWidgets stubbing above).
 sys.modules['kwin_window_position'] = MagicMock()
+# scene_service subclasses QObject, which is a MagicMock here; a class
+# cannot be derived from one, so the module is mocked like the others.
+sys.modules['scene_service'] = MagicMock()
 
 # If bandwidth_section was already imported by another test file (which imports
 # real PyQt6), drop its cached reference so peripheral-battery.py re-imports it

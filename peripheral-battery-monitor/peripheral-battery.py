@@ -24,6 +24,8 @@ import accounts
 import usage_cache
 import aio_color
 import aio_liquid
+import aio_scenes
+import scene_service
 import rgb_openrgb
 import aio_section as aio_section_mod
 from aio_section import AioSection
@@ -712,6 +714,13 @@ class PeripheralMonitor(QWidget):
             self.settings.get("lighting_last_color"),
             self.settings.get("lighting_scope"))
         self.aio_section.lightingChanged.connect(self._on_lighting_changed)
+        # Scenes (spec 025): seed defaults once, then publish the D-Bus endpoint
+        # the numpad shortcuts call. A registration failure costs the shortcuts
+        # and nothing else.
+        if aio_scenes.seed(self.settings):
+            self.save_settings()
+        self.aio_section.set_scenes(aio_scenes.load(self.settings))
+        self._scene_service = scene_service.register(self.aio_section, self)
         self.aio_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
