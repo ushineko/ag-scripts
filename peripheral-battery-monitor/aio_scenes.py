@@ -60,20 +60,27 @@ DEFAULT_SCENES: dict[str, dict] = {
           "lcd": os.path.expanduser("~/Pictures/CappelixImages/bluemarble.gif")},
     "9": {"color": "off", "lcd": LCD_LIQUID},
 
-    # Animation bank (Shift+Ctrl+Alt+Numpad N). Each colour is *derived from the
-    # animation itself* rather than guessed: frames are sampled, near-black and
-    # washed-out pixels discarded, the dominant hue taken by vividness-weighted
-    # vote, then saturation and value pushed up because an LED renders a muted
-    # screen colour as muddy brown.
-    "11": {"color": "#ff9f3f", "lcd": "~/Pictures/LcdAnimations/corgi-reel.gif"},
-    "12": {"color": "#ff9f3f", "lcd": "~/Pictures/LcdAnimations/corgi-puppy.gif"},
-    "13": {"color": "#ffffff", "lcd": "~/Pictures/LcdAnimations/dog-galloping.gif"},
-    "14": {"color": "#ff0000", "lcd": "~/Pictures/CappelixImages/redplasma.gif"},
-    "15": {"color": "#ff00ff", "lcd": "~/Pictures/CappelixImages/conicspectrum.gif"},
-    "16": {"color": "#0101ff", "lcd": "~/Pictures/CappelixImages/rotatingearth.gif"},
-    "17": {"color": "#1d55ff", "lcd": "~/Pictures/CappelixImages/mandelbrotzoom.gif"},
-    "18": {"color": "#ff561d", "lcd": "~/Pictures/CappelixImages/orbitdots.gif"},
-    "19": {"color": "#ff2e2e", "lcd": "~/Pictures/CappelixImages/doublependulum.gif"},
+    # Animation bank (Shift+Ctrl+Alt+Numpad N). Colours are *derived from each
+    # animation* rather than guessed: frames sampled, near-black and washed-out
+    # pixels discarded, dominant hue taken by a vividness-weighted vote, then
+    # saturation and value raised because an LED renders a muted screen colour
+    # as muddy brown.
+    #
+    # The four photo reels all land on the same warm amber, and that is the
+    # honest answer rather than a bug: measured hues are 28-32 degrees with
+    # near-zero spread, because indoor photos of pets on wooden floors really
+    # are all that colour. The consequence is that those four scenes cannot be
+    # told apart by their lighting; the abstract GIFs below, where the
+    # derivation has real signal to work with, are vividly distinct.
+    "11": {"color": "#ffa03f", "lcd": "~/Pictures/LcdAnimations/corgis.gif"},
+    "12": {"color": "#ffa03f", "lcd": "~/Pictures/LcdAnimations/cats.gif"},
+    "13": {"color": "#ffa63f", "lcd": "~/Pictures/LcdAnimations/puppies.gif"},
+    "14": {"color": "#ff993f", "lcd": "~/Pictures/LcdAnimations/everyone.gif"},
+    "15": {"color": "#ff0000", "lcd": "~/Pictures/CappelixImages/redplasma.gif"},
+    "16": {"color": "#ff00ff", "lcd": "~/Pictures/CappelixImages/conicspectrum.gif"},
+    "17": {"color": "#0101ff", "lcd": "~/Pictures/CappelixImages/rotatingearth.gif"},
+    "18": {"color": "#1d55ff", "lcd": "~/Pictures/CappelixImages/mandelbrotzoom.gif"},
+    "19": {"color": "#ff561d", "lcd": "~/Pictures/CappelixImages/orbitdots.gif"},
 }
 
 
