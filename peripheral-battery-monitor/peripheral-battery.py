@@ -43,7 +43,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.16.0"
+__version__ = "1.17.0"
 
 # PBM_CONFIG_PATH redirects the settings file. It exists so the test suite can
 # point at a temporary file: tests construct a real PeripheralMonitor with
