@@ -60,7 +60,13 @@ OPENRGB_PORT = int(os.environ.get("OPENRGB_PORT", "6742"))
 # only the effect NAME and silently drops the colour argument in every form, so
 # `rgb_zone_1 Static FF0000` sets Static with no colour, which is black. It
 # reports success while turning the mouse off.
-DEFAULT_SCOPE = ("kraken", "geforce", "maximus", "mm700", "g502")
+DEFAULT_SCOPE = ("kraken", "geforce", "maximus", "mm700", "g502", "keychron")
+
+# Devices a scene colours but never blanks. The keyboard is one you type on: the
+# `off` intent resolves to Direct with black on this board (it advertises
+# "Solid Color" and no Off mode), which would kill the backlight rather than dim
+# it. Colour scenes still reach it.
+OFF_EXEMPT = ("keychron",)
 
 # Intent -> the modes that can express it, best first. Resolution picks the
 # first one a given device actually supports.
@@ -79,7 +85,62 @@ OFF_MODES = ("off", "direct")
 SOLID_MODE_OVERRIDES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("maximus", ("direct", "static")),
     ("aura", ("direct", "static")),
+    # The keyboard is handled by KEYBOARD_EFFECTS below, not here, because it is
+    # user-selectable rather than fixed.
 )
+
+# How the keyboard renders a scene colour. Selectable from the menu.
+#
+# `splash` is the default and is reactive: Solid Splash ripples outward from each
+# keypress in the scene colour. It leaves unpressed keys dark - every reactive
+# effect on this board does, so a dim backdrop with flares on top is not
+# available without a keystroke listener driving Direct per key. That darkness is
+# useful in itself: an active indicator like Caps Lock stands out because nothing
+# around it is lit.
+#
+# `solid` is the flat wash, for when the reactive effect is distracting.
+KEYBOARD_EFFECTS: dict[str, tuple[str, ...]] = {
+    "splash": ("solid splash", "direct", "solid color"),
+    "solid": ("direct", "solid color", "static"),
+}
+DEFAULT_KEYBOARD_EFFECT = "splash"
+_keyboard_effect = DEFAULT_KEYBOARD_EFFECT
+
+# Which device names KEYBOARD_EFFECTS applies to.
+KEYBOARD_MATCH = ("keychron",)
+
+# Devices whose brightness the monitor asserts on every write, and the level.
+#
+# Brightness is device state that nobody owned: whatever was last written stuck,
+# so a value set once by hand became permanent and invisible. Asserting it makes
+# the monitor's picture of the device complete rather than partial.
+#
+# Scoped to the keyboard because that is where it was observed to persist and to
+# matter; OpenRGB applies --brightness only when the mode supports it, but
+# sending it needlessly to every device is a wider change than the evidence
+# supports.
+BRIGHTNESS_DEVICES = ("keychron",)
+DEFAULT_BRIGHTNESS = 100
+
+
+def brightness_for(device_name: str | None) -> int | None:
+    """Brightness to assert for this device, or None to leave it alone."""
+    name = (device_name or "").lower()
+    if any(n in name for n in BRIGHTNESS_DEVICES):
+        return DEFAULT_BRIGHTNESS
+    return None
+
+
+def set_keyboard_effect(name: str | None) -> str:
+    """Select the keyboard's effect; unknown values fall back to the default."""
+    global _keyboard_effect
+    _keyboard_effect = name if name in KEYBOARD_EFFECTS else DEFAULT_KEYBOARD_EFFECT
+    return _keyboard_effect
+
+
+def keyboard_effect() -> str:
+    return _keyboard_effect
+
 
 _DEVICE_LINE = re.compile(r"^(\d+):\s+(.+?)\s*$")
 
@@ -154,6 +215,8 @@ def solid_modes_for(device_name: str | None) -> tuple[str, ...]:
     Defaults to SOLID_MODES; see SOLID_MODE_OVERRIDES for why some devices differ.
     """
     name = (device_name or "").lower()
+    if any(needle in name for needle in KEYBOARD_MATCH):
+        return KEYBOARD_EFFECTS[_keyboard_effect]
     for needle, order in SOLID_MODE_OVERRIDES:
         if needle in name:
             return order
@@ -298,6 +361,9 @@ def set_color_argv(device: str | int, mode: str,
         return None
 
     argv = _client_argv() + ["--device", selector, "--mode", mode]
+    bright = brightness_for(device if isinstance(device, str) else None)
+    if bright is not None:
+        argv += ["--brightness", str(bright)]
     if rgb is not None:
         if not _valid_rgb(rgb):
             _log.warning("openrgb_bad_color rgb=%r", rgb)

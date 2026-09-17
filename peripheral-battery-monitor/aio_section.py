@@ -1100,6 +1100,10 @@ class AioSection(QFrame):
 
         sent = 0
         for device in devices:
+            if intent == "off" and rgb_openrgb.in_scope(
+                    device.get("name", ""), rgb_openrgb.OFF_EXEMPT):
+                # Coloured by a scene, never blanked by one - see OFF_EXEMPT.
+                continue
             mode = rgb_openrgb.resolve_mode(device.get("modes", []), intent,
                                             device.get("name"))
             if mode is None:

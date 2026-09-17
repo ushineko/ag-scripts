@@ -136,10 +136,23 @@ class TestScope(unittest.TestCase):
         names = [d["name"] for d in rgb_openrgb.scoped_devices(self.devices)]
         self.assertIn("G502 X PLUS", names)
 
-    def test_keyboard_stays_out_of_scope(self):
-        """Per-application lighting; a scene should not fight it."""
-        names = [d["name"] for d in rgb_openrgb.scoped_devices(self.devices)]
-        self.assertNotIn("Keychron K4 HE", names)
+    def test_keyboard_is_in_scope(self):
+        """038: it takes scene colours - but is exempt from `off`.
+
+        Checked against in_scope rather than the fixture, which predates the
+        keyboard and holds only the four original devices.
+        """
+        self.assertTrue(rgb_openrgb.in_scope("Keychron K4 HE"))
+
+    def test_keyboard_is_off_exempt(self):
+        self.assertTrue(rgb_openrgb.in_scope("Keychron K4 HE",
+                                             rgb_openrgb.OFF_EXEMPT))
+
+    def test_other_devices_are_not_off_exempt(self):
+        for name in ("NZXT Kraken 2024 ELITE Series RGB", "G502 X PLUS",
+                     "ASUS ROG MAXIMUS Z790 HERO", "Corsair MM700"):
+            self.assertFalse(rgb_openrgb.in_scope(name, rgb_openrgb.OFF_EXEMPT),
+                             f"{name} should still blank on off")
 
     def test_custom_scope(self):
         names = [d["name"] for d in
@@ -278,3 +291,82 @@ class TestSolidModeOverrides(unittest.TestCase):
                          rgb_openrgb.SOLID_MODES)
         self.assertEqual(rgb_openrgb.solid_modes_for(None),
                          rgb_openrgb.SOLID_MODES)
+
+
+class TestKeyboardEffect(unittest.TestCase):
+    """038 — the keyboard takes the scene colour as a reactive effect."""
+
+    KB_MODES = ["Direct", "Solid Color", "Breathing", "Solid Reactive Simple",
+                "Splash", "Solid Splash"]
+
+    def test_solid_prefers_the_reactive_splash(self):
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(self.KB_MODES, "solid", "Keychron K4 HE"),
+            "Solid Splash")
+
+    def test_falls_back_when_the_board_lacks_splash(self):
+        """A different keyboard should still get a usable solid mode."""
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(["Direct", "Solid Color"], "solid",
+                                     "Keychron K2"),
+            "Direct")
+
+    def test_other_devices_keep_their_own_preference(self):
+        """The splash preference must not leak onto anything else."""
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(["Static", "Direct", "Solid Splash"],
+                                     "solid", "NZXT Kraken 2024 ELITE"),
+            "Static")
+
+
+class TestKeyboardEffectSelection(unittest.TestCase):
+    """038 — the effect is user-selectable, defaulting to splash."""
+
+    def setUp(self):
+        self.addCleanup(rgb_openrgb.set_keyboard_effect,
+                        rgb_openrgb.DEFAULT_KEYBOARD_EFFECT)
+
+    KB = ["Direct", "Solid Color", "Solid Splash"]
+
+    def test_defaults_to_splash(self):
+        rgb_openrgb.set_keyboard_effect(rgb_openrgb.DEFAULT_KEYBOARD_EFFECT)
+        self.assertEqual(rgb_openrgb.resolve_mode(self.KB, "solid", "Keychron"),
+                         "Solid Splash")
+
+    def test_solid_selects_the_flat_mode(self):
+        rgb_openrgb.set_keyboard_effect("solid")
+        self.assertEqual(rgb_openrgb.resolve_mode(self.KB, "solid", "Keychron"),
+                         "Direct")
+
+    def test_unknown_value_falls_back_to_the_default(self):
+        """A corrupted settings file must not leave the keyboard unlit."""
+        self.assertEqual(rgb_openrgb.set_keyboard_effect("nonsense"), "splash")
+        self.assertEqual(rgb_openrgb.set_keyboard_effect(None), "splash")
+
+    def test_choice_does_not_affect_other_devices(self):
+        rgb_openrgb.set_keyboard_effect("solid")
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(["Static", "Direct"], "solid", "NZXT Kraken"),
+            "Static")
+
+
+class TestBrightnessAssertion(unittest.TestCase):
+    """038 — brightness was device state nobody owned."""
+
+    def test_keyboard_write_asserts_brightness(self):
+        argv = rgb_openrgb.set_color_argv("Keychron K4 HE", "Solid Splash",
+                                          (128, 0, 255))
+        self.assertIn("--brightness", argv)
+        self.assertEqual(argv[argv.index("--brightness") + 1],
+                         str(rgb_openrgb.DEFAULT_BRIGHTNESS))
+
+    def test_other_devices_are_left_alone(self):
+        for name in ("NZXT Kraken 2024 ELITE", "G502 X PLUS",
+                     "ASUS ROG MAXIMUS Z790 HERO"):
+            argv = rgb_openrgb.set_color_argv(name, "Static", (1, 2, 3))
+            self.assertNotIn("--brightness", argv, name)
+
+    def test_index_addressing_does_not_assert_brightness(self):
+        """An index carries no name, so no device-specific choice can be made."""
+        argv = rgb_openrgb.set_color_argv(4, "Solid Splash", (1, 2, 3))
+        self.assertNotIn("--brightness", argv)

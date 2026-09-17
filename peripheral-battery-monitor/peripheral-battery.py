@@ -43,7 +43,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.18.2"
+__version__ = "1.19.0"
 
 # Lighting device-list priming. The first read is deferred because OpenRGB's own
 # detection takes ~9 s, and its unit now additionally waits for every RGB device
@@ -812,6 +812,9 @@ class PeripheralMonitor(QWidget):
         self.aio_section.set_dashboard_enabled(
             bool(self.settings.get("aio_lcd_dashboard", False)))
         self.aio_section.dashboardChanged.connect(self._on_aio_dashboard_changed)
+        # Keyboard effect before any lighting is applied, so the first scene of
+        # the session already renders the way the user last chose.
+        rgb_openrgb.set_keyboard_effect(self.settings.get("keyboard_effect"))
         self.aio_section.restore_lighting_state(
             self.settings.get("lighting_last_color"),
             self.settings.get("lighting_scope"))
@@ -1622,12 +1625,37 @@ class PeripheralMonitor(QWidget):
         )
         lightingMenu.addAction(offAct)
 
+        if any("keychron" in d["name"].lower() for d in in_scope):
+            lightingMenu.addSeparator()
+            kbMenu = lightingMenu.addMenu("Keyboard effect")
+            current = rgb_openrgb.keyboard_effect()
+            for key, label in (("splash", "Splash (reacts to typing)"),
+                               ("solid", "Solid (flat colour)")):
+                act = QAction(label, self)
+                act.setCheckable(True)
+                act.setChecked(key == current)
+                act.triggered.connect(
+                    lambda checked=False, k=key: self._set_keyboard_effect(k))
+                kbMenu.addAction(act)
+
         lightingMenu.addSeparator()
         refreshAct = QAction("Re-detect devices", self)
         refreshAct.triggered.connect(
             lambda checked=False: self.aio_section.refresh_lighting_devices()
         )
         lightingMenu.addAction(refreshAct)
+
+    def _set_keyboard_effect(self, key: str):
+        """Persist the keyboard effect and re-apply so the change shows at once."""
+        value = rgb_openrgb.set_keyboard_effect(key)
+        self.settings["keyboard_effect"] = value
+        self.save_settings()
+        colour = self.aio_section.lighting_last_color
+        if colour:
+            # Re-send to the keyboard only: the effect choice changes nothing
+            # for any other device.
+            self.aio_section.apply_lighting_color(
+                colour, scope=rgb_openrgb.KEYBOARD_MATCH, remember=False)
 
     def _prime_lighting_devices(self):
         """Read the OpenRGB device list at startup, retrying until it is whole.

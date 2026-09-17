@@ -838,3 +838,28 @@ class TestLightingReassert:
         section.lightingChanged.connect(emitted.append)
         section.apply_lighting_color("green")
         assert emitted == ["green"]
+
+
+class TestOffExemption:
+    """038: the keyboard takes colours but is never blanked."""
+
+    @staticmethod
+    def _dev(name, modes=("Direct", "Static")):
+        return {"name": name, "modes": list(modes)}
+
+    def _devices(self):
+        return [
+            self._dev("Keychron K4 HE", ("Direct", "Solid Color")),
+            self._dev("NZXT Kraken 2024 ELITE Series RGB"),
+            self._dev("Corsair MM700", ("Direct",)),
+        ]
+
+    def test_off_skips_the_keyboard_but_blanks_the_rest(self, section):
+        section._lighting_devices = self._devices()
+        sent = section.apply_lighting("off")
+        assert sent == 2, "keyboard must not be blanked; the other two must be"
+
+    def test_solid_still_reaches_the_keyboard(self, section):
+        section._lighting_devices = self._devices()
+        sent = section.apply_lighting("solid", (0, 255, 0))
+        assert sent == 3
