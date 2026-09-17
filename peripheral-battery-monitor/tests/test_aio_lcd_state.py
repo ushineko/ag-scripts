@@ -154,15 +154,30 @@ class TestRefreshInterval(unittest.TestCase):
 
     def test_rejects_disallowed_values(self):
         before = self.section.dashboard_interval_ms
-        for bad in (0, 1000, 7, -5, None, "30000"):
+        # 1000 is now a declared diagnostic interval, so it is no longer invalid.
+        for bad in (0, 7, -5, None, "30000", 2000):
             with self.subTest(bad=bad):
                 self.assertFalse(self.section.set_dashboard_interval(bad))
         self.assertEqual(self.section.dashboard_interval_ms, before)
 
-    def test_no_interval_faster_than_the_poll(self):
-        """A push cannot carry fresher data than the 5 s poll produces."""
-        self.assertGreaterEqual(min(aio_section.LCD_PUSH_INTERVALS_MS),
-                                aio_section.POLL_INTERVAL_MS)
+    def test_only_diagnostic_intervals_beat_the_poll(self):
+        """A push cannot carry fresher data than the 5 s poll produces.
+
+        Sub-poll intervals are therefore diagnostic only — they exist to
+        measure the load repeated LCD writes generate — and every one of them
+        must be declared as such, so a "useful" setting can never quietly be
+        added below the poll cadence.
+        """
+        for ms in aio_section.LCD_PUSH_INTERVALS_MS:
+            with self.subTest(ms=ms):
+                if ms < aio_section.POLL_INTERVAL_MS:
+                    self.assertIn(ms, aio_section.LCD_DIAGNOSTIC_INTERVALS_MS)
+
+    def test_diagnostic_intervals_are_selectable(self):
+        for ms in aio_section.LCD_DIAGNOSTIC_INTERVALS_MS:
+            with self.subTest(ms=ms):
+                self.assertIn(ms, aio_section.LCD_PUSH_INTERVALS_MS)
+                self.assertTrue(self.section.set_dashboard_interval(ms))
 
 
 class TestLightingPersistence(unittest.TestCase):

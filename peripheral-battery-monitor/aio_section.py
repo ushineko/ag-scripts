@@ -29,11 +29,12 @@ at once. The OpenLinkHub RGB path (`aio_color`, `apply_color`, spec 019) is
 retained for a future OpenLinkHub device but is inert on this hardware.
 
 The LCD can show a live rendered dashboard (`aio_dashboard`). It is off by
-default, pushes at most every 30 s, and only when the rendered content actually
-changed — repeated LCD writes provoke liquidctl#774 bucket-switch failures, so
-not writing is the mitigation. Persistent failures disable it and fall back to
-the firmware's own readout, leaving cooling telemetry unaffected. See the AIO
-runbook in ~/git/sysadmin/runbooks/.
+default, pushes on a selectable interval (30 s default) and only when the
+rendered content actually changed. Writing less is the mitigation for two
+separate LCD problems: liquidctl#774 bucket-switch failures, and the visible
+fallback to the firmware's readout while a bucket is deleted and rewritten.
+Persistent failures disable the dashboard and fall back to that readout, leaving
+cooling telemetry unaffected. See the AIO runbook in ~/git/sysadmin/runbooks/.
 """
 
 from __future__ import annotations
@@ -86,10 +87,21 @@ ALERT_REPEAT_MS = 600000  # 10 minutes
 # only happens when the rendered content actually changed, so a machine sitting
 # at a steady idle writes nothing at all.
 LCD_PUSH_INTERVAL_MS = 30000
-# Selectable refresh intervals (spec 022). Nothing below 5 s: that is the poll
-# cadence, so a faster setting could not produce fresher data and would only
-# add hidraw traffic against a path with a known intermittent failure.
-LCD_PUSH_INTERVALS_MS = (5000, 10000, 30000, 60000, 300000)
+# Selectable refresh intervals (spec 022, extended 023).
+#
+# 1 s is a DIAGNOSTIC option, not a sensible setting. It cannot show fresher
+# data — the cooler is polled every 5 s, so four pushes in five repaint
+# identical values — and a push costs 0.7-0.8 s, so it occupies the hidraw
+# queue most of the time. It exists to measure the load that repeated LCD
+# writes generate.
+#
+# Faster intervals also make the built-in readout flash through more often:
+# liquidctl's _send_data deletes a bucket before each write, and once all
+# buckets are occupied it recycles bucket 0, which may be the one on screen.
+# The firmware then has nothing to display and falls back to its own readout
+# until the new image lands.
+LCD_PUSH_INTERVALS_MS = (1000, 5000, 10000, 30000, 60000, 300000)
+LCD_DIAGNOSTIC_INTERVALS_MS = (1000,)
 # After this many consecutive push failures, give up, fall back to the
 # firmware's own `liquid` readout (which needs no host traffic and cannot blank)
 # and tell the user once.
