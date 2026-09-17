@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import (
     QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QProgressBar, QPushButton, QInputDialog, QSizePolicy
+    QFrame, QProgressBar, QPushButton, QInputDialog, QSizePolicy, QFileDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
@@ -23,6 +23,7 @@ import battery_reader
 import accounts
 import usage_cache
 import aio_color
+import aio_liquid
 from aio_section import AioSection
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
@@ -697,6 +698,9 @@ class PeripheralMonitor(QWidget):
         # can be toggled at runtime; it keeps itself hidden until OpenLinkHub
         # actually reports something, so machines without it see no change.
         self.aio_section = AioSection(initial_settings=self.settings, parent=self)
+        # Restore the LCD dashboard preference; the menu only reflects it.
+        self.aio_section.set_dashboard_enabled(
+            bool(self.settings.get("aio_lcd_dashboard", False)))
         self.aio_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -1336,6 +1340,14 @@ class PeripheralMonitor(QWidget):
         Omitted entirely when it does not: an effect name that the device has
         not implemented is rejected, so the menu never guesses one.
         """
+        # Spec 021: the Kraken is driven by liquidctl and is not an OpenLinkHub
+        # device, so prefer that backend when it reports a cooler. The
+        # OpenLinkHub path below still serves a future OpenLinkHub RGB device.
+        if self.aio_section.kraken_available():
+            parent_menu.addSeparator()
+            self._build_kraken_menu(parent_menu)
+            return
+
         device, channels = self.aio_section.rgb_target()
         if not device or not channels:
             return
@@ -1376,6 +1388,125 @@ class PeripheralMonitor(QWidget):
                 lambda checked=False, v=level: self.aio_section.set_brightness(v)
             )
             brightnessMenu.addAction(action)
+
+    def _build_kraken_menu(self, parent_menu):
+        """Colour / Effect / LCD for a liquidctl-driven Kraken (spec 021).
+
+        Colour and Effect appear only when the device actually implements a
+        colour channel. The NZXT Kraken 2024 Elite does not — liquidctl gives it
+        an empty `_color_channels` map and every colour write returns "operation
+        not supported by the device" — so on this hardware the menu is LCD only.
+        Offering buttons that cannot work is worse than offering none.
+        """
+        if aio_liquid.color_supported():
+            self._build_kraken_color_menus(parent_menu)
+        self._build_kraken_lcd_menu(parent_menu)
+
+    def _build_kraken_color_menus(self, parent_menu):
+        colourMenu = parent_menu.addMenu("Colour")
+        for name in sorted(aio_liquid.NAMED_COLORS):
+            if name == "off":
+                continue
+            action = QAction(name.capitalize(), self)
+            action.triggered.connect(
+                lambda checked=False, n=name: self.aio_section.kraken_color(n)
+            )
+            colourMenu.addAction(action)
+        colourMenu.addSeparator()
+        customAct = QAction("Custom…", self)
+        customAct.triggered.connect(self._prompt_kraken_color)
+        colourMenu.addAction(customAct)
+        offAct = QAction("Off", self)
+        offAct.triggered.connect(
+            lambda checked=False: self.aio_section.kraken_color("off")
+        )
+        colourMenu.addAction(offAct)
+
+        modes = aio_liquid.effect_modes()
+        if modes["plain"] or modes["colored"]:
+            effectMenu = parent_menu.addMenu("Effect")
+            # Plain effects ignore colour entirely (rainbow/spectrum variants).
+            for name in modes["plain"]:
+                action = QAction(name, self)
+                action.triggered.connect(
+                    lambda checked=False, n=name: self.aio_section.kraken_effect(n)
+                )
+                effectMenu.addAction(action)
+            if modes["plain"] and modes["colored"]:
+                effectMenu.addSeparator()
+            # Colour-taking effects are paired with the last chosen colour.
+            for name in modes["colored"]:
+                action = QAction(f"{name}…", self)
+                action.triggered.connect(
+                    lambda checked=False, n=name: self._prompt_kraken_effect(n)
+                )
+                effectMenu.addAction(action)
+
+    def _build_kraken_lcd_menu(self, parent_menu):
+        lcdMenu = parent_menu.addMenu("LCD")
+
+        dashAct = QAction("Live dashboard", self, checkable=True)
+        dashAct.setChecked(bool(self.settings.get("aio_lcd_dashboard", False)))
+        dashAct.triggered.connect(self._toggle_aio_dashboard)
+        lcdMenu.addAction(dashAct)
+
+        liquidAct = QAction("Coolant temperature (built-in)", self)
+        liquidAct.triggered.connect(
+            lambda checked=False: self.aio_section.set_lcd_liquid()
+        )
+        lcdMenu.addAction(liquidAct)
+
+        imageAct = QAction("Static image…", self)
+        imageAct.triggered.connect(self._prompt_kraken_image)
+        lcdMenu.addAction(imageAct)
+
+        lcdMenu.addSeparator()
+        brightnessMenu = lcdMenu.addMenu("Brightness")
+        for level in (0, 20, 40, 60, 80, 100):
+            action = QAction(f"{level}%", self)
+            action.triggered.connect(
+                lambda checked=False, v=level: self.aio_section.set_lcd_brightness(v)
+            )
+            brightnessMenu.addAction(action)
+
+        orientMenu = lcdMenu.addMenu("Orientation")
+        for degrees in aio_liquid.ORIENTATIONS:
+            action = QAction(f"{degrees}°", self)
+            action.triggered.connect(
+                lambda checked=False, v=degrees: self.aio_section.set_lcd_orientation(v)
+            )
+            orientMenu.addAction(action)
+
+    def _toggle_aio_dashboard(self, checked: bool):
+        self.settings["aio_lcd_dashboard"] = bool(checked)
+        self.save_settings()
+        self.aio_section.set_dashboard_enabled(bool(checked))
+
+    def _prompt_kraken_color(self):
+        value, ok = QInputDialog.getText(
+            self, "AIO Colour", "Hex colour (e.g. #ff8800):")
+        if not ok or not value.strip():
+            return
+        value = value.strip()
+        if aio_color.parse_color(value) is None:
+            structlog.get_logger().warning("aio_rgb_bad_colour", value=value)
+            return
+        self.aio_section.kraken_color(value)
+
+    def _prompt_kraken_effect(self, mode: str):
+        """Colour-taking effects need a colour; ask for one."""
+        value, ok = QInputDialog.getText(
+            self, f"AIO Effect: {mode}", "Colour name or hex (e.g. red, #ff8800):")
+        if not ok or not value.strip():
+            return
+        self.aio_section.kraken_effect(mode, value.strip())
+
+    def _prompt_kraken_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "LCD image", os.path.expanduser("~"),
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
+        if path:
+            self.aio_section.set_lcd_static(path)
 
     def _set_aio_color(self, value: str):
         rgb = aio_color.parse_color(value)

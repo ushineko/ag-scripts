@@ -20,17 +20,28 @@ QThread. Two blocking HTTP calls per poll would freeze the widget for up to
 the lifetime hazards that produced the spec 010 crash. QNAM is event-loop
 native — nothing to orphan.
 
-Reads thermals; writes RGB only. Fan and pump duty writes are silently discarded
-by Commander ST firmware 2.x, so a speed control here would report success and
-change nothing, and none exists. RGB writes do land, and `apply_color` /
-`apply_effect` / `set_brightness` drive them from the context menu (spec 019).
-See the AIO runbook in ~/git/sysadmin/runbooks/.
+Reads thermals; writes RGB and LCD, never fan or pump duty. The cooler is an
+NZXT Kraken Elite V2 driven through `liquidctl`: `aio_liquid` builds the command
+lines, `kraken_color` / `kraken_effect` / `set_lcd_*` drive them from the context
+menu (spec 021), and `aio_queue.LiquidctlQueue` serialises every invocation
+against the status poll so no two liquidctl processes touch the same hidraw node
+at once. The OpenLinkHub RGB path (`aio_color`, `apply_color`, spec 019) is
+retained for a future OpenLinkHub device but is inert on this hardware.
+
+The LCD can show a live rendered dashboard (`aio_dashboard`). It is off by
+default, pushes at most every 30 s, and only when the rendered content actually
+changed — repeated LCD writes provoke liquidctl#774 bucket-switch failures, so
+not writing is the mitigation. Persistent failures disable it and fall back to
+the firmware's own readout, leaving cooling telemetry unaffected. See the AIO
+runbook in ~/git/sysadmin/runbooks/.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 
 from PyQt6.QtCore import QElapsedTimer, QPointF, QProcess, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
@@ -38,6 +49,9 @@ from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkReques
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 import aio_color
+import aio_dashboard
+import aio_liquid
+import aio_queue
 import aio_reader
 
 _log = logging.getLogger(__name__)
@@ -63,6 +77,21 @@ LIQUIDCTL_TIMEOUT_MS = 5000
 # blip. While a condition persists, re-notify at most every REPEAT interval.
 ALERT_CONFIRM_SAMPLES = 3
 ALERT_REPEAT_MS = 600000  # 10 minutes
+
+# LCD dashboard (spec 021). Deliberately slow: the values move slowly, and the
+# LCD's bucket-switching fails intermittently under repeated writes
+# (liquidctl#774), so the cheapest mitigation is writing rarely. A push also
+# only happens when the rendered content actually changed, so a machine sitting
+# at a steady idle writes nothing at all.
+LCD_PUSH_INTERVAL_MS = 30000
+# After this many consecutive push failures, give up, fall back to the
+# firmware's own `liquid` readout (which needs no host traffic and cannot blank)
+# and tell the user once.
+LCD_MAX_FAILURES = 5
+LCD_IMAGE_PATH = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir(),
+    "peripheral-battery-monitor-lcd.png",
+)
 
 SPARKLINE_SAMPLES = 60
 
@@ -327,6 +356,18 @@ class AioSection(QFrame):
         self._alert_streak_state: str | None = None
         self._alert_streak = 0
         self._alert_timer = QElapsedTimer()
+
+        # Spec 021: one queue for every liquidctl invocation on this device.
+        self.queue = aio_queue.LiquidctlQueue(self)
+
+        # LCD dashboard state. Off by default: a push is a visible hardware
+        # change and the LCD's current content cannot be read back, so enabling
+        # it is the user's call.
+        self._lcd_dashboard_enabled = False
+        self._lcd_last_key = None
+        self._lcd_timer = QElapsedTimer()
+        self._lcd_failures = 0
+        self._last_snapshot: dict = {}
 
         self._timer = QTimer(self)
         self._timer.setInterval(IDLE_POLL_INTERVAL_MS)
@@ -641,7 +682,11 @@ class AioSection(QFrame):
         self._request_liquidctl()
 
     def _request_liquidctl(self):
-        """Start liquidctl asynchronously, settling the "liquid" slot when done.
+        """Read cooler status through the shared queue (spec 021).
+
+        Spec 020 ran this as its own QProcess. Now that RGB and LCD writes exist
+        it goes through `LiquidctlQueue` instead, so a status read can never
+        overlap a write on the same hidraw node.
 
         Any failure — binary missing, non-zero exit, timeout, crash — settles the
         slot with None, so the snapshot still builds from OpenLinkHub alone.
@@ -650,41 +695,19 @@ class AioSection(QFrame):
             self._settle("liquid", None)
             return
 
-        argv = aio_reader.liquidctl_argv()
-        proc = QProcess(self)
-        proc.setProgram(argv[0])
-        proc.setArguments(argv[1:])
-        # One-shot guard: finished and errorOccurred can both fire.
-        done = {"settled": False}
+        def done(ok: bool, out: bytes, err: str):
+            if not ok:
+                _log.debug("liquidctl_status_failed err=%s", err[:200] if err else "")
+            self._settle("liquid", out if ok and out else None)
 
-        def settle(payload):
-            if done["settled"]:
-                return
-            done["settled"] = True
-            killer.stop()
-            proc.deleteLater()
-            self._settle("liquid", payload)
-
-        def on_finished(code, _status):
-            if code != 0:
-                _log.debug("liquidctl_nonzero rc=%s", code)
-                settle(None)
-                return
-            settle(bytes(proc.readAllStandardOutput()) or None)
-
-        def on_error(err):
-            _log.debug("liquidctl_process_error err=%s", err)
-            settle(None)
-
-        killer = QTimer(self)
-        killer.setSingleShot(True)
-        killer.setInterval(LIQUIDCTL_TIMEOUT_MS)
-        killer.timeout.connect(lambda: (proc.kill(), settle(None)))
-
-        proc.finished.connect(on_finished)
-        proc.errorOccurred.connect(on_error)
-        killer.start()
-        proc.start()
+        accepted = self.queue.submit(
+            aio_reader.liquidctl_argv(),
+            aio_queue.PRIORITY_READ,
+            on_done=done,
+            coalesce_key="status",
+        )
+        if not accepted:
+            self._settle("liquid", None)
 
     @staticmethod
     def _build_request(url: str) -> QNetworkRequest:
@@ -734,8 +757,10 @@ class AioSection(QFrame):
             # Best-effort: a parse failure must not kill the timer.
             _log.warning("aio_snapshot_failed", exc_info=True)
             return
+        self._last_snapshot = snapshot
         self._evaluate_alert(snapshot)
         self.render_snapshot(snapshot)
+        self._maybe_push_dashboard(snapshot)
 
     # ------------------------------------------------------------------
     # Cooling alerts (spec 020)
@@ -810,3 +835,136 @@ class AioSection(QFrame):
         except Exception:
             _log.debug("aio_notify_failed", exc_info=True)
         _log.warning("aio_alert summary=%s body=%s critical=%s", summary, body, critical)
+
+    # ------------------------------------------------------------------
+    # Kraken RGB and LCD control (spec 021)
+    # ------------------------------------------------------------------
+
+    def kraken_available(self) -> bool:
+        """True when liquidctl reported a cooler on the last poll.
+
+        Menus gate on this, so a machine with no Kraken shows no controls rather
+        than offering buttons that invoke nothing.
+        """
+        return self._last_snapshot.get("cooler_source") == "liquidctl"
+
+    def _submit_write(self, argv, description: str):
+        """Queue a user-initiated write ahead of polling."""
+        if not argv:
+            _log.warning("aio_write_rejected what=%s", description)
+            return False
+
+        def done(ok: bool, _out: bytes, err: str):
+            if not ok:
+                _log.warning("aio_write_failed what=%s err=%s", description,
+                             (err or "")[:200])
+        return self.queue.submit(argv, aio_queue.PRIORITY_WRITE, on_done=done)
+
+    def kraken_color(self, value: str, channel: str = aio_liquid.DEFAULT_COLOR_CHANNEL):
+        """Solid colour by name or #rrggbb; 'off' blanks the channel."""
+        return self._submit_write(
+            aio_liquid.solid_color_argv(channel, value), f"color {value}")
+
+    def kraken_effect(self, mode: str, value: str | None = None,
+                      channel: str = aio_liquid.DEFAULT_COLOR_CHANNEL):
+        """Named effect, optionally carrying a colour for modes that take one."""
+        colors = []
+        if value:
+            rgb = aio_color.parse_color(value)
+            if rgb is None:
+                _log.warning("aio_effect_bad_color value=%r", value)
+                return False
+            colors = [rgb]
+        return self._submit_write(
+            aio_liquid.color_argv(channel, mode, colors), f"effect {mode}")
+
+    def set_lcd_brightness(self, level: int):
+        return self._submit_write(
+            aio_liquid.lcd_brightness_argv(level), f"lcd brightness {level}")
+
+    def set_lcd_orientation(self, degrees: int):
+        return self._submit_write(
+            aio_liquid.lcd_orientation_argv(degrees), f"lcd orientation {degrees}")
+
+    def set_lcd_liquid(self):
+        """Hand the LCD back to the firmware's own coolant readout."""
+        self.set_dashboard_enabled(False)
+        return self._submit_write(aio_liquid.lcd_liquid_argv(), "lcd liquid")
+
+    def set_lcd_static(self, path: str):
+        self.set_dashboard_enabled(False)
+        return self._submit_write(aio_liquid.lcd_static_argv(path), "lcd static")
+
+    def set_dashboard_enabled(self, enabled: bool):
+        """Turn the live LCD dashboard on or off."""
+        enabled = bool(enabled)
+        if enabled == self._lcd_dashboard_enabled:
+            return
+        self._lcd_dashboard_enabled = enabled
+        self._lcd_failures = 0
+        self._lcd_last_key = None
+        if enabled:
+            # Push immediately rather than waiting out the first interval.
+            self._lcd_timer.invalidate()
+        else:
+            self.queue.clear_idle()
+
+    def _maybe_push_dashboard(self, snapshot: dict):
+        """Render and push the LCD, subject to cadence, change and health gates.
+
+        Four gates, cheapest first, because the best defence against
+        liquidctl#774 is simply not writing.
+        """
+        if not self._lcd_dashboard_enabled:
+            return
+        if snapshot.get("cooler_source") != "liquidctl":
+            return
+        if self._lcd_timer.isValid() and self._lcd_timer.elapsed() < LCD_PUSH_INTERVAL_MS:
+            return
+
+        key = aio_dashboard.content_key(snapshot)
+        if key == self._lcd_last_key:
+            # Nothing visible changed; restart the clock and write nothing.
+            self._lcd_timer.restart()
+            return
+
+        image = aio_dashboard.render_dashboard(snapshot)
+        if not aio_dashboard.write_png(image, LCD_IMAGE_PATH):
+            return
+
+        argv = aio_liquid.lcd_static_argv(LCD_IMAGE_PATH)
+        if not argv:
+            return
+
+        def done(ok: bool, _out: bytes, err: str):
+            if ok:
+                self._lcd_failures = 0
+                self._lcd_last_key = key
+                return
+            self._lcd_failures += 1
+            _log.warning("aio_lcd_push_failed n=%d err=%s",
+                         self._lcd_failures, (err or "")[:200])
+            if self._lcd_failures >= LCD_MAX_FAILURES:
+                self._surrender_dashboard()
+
+        self._lcd_timer.restart()
+        self.queue.submit(argv, aio_queue.PRIORITY_IDLE, on_done=done,
+                          coalesce_key="lcd")
+
+    def _surrender_dashboard(self):
+        """Give up on the dashboard after repeated failures.
+
+        Falls back to the firmware's `liquid` readout, which is drawn by the
+        device and needs no host traffic, so it cannot hit the bucket-switch
+        failure. Cooling telemetry and alerting are unaffected throughout.
+        """
+        _log.warning("aio_lcd_dashboard_surrendered failures=%d", self._lcd_failures)
+        self._lcd_dashboard_enabled = False
+        self.queue.clear_idle()
+        self._submit_write(aio_liquid.lcd_liquid_argv(), "lcd liquid (fallback)")
+        self._notify(
+            "LCD dashboard disabled",
+            "Repeated LCD write failures; reverted to the cooler's built-in "
+            "temperature display. Cooling monitoring is unaffected.",
+            critical=False,
+        )
