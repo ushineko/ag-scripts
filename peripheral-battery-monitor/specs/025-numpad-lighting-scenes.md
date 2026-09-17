@@ -1,5 +1,10 @@
 # Spec 025: numpad lighting scenes over D-Bus
 
+> Revised twice during implementation: the binding mechanism moved from
+> `.desktop` shortcuts to KWin scripting (the former cannot take effect
+> until the next login), and a second bank of animation scenes was added
+> on `Shift+Ctrl+Alt+Numpad N`.
+
 ## Context
 
 Lighting (spec 023) and LCD control (specs 021-024) are reachable only from the
@@ -92,5 +97,18 @@ this project, so the pattern is established rather than invented here.
 - Considered KDE's `KGlobalAccel` registration from inside the app; rejected
   because PyQt6 does not expose it, and the `.desktop` + kglobalshortcutsrc
   route is what every other custom shortcut on this machine already uses.
+
+## Addendum: animation bank
+
+Slots 11-19, bound to `Shift+Ctrl+Alt+Numpad 1-9`, pair an animated GIF with a
+lighting colour **derived from the animation itself** rather than chosen by
+hand: frames are sampled, near-black and washed-out pixels discarded, the
+dominant hue taken by a vividness-weighted vote, then saturation and value
+pushed up because an LED renders a muted screen colour as muddy brown.
+
+Sources are the existing Capellix set plus three downloaded from Wikimedia
+Commons — a corgi still rendered into a seamless zoom loop (CC BY-SA 4.0) and
+Eadweard Muybridge's galloping dog (public domain). Attribution is recorded in
+`~/Pictures/LcdAnimations/ATTRIBUTION.txt`.
 
 ## Status: COMPLETE

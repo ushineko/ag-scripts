@@ -13,13 +13,14 @@ import aio_scenes  # noqa: E402
 
 class TestSlots(unittest.TestCase):
     def test_valid_range(self):
-        for slot in range(1, 10):
+        for slot in list(range(1, 10)) + list(range(11, 20)):
             with self.subTest(slot=slot):
                 self.assertTrue(aio_scenes.valid_slot(slot))
                 self.assertTrue(aio_scenes.valid_slot(str(slot)))
 
     def test_invalid(self):
-        for bad in (0, 10, -1, None, "x", "", 1.5):
+        # 10 and 20 are the gaps between the two banks.
+        for bad in (0, 10, 20, -1, None, "x", "", 1.5):
             with self.subTest(bad=bad):
                 self.assertFalse(aio_scenes.valid_slot(bad))
 
@@ -30,9 +31,25 @@ class TestValidation(unittest.TestCase):
             with self.subTest(slot=slot):
                 self.assertIsNone(aio_scenes.describe_problem(scene))
 
-    def test_defaults_cover_every_slot(self):
-        self.assertEqual(sorted(aio_scenes.DEFAULT_SCENES),
-                         sorted(str(n) for n in range(1, 10)))
+    def test_defaults_cover_every_slot_in_both_banks(self):
+        expected = [str(n) for n in list(range(1, 10)) + list(range(11, 20))]
+        self.assertEqual(sorted(aio_scenes.DEFAULT_SCENES), sorted(expected))
+
+    def test_animation_bank_points_at_files(self):
+        """Every animation slot names a path, not a keyword."""
+        for slot in range(aio_scenes.ANIM_MIN, aio_scenes.ANIM_MAX + 1):
+            with self.subTest(slot=slot):
+                lcd = aio_scenes.DEFAULT_SCENES[str(slot)]["lcd"]
+                self.assertNotIn(lcd, (aio_scenes.LCD_DASHBOARD,
+                                       aio_scenes.LCD_LIQUID))
+                self.assertTrue(lcd.endswith(".gif"))
+
+    def test_animation_colours_are_explicit_hex(self):
+        """Derived from each animation, so they must be hex, not names."""
+        for slot in range(aio_scenes.ANIM_MIN, aio_scenes.ANIM_MAX + 1):
+            with self.subTest(slot=slot):
+                self.assertTrue(
+                    aio_scenes.DEFAULT_SCENES[str(slot)]["color"].startswith("#"))
 
     def test_colour_only_and_lcd_only_are_valid(self):
         self.assertIsNone(aio_scenes.describe_problem({"color": "red", "lcd": None}))
@@ -73,7 +90,7 @@ class TestValidation(unittest.TestCase):
 class TestLoad(unittest.TestCase):
     def test_empty_settings_yields_defaults(self):
         scenes = aio_scenes.load({})
-        self.assertEqual(len(scenes), 9)
+        self.assertEqual(len(scenes), 18)
         self.assertEqual(scenes["1"]["color"],
                          aio_scenes.DEFAULT_SCENES["1"]["color"])
 
@@ -86,7 +103,7 @@ class TestLoad(unittest.TestCase):
         """A hand-edited file with one typo must not break the other eight."""
         scenes = aio_scenes.load(
             {aio_scenes.SETTINGS_KEY: {"3": {"color": "nonsense", "lcd": None}}})
-        self.assertEqual(len(scenes), 9)
+        self.assertEqual(len(scenes), 18)
         self.assertEqual(scenes["3"], aio_scenes.normalise(
             aio_scenes.DEFAULT_SCENES["3"]))
 
@@ -99,25 +116,39 @@ class TestLoad(unittest.TestCase):
     def test_garbage_settings_value_yields_defaults(self):
         for bad in ("nope", [], 5, None):
             with self.subTest(bad=bad):
-                self.assertEqual(len(aio_scenes.load({aio_scenes.SETTINGS_KEY: bad})), 9)
+                self.assertEqual(len(aio_scenes.load({aio_scenes.SETTINGS_KEY: bad})), 18)
 
 
 class TestSeed(unittest.TestCase):
     def test_seeds_when_absent(self):
         settings = {}
         self.assertTrue(aio_scenes.seed(settings))
-        self.assertEqual(len(settings[aio_scenes.SETTINGS_KEY]), 9)
+        self.assertEqual(len(settings[aio_scenes.SETTINGS_KEY]), 18)
 
-    def test_never_overwrites_user_edits(self):
+    def test_never_overwrites_an_existing_slot(self):
         """The point of storing scenes in settings is that they can be retuned."""
-        mine = {"1": {"color": "white", "lcd": "liquid"}}
-        settings = {aio_scenes.SETTINGS_KEY: mine}
+        mine = {"color": "white", "lcd": "liquid"}
+        settings = {aio_scenes.SETTINGS_KEY: {"1": dict(mine)}}
+        aio_scenes.seed(settings)
+        self.assertEqual(settings[aio_scenes.SETTINGS_KEY]["1"], mine)
+
+    def test_seed_adds_a_bank_introduced_later(self):
+        """A file written before the animation bank existed still gains it."""
+        settings = {aio_scenes.SETTINGS_KEY: {
+            str(n): dict(aio_scenes.DEFAULT_SCENES[str(n)]) for n in range(1, 10)}}
+        self.assertTrue(aio_scenes.seed(settings))
+        self.assertIn("11", settings[aio_scenes.SETTINGS_KEY])
+        self.assertEqual(len(settings[aio_scenes.SETTINGS_KEY]), 18)
+
+    def test_seed_is_idempotent(self):
+        settings = {}
+        aio_scenes.seed(settings)
         self.assertFalse(aio_scenes.seed(settings))
-        self.assertEqual(settings[aio_scenes.SETTINGS_KEY], mine)
 
     def test_seeds_over_an_empty_dict(self):
         settings = {aio_scenes.SETTINGS_KEY: {}}
         self.assertTrue(aio_scenes.seed(settings))
+        self.assertEqual(len(settings[aio_scenes.SETTINGS_KEY]), 18)
 
     def test_seed_is_a_copy(self):
         settings = {}

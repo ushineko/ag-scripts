@@ -30,8 +30,14 @@ import aio_color
 
 _log = logging.getLogger(__name__)
 
+# Two banks. 1-9 are solid colours on Ctrl+Alt+Numpad N; 11-19 are animations
+# on Shift+Ctrl+Alt+Numpad N. The offset keeps one flat table and one D-Bus
+# method rather than a second dimension everywhere.
 SLOT_MIN = 1
 SLOT_MAX = 9
+ANIM_OFFSET = 10
+ANIM_MIN = SLOT_MIN + ANIM_OFFSET
+ANIM_MAX = SLOT_MAX + ANIM_OFFSET
 
 LCD_DASHBOARD = "dashboard"
 LCD_LIQUID = "liquid"
@@ -53,6 +59,21 @@ DEFAULT_SCENES: dict[str, dict] = {
     "8": {"color": "magenta",
           "lcd": os.path.expanduser("~/Pictures/CappelixImages/bluemarble.gif")},
     "9": {"color": "off", "lcd": LCD_LIQUID},
+
+    # Animation bank (Shift+Ctrl+Alt+Numpad N). Each colour is *derived from the
+    # animation itself* rather than guessed: frames are sampled, near-black and
+    # washed-out pixels discarded, the dominant hue taken by vividness-weighted
+    # vote, then saturation and value pushed up because an LED renders a muted
+    # screen colour as muddy brown.
+    "11": {"color": "#ff9f3f", "lcd": "~/Pictures/LcdAnimations/corgi-puppy.gif"},
+    "12": {"color": "#ffffff", "lcd": "~/Pictures/LcdAnimations/dog-galloping.gif"},
+    "13": {"color": "#ff0000", "lcd": "~/Pictures/CappelixImages/redplasma.gif"},
+    "14": {"color": "#ff00ff", "lcd": "~/Pictures/CappelixImages/conicspectrum.gif"},
+    "15": {"color": "#0101ff", "lcd": "~/Pictures/CappelixImages/rotatingearth.gif"},
+    "16": {"color": "#1d55ff", "lcd": "~/Pictures/CappelixImages/mandelbrotzoom.gif"},
+    "17": {"color": "#ff561d", "lcd": "~/Pictures/CappelixImages/orbitdots.gif"},
+    "18": {"color": "#ff2e2e", "lcd": "~/Pictures/CappelixImages/doublependulum.gif"},
+    "19": {"color": "#ffffff", "lcd": "~/Pictures/CappelixImages/newtonscradle.gif"},
 }
 
 
@@ -70,7 +91,7 @@ def valid_slot(slot) -> bool:
         n = int(slot)
     except (TypeError, ValueError):
         return False
-    return SLOT_MIN <= n <= SLOT_MAX
+    return (SLOT_MIN <= n <= SLOT_MAX) or (ANIM_MIN <= n <= ANIM_MAX)
 
 
 def describe_problem(scene) -> str | None:
@@ -126,7 +147,8 @@ def load(settings: dict) -> dict[str, dict]:
         stored = {}
 
     scenes: dict[str, dict] = {}
-    for slot in range(SLOT_MIN, SLOT_MAX + 1):
+    slots = list(range(SLOT_MIN, SLOT_MAX + 1)) + list(range(ANIM_MIN, ANIM_MAX + 1))
+    for slot in slots:
         key = str(slot)
         scene = stored.get(key, DEFAULT_SCENES.get(key))
         problem = describe_problem(scene)
@@ -141,15 +163,24 @@ def load(settings: dict) -> dict[str, dict]:
 
 
 def seed(settings: dict) -> bool:
-    """Write the defaults into settings if absent. True when it changed.
+    """Add any missing default slots to settings. True when it changed.
 
-    Never overwrites an existing set: the whole point of storing scenes in the
-    settings file is that the user can retune them.
+    Merges per slot rather than all-or-nothing. An existing slot is never
+    touched — the point of storing scenes in the settings file is that they can
+    be retuned — but a bank added in a later version still appears for someone
+    whose file was written before it existed.
     """
-    if isinstance(settings.get(SETTINGS_KEY), dict) and settings[SETTINGS_KEY]:
-        return False
-    settings[SETTINGS_KEY] = {k: dict(v) for k, v in DEFAULT_SCENES.items()}
-    return True
+    stored = settings.get(SETTINGS_KEY)
+    if not isinstance(stored, dict):
+        stored = {}
+        settings[SETTINGS_KEY] = stored
+
+    changed = False
+    for key, scene in DEFAULT_SCENES.items():
+        if key not in stored:
+            stored[key] = dict(scene)
+            changed = True
+    return changed
 
 
 def summarise(scene: dict) -> str:

@@ -2,7 +2,7 @@
 """Apply a lighting/LCD scene in the running monitor (spec 025).
 
 Usage:
-    aio-scene <1-9>     apply that scene
+    aio-scene <N>       apply scene N (1-9 colours, 11-19 animations)
     aio-scene --list    show what each slot does
 
 Bound to Ctrl+Alt+Numpad N by .desktop entries in kglobalshortcutsrc. Talks to
@@ -14,6 +14,7 @@ Exits non-zero with one line when the monitor is not running: a keypress should
 not produce a dialog or a hang.
 """
 
+import os
 import sys
 
 SERVICE = "org.agscripts.PeripheralBatteryMonitor"
@@ -61,13 +62,21 @@ def main(argv: list[str]) -> int:
         print(listing)
         return 0
 
+    # Range lives in aio_scenes, not here: hardcoding 1-9 in this file is what
+    # made the animation bank unreachable from the CLI after it was added.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import aio_scenes
+
     try:
         slot = int(argv[0])
     except ValueError:
         print(f"aio-scene: not a slot number: {argv[0]}", file=sys.stderr)
         return 2
-    if not 1 <= slot <= 9:
-        print(f"aio-scene: slot out of range (1-9): {slot}", file=sys.stderr)
+    if not aio_scenes.valid_slot(slot):
+        print(f"aio-scene: slot out of range "
+              f"({aio_scenes.SLOT_MIN}-{aio_scenes.SLOT_MAX}, "
+              f"{aio_scenes.ANIM_MIN}-{aio_scenes.ANIM_MAX}): {slot}",
+              file=sys.stderr)
         return 2
 
     applied = _call("Apply", slot)

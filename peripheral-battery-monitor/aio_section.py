@@ -953,7 +953,8 @@ class AioSection(QFrame):
         return list(self._lighting_devices)
 
     def apply_lighting(self, intent: str, rgb: tuple[int, int, int] | None = None,
-                       scope: tuple[str, ...] | None = None) -> int:
+                       scope: tuple[str, ...] | None = None,
+                       remember: str | None = None) -> int:
         """Apply one lighting intent across every in-scope device.
 
         Each device gets the mode *it* supports for the intent, because mode
@@ -965,6 +966,22 @@ class AioSection(QFrame):
 
         Returns how many devices were addressed.
         """
+        if not self._lighting_devices:
+            # The device list was previously populated only when the Lighting
+            # menu was built, so anything driven from outside the UI — a numpad
+            # scene, most obviously — silently did nothing: the colour half
+            # found no devices while the LCD half succeeded, so the call still
+            # reported success. Populate on demand and apply when the list
+            # lands. Returns 0 because nothing was addressed *yet*.
+            _log.warning("lighting_devices_unknown deferring intent=%s", intent)
+            self.refresh_lighting_devices(
+                on_done=lambda _devices: self._apply_lighting_now(
+                    intent, rgb, scope, remember))
+            return 0
+        return self._apply_lighting_now(intent, rgb, scope, remember)
+
+    def _apply_lighting_now(self, intent: str, rgb, scope, remember=None) -> int:
+        """Apply to the devices already known. Assumes the list is populated."""
         devices = rgb_openrgb.scoped_devices(
             self._lighting_devices, scope or self._lighting_scope)
         if not devices:
@@ -997,6 +1014,12 @@ class AioSection(QFrame):
                 ),
             )
             sent += 1
+
+        if sent and remember:
+            # Persist here rather than in the caller, so a deferred apply
+            # remembers the colour just as a direct one does.
+            self._lighting_last_color = remember
+            self.lightingChanged.emit(remember)
         return sent
 
     def apply_lighting_color(self, value: str,
@@ -1007,13 +1030,8 @@ class AioSection(QFrame):
             _log.warning("lighting_bad_color value=%r", value)
             return 0
         if rgb == (0, 0, 0):
-            count = self.apply_lighting("off", scope=scope)
-        else:
-            count = self.apply_lighting("solid", rgb, scope=scope)
-        if count:
-            self._lighting_last_color = value
-            self.lightingChanged.emit(value)
-        return count
+            return self.apply_lighting("off", scope=scope, remember=value)
+        return self.apply_lighting("solid", rgb, scope=scope, remember=value)
 
     @property
     def lighting_last_color(self) -> str | None:

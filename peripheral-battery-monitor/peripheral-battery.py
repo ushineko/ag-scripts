@@ -26,6 +26,7 @@ import aio_color
 import aio_liquid
 import aio_scenes
 import scene_service
+import scene_shortcuts
 import rgb_openrgb
 import aio_section as aio_section_mod
 from aio_section import AioSection
@@ -721,6 +722,16 @@ class PeripheralMonitor(QWidget):
             self.save_settings()
         self.aio_section.set_scenes(aio_scenes.load(self.settings))
         self._scene_service = scene_service.register(self.aio_section, self)
+        # Global numpad shortcuts. Registered through KWin scripting rather than
+        # a .desktop entry, which only takes effect from the next login — see
+        # scene_shortcuts for the evidence. Reloaded every start, so the app and
+        # its shortcuts cannot drift apart.
+        self._scene_shortcuts = scene_shortcuts.SceneShortcuts()
+        if not self._scene_shortcuts.install():
+            structlog.get_logger().warning("scene_shortcuts_unavailable")
+        # Populate the OpenRGB device list now rather than waiting for someone to
+        # open the Lighting menu: a scene fired from a keypress needs it already.
+        QTimer.singleShot(12000, self.aio_section.refresh_lighting_devices)
         self.aio_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
