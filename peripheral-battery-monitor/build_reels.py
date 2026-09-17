@@ -25,8 +25,18 @@ Shrinking the source was the other candidate — 240px instead of 480px buys abo
 18% more frames — but it softens family photos for a fraction of what dropping
 the zoom gives, so the reels stay at 480.
 
-**Slowness is duration; smoothness is frames.** FRAME_MS sets seconds per photo.
-HOLD and FADE set how long a photo rests and how smoothly it dissolves.
+**Smoothness costs upload time, and that is the real tension.** Held frames
+collapse to a single long-duration frame, so a reel's on-device size is set
+almost entirely by FADE — its crossfade frames. Measured push cost is roughly
+1.5s fixed plus 0.22s per MB, and the panel is *blank for the whole transfer*
+because the device stops displaying while it receives. So a luxuriously smooth
+dissolve buys a longer black gap every time the scene changes. FADE is that
+trade, made explicit.
+
+Neither palette size nor source resolution moves it: the driver re-encodes at
+640x640 with its own palette, discarding both. Frame count is the only lever.
+
+**Slowness is duration.** FRAME_MS sets seconds per photo.
 
 **The panel is round.** A plain centre crop decapitated several subjects, so
 every photo carries a hand-chosen crop centre in CENTRES, picked by eye from a
@@ -63,10 +73,10 @@ CENTRES = {
 
 # name -> (photo indices, static hold frames, crossfade frames)
 REELS = {
-    "corgis":   ([1, 2, 5, 9, 10, 12], 16, 8),
-    "cats":     ([0, 7, 11], 30, 14),
-    "puppies":  ([12, 2, 1], 30, 14),
-    "everyone": ([8, 2, 11, 10, 7, 4, 9, 0], 12, 6),
+    "corgis":   ([1, 2, 5, 9, 10, 12], 16, 5),
+    "cats":     ([0, 7, 11], 30, 8),
+    "puppies":  ([12, 2, 1], 30, 8),
+    "everyone": ([8, 2, 11, 10, 7, 4, 9, 0], 12, 4),
 }
 
 

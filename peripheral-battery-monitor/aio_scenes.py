@@ -66,6 +66,11 @@ DEFAULT_SCENES: dict[str, dict] = {
     # saturation and value raised because an LED renders a muted screen colour
     # as muddy brown.
     #
+    # All of these are re-encoded copies in ~/Pictures/LcdAnimations, not the
+    # originals: the stock 60-frame versions cost up to 4.7s to upload, and the
+    # panel is blank for the whole transfer. Halving the frame count while
+    # keeping the loop length halves that gap.
+    #
     # The four photo reels all land on the same warm amber, and that is the
     # honest answer rather than a bug: measured hues are 28-32 degrees with
     # near-zero spread, because indoor photos of pets on wooden floors really
@@ -76,11 +81,11 @@ DEFAULT_SCENES: dict[str, dict] = {
     "12": {"color": "#ffa03f", "lcd": "~/Pictures/LcdAnimations/cats.gif"},
     "13": {"color": "#ffa63f", "lcd": "~/Pictures/LcdAnimations/puppies.gif"},
     "14": {"color": "#ff993f", "lcd": "~/Pictures/LcdAnimations/everyone.gif"},
-    "15": {"color": "#ff0000", "lcd": "~/Pictures/CappelixImages/redplasma.gif"},
-    "16": {"color": "#ff00ff", "lcd": "~/Pictures/CappelixImages/conicspectrum.gif"},
-    "17": {"color": "#0101ff", "lcd": "~/Pictures/CappelixImages/rotatingearth.gif"},
-    "18": {"color": "#1d55ff", "lcd": "~/Pictures/CappelixImages/mandelbrotzoom.gif"},
-    "19": {"color": "#ff561d", "lcd": "~/Pictures/CappelixImages/orbitdots.gif"},
+    "15": {"color": "#ff0000", "lcd": "~/Pictures/LcdAnimations/redplasma.gif"},
+    "16": {"color": "#ff00ff", "lcd": "~/Pictures/LcdAnimations/conicspectrum.gif"},
+    "17": {"color": "#0101ff", "lcd": "~/Pictures/LcdAnimations/rotatingearth.gif"},
+    "18": {"color": "#1d55ff", "lcd": "~/Pictures/LcdAnimations/mandelbrotzoom.gif"},
+    "19": {"color": "#ff561d", "lcd": "~/Pictures/LcdAnimations/orbitdots.gif"},
 }
 
 
