@@ -43,11 +43,19 @@ OPENRGB_BIN = os.environ.get("OPENRGB_BIN", "openrgb")
 OPENRGB_HOST = os.environ.get("OPENRGB_HOST", "127.0.0.1")
 OPENRGB_PORT = int(os.environ.get("OPENRGB_PORT", "6742"))
 
-# Devices a lighting profile drives by default: what you see through the case
-# window. Peripherals are excluded deliberately — mouse, keyboard and mousepad
-# lighting is usually set per-application and a profile stamping over it would
-# be unwelcome. Matched as case-insensitive substrings of the device name.
-DEFAULT_SCOPE = ("kraken", "geforce", "maximus")
+# Devices a lighting profile drives by default: the case interior, plus the MM700
+# mousepad, which the user asked to join the scenes (spec 030). Matched as
+# case-insensitive substrings of the device name.
+#
+# The mouse and keyboard stay out. Their lighting is usually per-application and
+# a scene stamping over it would be unwelcome; the mousepad is ambient in the
+# same way the case is.
+#
+# NOTE on the MM700: OpenLinkHub also manages it. Two controllers writing one
+# device can fight, and OpenLinkHub can reassert its own colour. If the mousepad
+# ignores scenes or reverts, exclude it there (the `exclude` list in
+# ~/.config/OpenLinkHub or /var/lib/openlinkhub/config.json) so OpenRGB owns it.
+DEFAULT_SCOPE = ("kraken", "geforce", "maximus", "mm700")
 
 # Intent -> the modes that can express it, best first. Resolution picks the
 # first one a given device actually supports.

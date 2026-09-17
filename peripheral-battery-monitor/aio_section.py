@@ -425,6 +425,11 @@ class AioSection(QFrame):
         self._lighting_devices: list[dict] = []
         self._lighting_scope: tuple = rgb_openrgb.DEFAULT_SCOPE
         self._lighting_last_color: str | None = None
+        # Tint currently rendered on the LCD (spec 030). Compared against the
+        # active lighting colour so a scene change redraws immediately: the
+        # metrics are unchanged at that moment, so should_push() alone would
+        # leave the old tint on screen until some value happened to move.
+        self._lcd_tint: tuple | None = None
         self._scenes: dict = {}
 
         self._timer = QTimer(self)
@@ -1261,7 +1266,15 @@ class AioSection(QFrame):
         if snapshot.get("cooler_source") != "liquidctl":
             return
         elapsed = self._lcd_timer.elapsed() if self._lcd_timer.isValid() else None
-        if elapsed is not None and elapsed < self._lcd_interval_ms:
+        # A tint change is a direct user action — they pressed a scene key — so it
+        # bypasses the cadence gate. Waiting up to the full interval made the
+        # lights change instantly while the screen kept the old tint for another
+        # 17 s (measured). Rapid presses cannot spam the device: LCD writes share
+        # one coalesce key, so only the newest survives the queue.
+        tint = self._active_tint()
+        tint_changed = tint != self._lcd_tint
+        if (elapsed is not None and elapsed < self._lcd_interval_ms
+                and not tint_changed):
             return
 
         # A keep-alive push happens even when nothing changed, because the device
@@ -1273,14 +1286,14 @@ class AioSection(QFrame):
         )
 
         snapshot = self._lcd_snapshot(snapshot)
-        if not keepalive_due and not aio_dashboard.should_push(
+        if not keepalive_due and not tint_changed and not aio_dashboard.should_push(
                 snapshot, self._lcd_last_pushed):
             # Nothing worth redrawing and the image is not due to expire; restart
             # the clock and write nothing.
             self._lcd_timer.restart()
             return
 
-        image = aio_dashboard.render_dashboard(snapshot)
+        image = aio_dashboard.render_dashboard(snapshot, tint)
         if not aio_dashboard.write_gif(image, LCD_IMAGE_PATH):
             return
 
@@ -1297,6 +1310,7 @@ class AioSection(QFrame):
                 # not against the newest sample: otherwise a value creeping past
                 # the threshold in small steps would never trigger a write.
                 self._lcd_last_pushed = pushed
+                self._lcd_tint = tint
                 # Logged because a *successful* push was previously invisible:
                 # only failures were recorded, so "the screen reverted" could not
                 # be correlated with whether a write had just happened, or with
@@ -1335,6 +1349,21 @@ class AioSection(QFrame):
         smoothed = dict(snapshot)
         smoothed["cpu_temp_c"] = sum(raw) / len(raw)
         return smoothed
+
+    def _active_tint(self):
+        """RGB of the current lighting colour, for tinting the dashboard.
+
+        The dashboard is drawn in colours *complementary* to the lights, so the
+        screen relates to them without competing. Returns None when no colour has
+        been applied, which renders the default palette.
+        """
+        value = self._lighting_last_color
+        if not value:
+            return None
+        rgb = aio_color.parse_color(value)
+        if rgb is None or rgb == (0, 0, 0):
+            return None
+        return rgb
 
     def _surrender_dashboard(self):
         """Give up on the dashboard after repeated failures.

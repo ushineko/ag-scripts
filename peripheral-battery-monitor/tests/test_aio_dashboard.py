@@ -207,7 +207,8 @@ class TestBackground(unittest.TestCase):
                          b.bits().asstring(b.sizeInBytes()))
 
     def test_background_survives_a_cache_reset(self):
-        aio_dashboard._background_cache = None
+        # A dict keyed by tint since spec 030, not a single cached image.
+        aio_dashboard._background_cache = {}
         self.assertFalse(aio_dashboard._background().isNull())
 
     def test_render_does_not_mutate_the_cached_background(self):
@@ -289,3 +290,104 @@ class TestGifOutput(unittest.TestCase):
                 self.assertTrue(aio_dashboard.write_gif(
                     aio_dashboard.render_dashboard(snap), path))
                 self.assertGreater(os.path.getsize(path), 0)
+
+
+class TestComplementaryTint(unittest.TestCase):
+    """030: the dashboard is tinted complementary to the lighting colour."""
+
+    def tearDown(self):
+        aio_dashboard._background_cache = {}
+
+    def test_complement_rotates_hue_180(self):
+        cases = {
+            (255, 0, 0): (0, 255, 255),     # red   -> cyan
+            (0, 255, 0): (255, 0, 255),     # green -> magenta
+            (0, 0, 255): (255, 255, 0),     # blue  -> yellow
+        }
+        for primary, expected in cases.items():
+            with self.subTest(primary=primary):
+                self.assertEqual(aio_dashboard.complement(primary), expected)
+
+    def test_complement_rotates_hue_by_180(self):
+        """The real contract. Exact round-trip equality is NOT the contract.
+
+        RGB -> HSV -> RGB is lossy, so complement(complement(x)) drifts a few
+        units: (12,200,90) round-trips to (12,200,84). Asserting equality tested
+        a property nothing depends on; hue opposition is what the feature means.
+        """
+        # colorsys, not QColor: importing PyQt6 inside a test resolves at call
+        # time, and another test module stubs PyQt6 in sys.modules at collection,
+        # so QColor here would be a MagicMock. Pure stdlib is immune to that.
+        import colorsys
+
+        def hue_deg(rgb):
+            r, g, b = (c / 255.0 for c in rgb)
+            return colorsys.rgb_to_hsv(r, g, b)[0] * 360.0
+
+        for rgb in ((255, 0, 0), (12, 200, 90), (128, 0, 255), (200, 120, 30)):
+            with self.subTest(rgb=rgb):
+                delta = abs(hue_deg(rgb) - hue_deg(aio_dashboard.complement(rgb))) % 360
+                self.assertAlmostEqual(min(delta, 360 - delta), 180, delta=3)
+
+    def test_greys_have_no_complement(self):
+        """A hueless colour rotates to itself rather than to something arbitrary."""
+        for grey in ((0, 0, 0), (128, 128, 128), (255, 255, 255)):
+            with self.subTest(grey=grey):
+                self.assertEqual(aio_dashboard.complement(grey), grey)
+
+    def test_tint_changes_the_rendered_image(self):
+        plain = aio_dashboard.render_dashboard(HEALTHY)
+        tinted = aio_dashboard.render_dashboard(HEALTHY, (255, 0, 0))
+        self.assertNotEqual(plain.bits().asstring(plain.sizeInBytes()),
+                            tinted.bits().asstring(tinted.sizeInBytes()))
+
+    def test_different_tints_differ(self):
+        red = aio_dashboard.render_dashboard(HEALTHY, (255, 0, 0))
+        blue = aio_dashboard.render_dashboard(HEALTHY, (0, 0, 255))
+        self.assertNotEqual(red.bits().asstring(red.sizeInBytes()),
+                            blue.bits().asstring(blue.sizeInBytes()))
+
+    def test_none_tint_matches_the_untinted_render(self):
+        a = aio_dashboard.render_dashboard(HEALTHY, None)
+        b = aio_dashboard.render_dashboard(HEALTHY)
+        self.assertEqual(a.bits().asstring(a.sizeInBytes()),
+                         b.bits().asstring(b.sizeInBytes()))
+
+    def test_coolant_severity_is_never_retinted(self):
+        """The coolant colour IS the reading; a scene must not restyle it.
+
+        A hot coolant drawn in a scene's calm colour would defeat the screen's
+        only real purpose, so the severity palette is checked directly.
+        """
+        self.assertEqual(aio_dashboard._coolant_color(65.0), aio_dashboard._CRIT)
+        self.assertEqual(aio_dashboard._coolant_color(52.0), aio_dashboard._WARN)
+        self.assertEqual(aio_dashboard._coolant_color(36.0), aio_dashboard._OK)
+
+    def test_tint_palette_defaults_without_a_tint(self):
+        accent, nebulae = aio_dashboard._tint_palette(None)
+        self.assertEqual(accent, aio_dashboard._ACCENT)
+        self.assertEqual(nebulae, aio_dashboard._NEBULAE)
+
+    def test_tint_palette_keeps_nebula_geometry(self):
+        """Only the colours change; positions and radii are the composition."""
+        _, tinted = aio_dashboard._tint_palette((255, 0, 0))
+        for (fx, fy, fr, _), (ox, oy, orad, _o) in zip(tinted, aio_dashboard._NEBULAE):
+            self.assertEqual((fx, fy, fr), (ox, oy, orad))
+
+    def test_background_cache_is_per_tint(self):
+        aio_dashboard._background_cache = {}
+        aio_dashboard._background(None)
+        aio_dashboard._background((255, 0, 0))
+        self.assertEqual(len(aio_dashboard._background_cache), 2)
+
+    def test_background_cache_is_bounded(self):
+        aio_dashboard._background_cache = {}
+        for i in range(30):
+            aio_dashboard._background((i * 8 % 256, 40, 200))
+        self.assertLessEqual(len(aio_dashboard._background_cache), 25)
+
+    def test_render_never_raises_on_a_bad_tint(self):
+        for bad in ("red", 17, (1, 2), (1, 2, 3, 4)):
+            with self.subTest(bad=bad):
+                img = aio_dashboard.render_dashboard(HEALTHY, bad)
+                self.assertFalse(img.isNull())

@@ -77,18 +77,104 @@ _NEBULAE = (
     (0.68, 0.84, 0.44, (150, 45, 120)),
     (0.30, 0.78, 0.34, (40, 90, 160)),
 )
-_background_cache: QImage | None = None
+# Tinting (spec 030). A scene sets a primary lighting colour; the dashboard is
+# tinted in colours *complementary* to it, so the screen relates to the lights
+# without competing with them.
+#
+# What is tinted and what is not is the whole design decision:
+#
+# - Tinted: the starfield nebulae and the secondary-value accent (CPU, PUMP).
+#   These are decorative and carry no meaning of their own.
+# - NOT tinted: the coolant number and ring, which are colour-graded green/amber/
+#   red by temperature. That colour *is* the reading. Re-tinting it would make a
+#   hot coolant look fine because the scene happened to be green, which is the
+#   one thing this screen exists to prevent.
+_TINT_ACCENT_SAT = 0.62      # accent stays readable rather than fully saturated
+_TINT_ACCENT_VAL = 1.00
+_NEBULA_SPREAD_DEG = 34      # fan the nebulae either side of the complement
+
+_background_cache: dict = {}
 
 
-def _background() -> QImage:
-    """The starfield, built once per process."""
+def complement(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """The complementary colour: same saturation and value, hue rotated 180 deg.
+
+    Returns the input unchanged for anything unusable, including greys, which
+    have no hue to rotate.
+    """
+    if not _valid_tint(rgb):
+        return rgb
+    c = QColor(*rgb)
+    h, sat, val, _ = c.getHsv()
+    if h < 0:          # greys have no hue; leave them alone
+        return rgb
+    out = QColor.fromHsv((h + 180) % 360, sat, val)
+    return (out.red(), out.green(), out.blue())
+
+
+def _valid_tint(tint) -> bool:
+    """True for a usable (r, g, b). Anything else renders the default palette."""
+    return (
+        isinstance(tint, (tuple, list))
+        and len(tint) == 3
+        and all(isinstance(c, int) and not isinstance(c, bool) and 0 <= c <= 255
+                for c in tint)
+    )
+
+
+def _tint_palette(tint: tuple[int, int, int] | None):
+    """(accent, nebula colours) for a primary colour, or the defaults.
+
+    A malformed tint falls back rather than raising: this module promises that
+    rendering never fails, and the tint arrives from a user-editable scene table.
+    """
+    if not _valid_tint(tint):
+        return _ACCENT, _NEBULAE
+
+    base = QColor(*complement(tuple(tint)))
+    hue, _, _, _ = base.getHsv()
+    if hue < 0:
+        return _ACCENT, _NEBULAE
+
+    accent = QColor.fromHsvF(hue / 360.0, _TINT_ACCENT_SAT, _TINT_ACCENT_VAL)
+    # Keep each nebula's position and radius; recolour it around the complement
+    # so the sky reads as one family rather than four unrelated washes.
+    offsets = (-_NEBULA_SPREAD_DEG, _NEBULA_SPREAD_DEG // 2,
+               _NEBULA_SPREAD_DEG, -_NEBULA_SPREAD_DEG // 2)
+    nebulae = []
+    for (fx, fy, fr, _rgb), off in zip(_NEBULAE, offsets):
+        c = QColor.fromHsv((hue + off) % 360, 205, 190)
+        nebulae.append((fx, fy, fr, (c.red(), c.green(), c.blue())))
+    return accent, tuple(nebulae)
+
+
+def _background(tint: tuple[int, int, int] | None = None) -> QImage:
+    """The starfield for a tint, built once per tint and cached.
+
+    Cached per tint rather than regenerated: a field rebuilt every frame would
+    shimmer between updates, and on a screen that only redraws when something
+    changes that reads as a fault rather than decoration.
+    """
     global _background_cache
-    if _background_cache is None:
-        _background_cache = _render_background()
-    return _background_cache
+    if not isinstance(_background_cache, dict):
+        # Defensive: the module promises that rendering never raises, and the
+        # cache is a module global anything can clobber (a test did exactly
+        # that when its shape changed from a single image to a dict).
+        _background_cache = {}
+    key = tuple(tint) if _valid_tint(tint) else None
+    cached = _background_cache.get(key)
+    if cached is None:
+        _, nebulae = _tint_palette(tint)
+        cached = _render_background(nebulae)
+        # Bound the cache: one entry per colour the user actually uses, and a
+        # scene table is small, but a custom-colour prompt could grow it forever.
+        if len(_background_cache) > 24:
+            _background_cache.clear()
+        _background_cache[key] = cached
+    return cached
 
 
-def _render_background() -> QImage:
+def _render_background(nebulae=_NEBULAE) -> QImage:
     image = QImage(SIZE, SIZE, QImage.Format.Format_RGB888)
     image.fill(QColor(6, 7, 12))
     p = QPainter()
@@ -106,7 +192,7 @@ def _render_background() -> QImage:
 
         # Nebulae: wide, very low-alpha radial washes.
         p.setPen(Qt.PenStyle.NoPen)
-        for fx, fy, fr, (r, g, b) in _NEBULAE:
+        for fx, fy, fr, (r, g, b) in nebulae:
             cx, cy, rad = fx * SIZE, fy * SIZE, fr * SIZE
             grad = QRadialGradient(cx, cy, rad)
             grad.setColorAt(0.0, QColor(r, g, b, 58))
@@ -286,9 +372,10 @@ def should_push(new: dict, last: dict | None) -> bool:
     return False
 
 
-def render_dashboard(snapshot: dict) -> QImage:
+def render_dashboard(snapshot: dict,
+                     tint: tuple[int, int, int] | None = None) -> QImage:
     """Draw a snapshot at 640x640. Never raises."""
-    image = _background().copy()
+    image = _background(tint).copy()
 
     painter = QPainter()
     if not painter.begin(image):
@@ -297,7 +384,7 @@ def render_dashboard(snapshot: dict) -> QImage:
     try:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        _draw(painter, snapshot if isinstance(snapshot, dict) else {})
+        _draw(painter, snapshot if isinstance(snapshot, dict) else {}, tint)
     except Exception:
         # Decorative output: never let a draw error reach the caller.
         _log.warning("dashboard_render_failed", exc_info=True)
@@ -306,7 +393,7 @@ def render_dashboard(snapshot: dict) -> QImage:
     return image
 
 
-def _draw(p: QPainter, snap: dict):
+def _draw(p: QPainter, snap: dict, tint: tuple[int, int, int] | None = None):
     coolant = snap.get("coolant_temp_c")
     coolant_col = _coolant_color(coolant)
 
@@ -346,9 +433,12 @@ def _draw(p: QPainter, snap: dict):
     # of the panel turned red was actively misleading.
     pump = snap.get("pump_rpm")
     pump_stopped = isinstance(pump, int) and not isinstance(pump, bool) and pump == 0
-    _metric(p, 0, "CPU", _fmt_temp(snap.get("cpu_temp_c")), "°C")
+    accent, _ = _tint_palette(tint)
+    _metric(p, 0, "CPU", _fmt_temp(snap.get("cpu_temp_c")), "°C", accent=accent)
+    # A stopped pump keeps the critical colour whatever the tint: that reading is
+    # the point of the screen and must not be restyled by a lighting scene.
     _metric(p, 1, "PUMP", _fmt_rpm(pump), "RPM",
-            color=_CRIT if pump_stopped else None)
+            color=_CRIT if pump_stopped else None, accent=accent)
 
     # Alert banner only when something is wrong; a healthy screen stays clean.
     state = snap.get("alert_state")
@@ -373,13 +463,13 @@ def _centered(p: QPainter, color: QColor, size: int, rect: QRectF, text: str,
 
 
 def _metric(p: QPainter, slot: int, label: str, value: str, unit: str,
-            color: QColor | None = None):
+            color: QColor | None = None, accent: QColor | None = None):
     """One of the two bottom metrics; slot 0 is left, 1 is right."""
     width = (SIZE - 2 * _MARGIN) / 2
     x = _MARGIN + slot * width
 
     if color is None:
-        color = _ACCENT if value != _PLACEHOLDER else _MUTED
+        color = (accent or _ACCENT) if value != _PLACEHOLDER else _MUTED
     _centered(p, _MUTED, 18, QRectF(x, 416, width, 28), label)
     _centered(p, color, 44, QRectF(x, 446, width, 66), value, bold=True)
     _centered(p, _MUTED, 16, QRectF(x, 516, width, 26), unit)
