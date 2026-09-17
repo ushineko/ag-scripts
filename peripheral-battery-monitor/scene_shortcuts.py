@@ -44,6 +44,14 @@ KWIN_SCRIPTING_PATH = "/Scripting"
 KWIN_SCRIPTING_IFACE = "org.kde.kwin.Scripting"
 KWIN_SCRIPT_IFACE = "org.kde.kwin.Script"
 
+# KWin's loadScript/unloadScript/isScriptLoaded take a PLUGIN NAME, not a file
+# path. The one-argument loadScript just defaults the name to the path, which is
+# why isScriptLoaded(path) appeared to work and why specs 029 and 034 both
+# treated the path as the handle. It is not: with a real name KWin allocates a
+# fresh Script object, while the path-only form kept returning an id belonging
+# to an already-running script - whose run() is a silent no-op.
+PLUGIN_NAME = "aio-scenes"
+
 SCRIPT_NAME = "peripheral-battery-monitor-scenes"
 # KDE spells numpad keys "Num+N"; verified firing on this hardware.
 KEY_TEMPLATE = "Ctrl+Alt+Num+{n}"
@@ -229,44 +237,33 @@ class SceneShortcuts:
             _log.warning("scene_shortcuts_write_failed path=%s err=%s", path, e)
             return False
 
-        # Destroy the previous copy, then drop stale files. A new unique path is
-        # used for this load, so nothing can be served from KWin's by-path cache.
-        #
-        # unloadScript is NOT enough. It returns true and leaves the Script
-        # object alive, so its id stays occupied; ids then accumulate across
-        # restarts until loadScript hands back a recycled one and run() becomes a
-        # silent no-op. stop() is what actually destroys the object - verified by
-        # introspection, where stop() removed the node and unloadScript did not.
-        # Adopt whatever a previous process left behind, so its object is
-        # stopped rather than left holding an id.
-        if self._object is None:
-            prior = _read_state()
-            self._object = prior.get("object") or None
-            if self._path is None:
-                self._path = prior.get("path") or None
-        if self._object:
-            self._call(self._object, KWIN_SCRIPT_IFACE, "stop")
-        if self._path:
-            self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE, "unloadScript", self._path)
+        # Unload by PLUGIN NAME. Doing this by path is what produced the
+        # recurring failure: it removes KWin's list entry without destroying the
+        # object, the list shrinks while the objects do not, and since the id
+        # loadScript returns tracks the list size it then lands on a slot that is
+        # still occupied - creating no object, and leaving run() a no-op.
+        self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE,
+                   "unloadScript", PLUGIN_NAME)
         for stale in _stale_script_files():
             if stale == path:
                 continue
-            self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE, "unloadScript", stale)
             try:
                 os.unlink(stale)
             except OSError:
                 pass
 
         before = self._script_objects()
+        # Two-argument form: an explicit name is what makes KWin allocate a new
+        # Script object instead of handing back someone else's id.
         script_id = self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE,
-                               "loadScript", path)
+                               "loadScript", path, PLUGIN_NAME)
         if script_id is None:
             return False
 
-        # Find the object this load created rather than trusting the returned
-        # id. A load that produced no new object did not take, whatever it
-        # returned - that is the failure isScriptLoaded cannot see, because the
-        # *path* is loaded even when the object running it is someone else's.
+        # Still identify the object by difference rather than by the returned
+        # id. The id is now correct in practice, but a load that created no
+        # object is the failure that hid for two specs, and it costs one
+        # introspection to keep that unmissable.
         created = self._script_objects() - before
         if len(created) != 1:
             _log.warning("scene_shortcuts_no_new_object path=%s id=%r created=%s",
@@ -276,18 +273,20 @@ class SceneShortcuts:
 
         self._call(obj, KWIN_SCRIPT_IFACE, "run")
 
-        # Verify rather than assume. Reporting success on an unverified load is
-        # what let a silently cached no-op look healthy for hours.
+        # Verify by the name we loaded under, which is now a real handle rather
+        # than a path that reports true for a script that is not running.
         loaded = self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE,
-                            "isScriptLoaded", path)
+                            "isScriptLoaded", PLUGIN_NAME)
         if loaded is not True:
-            _log.warning("scene_shortcuts_load_unverified path=%s reply=%r", path, loaded)
+            _log.warning("scene_shortcuts_load_unverified name=%s reply=%r",
+                         PLUGIN_NAME, loaded)
             return False
 
         self._object = obj
         self._path = path
         _write_state(obj, path)
-        _log.info("scene_shortcuts_installed path=%s slots=%d", path,
+        _log.info("scene_shortcuts_installed path=%s name=%s id=%r slots=%d",
+                  path, PLUGIN_NAME, script_id,
                   len(slots if slots is not None else all_slots()))
         return True
 
@@ -295,12 +294,12 @@ class SceneShortcuts:
         """Unload the script, dropping the shortcuts with it."""
         if not self._path:
             return
-        # stop() first: unloadScript alone leaves the object alive and its id
-        # occupied, which is what let ids be recycled into silent no-ops.
+        # stop() destroys the object; unloading by name clears KWin's entry.
+        # Doing only the latter, and by path, is what leaked objects before.
         if self._object:
             self._call(self._object, KWIN_SCRIPT_IFACE, "stop")
         self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE,
-                   "unloadScript", self._path)
+                   "unloadScript", PLUGIN_NAME)
         try:
             os.unlink(self._path)
         except OSError:
