@@ -103,13 +103,36 @@ LCD_PUSH_INTERVAL_MS = 30000
 # until the new image lands.
 LCD_PUSH_INTERVALS_MS = (1000, 5000, 10000, 30000, 60000, 300000)
 LCD_DIAGNOSTIC_INTERVALS_MS = (1000,)
+
+# Keep-alive (spec 028). The cooler does NOT retain a host-pushed image: with the
+# monitor stopped and nothing else touching the device, a hand-pushed image still
+# reverted to the firmware's built-in display on its own. So the screen must be
+# rewritten on a floor, whether or not anything changed — minimising writes past
+# this point does not make the dashboard quieter, it makes it absent.
+#
+# This is in deliberate tension with specs 021/022, which minimised writes to
+# avoid liquidctl#774. That risk is unchanged and still bounded by the failure
+# ceiling; an image that is not on screen simply has no value to trade against it.
+#
+# The retention period is a firmware property, measured rather than documented,
+# so it is a setting rather than a constant.
+# Off by default, and it should stay that way. A static image reverts to the
+# built-in display in ~5-10 s on this firmware, which briefly made a sub-5 s
+# keep-alive look necessary — at ~0.7-0.8 s of hidraw time per push, against a
+# 5 s status poll, and straight down the liquidctl#774 path. Pushing a GIF
+# instead removes the need entirely: the firmware retains it. This remains only
+# as an escape hatch for firmware that retains neither.
+LCD_KEEPALIVE_MS = 0
+LCD_KEEPALIVE_OPTIONS_MS = (0, 3000, 5000, 10000, 30000)
 # After this many consecutive push failures, give up, fall back to the
 # firmware's own `liquid` readout (which needs no host traffic and cannot blank)
 # and tell the user once.
 LCD_MAX_FAILURES = 5
 LCD_IMAGE_PATH = os.path.join(
     os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir(),
-    "peripheral-battery-monitor-lcd.png",
+    # .gif, not .png: the firmware drops a static image after ~5-10 s but retains
+    # a GIF indefinitely. See aio_dashboard.write_gif and spec 028.
+    "peripheral-battery-monitor-lcd.gif",
 )
 
 SPARKLINE_SAMPLES = 60
@@ -396,6 +419,7 @@ class AioSection(QFrame):
         self._lcd_timer = QElapsedTimer()
         self._lcd_failures = 0
         self._lcd_interval_ms = LCD_PUSH_INTERVAL_MS
+        self._lcd_keepalive_ms = LCD_KEEPALIVE_MS
         self._last_snapshot: dict = {}
         # OpenRGB device list, populated asynchronously (spec 023).
         self._lighting_devices: list[dict] = []
@@ -1181,6 +1205,19 @@ class AioSection(QFrame):
     def dashboard_interval_ms(self) -> int:
         return self._lcd_interval_ms
 
+    @property
+    def dashboard_keepalive_ms(self) -> int:
+        return self._lcd_keepalive_ms
+
+    def set_dashboard_keepalive(self, interval_ms: int) -> bool:
+        """Set the maximum time the screen may go unwritten. 0 disables."""
+        if interval_ms not in LCD_KEEPALIVE_OPTIONS_MS:
+            _log.warning("aio_lcd_bad_keepalive ms=%r", interval_ms)
+            return False
+        self._lcd_keepalive_ms = int(interval_ms)
+        self._lcd_timer.invalidate()   # let a shortened keep-alive apply now
+        return True
+
     def set_dashboard_interval(self, interval_ms: int) -> bool:
         """Change the push cadence. Applied immediately, no restart."""
         if interval_ms not in LCD_PUSH_INTERVALS_MS:
@@ -1214,29 +1251,40 @@ class AioSection(QFrame):
     def _maybe_push_dashboard(self, snapshot: dict):
         """Render and push the LCD, subject to cadence, change and health gates.
 
-        Four gates, cheapest first, because the best defence against
-        liquidctl#774 is simply not writing.
+        Cheapest checks first. Writing rarely is still the defence against
+        liquidctl#774, but it is now floored by a keep-alive: the device drops a
+        host-pushed image on its own, so below some refresh period the dashboard
+        is simply not on screen. See spec 028.
         """
         if not self._lcd_dashboard_enabled:
             return
         if snapshot.get("cooler_source") != "liquidctl":
             return
-        if self._lcd_timer.isValid() and self._lcd_timer.elapsed() < self._lcd_interval_ms:
+        elapsed = self._lcd_timer.elapsed() if self._lcd_timer.isValid() else None
+        if elapsed is not None and elapsed < self._lcd_interval_ms:
             return
 
+        # A keep-alive push happens even when nothing changed, because the device
+        # drops the image by itself (spec 028). Zero disables it, restoring the
+        # change-only behaviour of specs 021/022.
+        keepalive_due = (
+            self._lcd_keepalive_ms > 0
+            and (elapsed is None or elapsed >= self._lcd_keepalive_ms)
+        )
+
         snapshot = self._lcd_snapshot(snapshot)
-        if not aio_dashboard.should_push(snapshot, self._lcd_last_pushed):
-            # Nothing worth redrawing; restart the clock and write nothing.
-            # This is the main defence against both LCD failure modes, so it is
-            # deliberately the cheapest check that can end the poll.
+        if not keepalive_due and not aio_dashboard.should_push(
+                snapshot, self._lcd_last_pushed):
+            # Nothing worth redrawing and the image is not due to expire; restart
+            # the clock and write nothing.
             self._lcd_timer.restart()
             return
 
         image = aio_dashboard.render_dashboard(snapshot)
-        if not aio_dashboard.write_png(image, LCD_IMAGE_PATH):
+        if not aio_dashboard.write_gif(image, LCD_IMAGE_PATH):
             return
 
-        argv = aio_liquid.lcd_static_argv(LCD_IMAGE_PATH)
+        argv = aio_liquid.lcd_gif_argv(LCD_IMAGE_PATH)
         if not argv:
             return
 
@@ -1249,6 +1297,13 @@ class AioSection(QFrame):
                 # not against the newest sample: otherwise a value creeping past
                 # the threshold in small steps would never trigger a write.
                 self._lcd_last_pushed = pushed
+                # Logged because a *successful* push was previously invisible:
+                # only failures were recorded, so "the screen reverted" could not
+                # be correlated with whether a write had just happened, or with
+                # how long the image survived between writes.
+                _log.info("aio_lcd_pushed coolant=%s cpu=%s pump=%s",
+                          pushed.get("coolant_temp_c"), pushed.get("cpu_temp_c"),
+                          pushed.get("pump_rpm"))
                 return
             self._lcd_failures += 1
             _log.warning("aio_lcd_push_failed n=%d err=%s",

@@ -230,3 +230,62 @@ class TestSeverityColours(unittest.TestCase):
         """Deliberate: a 14900K at 100 C is normal and must not read as alarm."""
         hot = dict(HEALTHY, cpu_temp_c=100.0)
         self.assertFalse(aio_dashboard.render_dashboard(hot).isNull())
+
+
+class TestGifOutput(unittest.TestCase):
+    """028: the firmware retains a GIF but drops a static image.
+
+    Measured on the hardware: a pushed PNG reverted to the built-in display in
+    ~5-10 s with nothing else touching the cooler, while a GIF kept playing.
+    That is why the dashboard looked like it was "bouncing" between the two.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def _path(self, name="lcd.gif"):
+        return os.path.join(self.dir.name, name)
+
+    def test_writes_a_real_gif(self):
+        path = self._path()
+        self.assertTrue(aio_dashboard.write_gif(
+            aio_dashboard.render_dashboard(HEALTHY), path))
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(3), b"GIF", "must be a GIF, not a PNG")
+
+    def test_gif_is_native_lcd_resolution(self):
+        from PIL import Image
+        path = self._path()
+        aio_dashboard.write_gif(aio_dashboard.render_dashboard(HEALTHY), path)
+        with Image.open(path) as im:
+            self.assertEqual(im.size, (aio_dashboard.SIZE, aio_dashboard.SIZE))
+
+    def test_single_frame_is_enough(self):
+        """One frame exploits the retention; animation is not the point."""
+        from PIL import Image
+        path = self._path()
+        aio_dashboard.write_gif(aio_dashboard.render_dashboard(HEALTHY), path)
+        with Image.open(path) as im:
+            self.assertEqual(getattr(im, "n_frames", 1), 1)
+
+    def test_creates_missing_directories(self):
+        path = os.path.join(self.dir.name, "sub", "dir", "lcd.gif")
+        self.assertTrue(aio_dashboard.write_gif(
+            aio_dashboard.render_dashboard(HEALTHY), path))
+        self.assertTrue(os.path.exists(path))
+
+    def test_write_failure_returns_false(self):
+        self.assertFalse(aio_dashboard.write_gif(
+            aio_dashboard.render_dashboard(HEALTHY), "/proc/nope/lcd.gif"))
+
+    def test_renders_every_state_to_gif(self):
+        for snap in (HEALTHY, CRITICAL, EMPTY):
+            with self.subTest(snap=snap):
+                path = self._path(f"{id(snap)}.gif")
+                self.assertTrue(aio_dashboard.write_gif(
+                    aio_dashboard.render_dashboard(snap), path))
+                self.assertGreater(os.path.getsize(path), 0)

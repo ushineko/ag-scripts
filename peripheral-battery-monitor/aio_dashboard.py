@@ -1,11 +1,18 @@
 """LCD dashboard rendering for the Kraken's 640x640 screen (spec 021).
 
-Renders a snapshot into a QImage and writes it to a PNG that `liquidctl set lcd
-screen static` can display. Qt is used rather than Pillow because it is already
-this project's toolkit; liquidctl pulls in Pillow for its own decoding, but that
-is its dependency, not ours.
+Renders a snapshot into a QImage and writes it as a single-frame GIF that
+`liquidctl set lcd screen gif` can display. Qt does the drawing because it is
+already this project's toolkit; Pillow does the GIF encode because Qt can read
+GIF but not write it.
 
-Two design points worth keeping:
+**GIF, not PNG, and that is the whole point.** The firmware does not retain a
+static image: measured on this hardware, a pushed PNG reverts to the cooler's
+built-in display in roughly 5-10 s with nothing else touching the device, while a
+GIF keeps playing indefinitely. The dashboard looked "flaky, bouncing between the
+stock display and the dashboard" for exactly this reason — it was expiring, and
+only reappearing when some value changed enough to trigger a redraw. See spec 028.
+
+Three design points worth keeping:
 
 - **`should_push()` gates pushes.** The LCD misbehaves under repeated writes in
   two ways — liquidctl#774 bucket-switch failures, and the firmware readout
@@ -376,6 +383,43 @@ def _metric(p: QPainter, slot: int, label: str, value: str, unit: str,
     _centered(p, _MUTED, 18, QRectF(x, 416, width, 28), label)
     _centered(p, color, 44, QRectF(x, 446, width, 66), value, bold=True)
     _centered(p, _MUTED, 16, QRectF(x, 516, width, 26), unit)
+
+
+def write_gif(image: QImage, path: str) -> bool:
+    """Save a rendered frame as a single-frame GIF. False on any failure.
+
+    GIF rather than PNG because the cooler's firmware does not retain a *static*
+    image: measured on this hardware, a pushed PNG reverts to the built-in
+    display in roughly 5-10 s with nothing else touching the device, while a GIF
+    keeps playing indefinitely. The firmware evidently loops a GIF itself and
+    treats a static image as transient. One frame is enough to exploit that.
+
+    This is what removes the need to rewrite the screen every few seconds; see
+    spec 028.
+
+    Pillow is used for the encode because Qt can read GIF but not write it. It is
+    already a dependency in practice — `aio_liquid.is_animated` reads frame
+    counts with it, and liquidctl needs it to decode anything pushed to the LCD.
+    """
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        from PIL import Image
+
+        # QImage -> raw RGB888 -> PIL, avoiding a PNG round-trip on disk.
+        converted = image.convertToFormat(QImage.Format.Format_RGB888)
+        width, height = converted.width(), converted.height()
+        ptr = converted.constBits()
+        ptr.setsize(converted.sizeInBytes())
+        frame = Image.frombytes("RGB", (width, height), bytes(ptr),
+                                "raw", "RGB", converted.bytesPerLine())
+        frame.save(path, format="GIF", save_all=True, optimize=False)
+        return True
+    except Exception:
+        _log.warning("dashboard_write_gif_failed path=%s", path, exc_info=True)
+        return False
 
 
 def write_png(image: QImage, path: str) -> bool:
