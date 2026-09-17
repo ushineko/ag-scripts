@@ -2,7 +2,7 @@
 
 Routes URLs to different browsers based on domain patterns. Created to work around Chromium/Vivaldi lacking PipeWire camera support on Wayland.
 
-**Version:** 1.3
+**Version:** 1.4
 
 ## Table of Contents
 
@@ -98,34 +98,61 @@ can activate any window. Vivaldi then sees that window gain focus, forwards the
 URL into it, and it is already on top, which is what you want anyway (read the
 page immediately).
 
-This runs only on the Vivaldi path, and is best-effort: if KWin/qdbus is
-unavailable, or no Vivaldi window is on the primary monitor (e.g. cold start),
-the router silently falls back to a plain hand-off — identical to prior
-behavior. It adds ~0.4 s to Vivaldi-routed link clicks.
+It asks over plain D-Bus: `WindowsRunner` for the Vivaldi window ids,
+`org.kde.KWin.getWindowInfo` for each one's geometry, then `WindowsRunner.Run`
+to activate the one whose centre falls on the target monitor. Two ~8 ms calls
+per window.
+
+It deliberately does **not** use KWin's `Scripting` interface. `loadScript`
+returns an id that can collide with an already-exposed `/Scripting/ScriptN`
+object while creating nothing, after which `run()` on that path is a silent
+no-op against somebody else's script. That is what broke v1.3 — see the
+changelog.
+
+This runs only on the Vivaldi path, and is best-effort: if the D-Bus tools are
+unavailable, or no Vivaldi window exists at all (e.g. cold start), the router
+silently falls back to a plain hand-off — identical to prior behavior. If Vivaldi
+windows exist but none is on the target monitor, it activates one of them anyway,
+which still beats dropping the URL. It adds ~0.4 s to Vivaldi-routed link clicks.
 
 ### Configuration
 
-Set the primary monitor's KWin output connector name(s). Find yours with:
-
-```bash
-kscreen-doctor -o
-```
-
 Precedence (lowest to highest):
 
-1. Built-in default: `HDMI-A-1`
-2. Config file `~/.config/browser-router/config` (a shell fragment, sourced):
-   ```bash
-   # one connector, or a comma-separated list (e.g. a monitor + its mirror)
-   PRIMARY_OUTPUT="HDMI-A-1,DP-3"
-   ```
-3. Environment variable (wins over both):
-   ```bash
-   BROWSER_ROUTER_PRIMARY_OUTPUT="DP-2"
-   ```
+1. Built-in default: `auto`
+2. Config file `~/.config/browser-router/config` (a shell fragment, sourced)
+3. Environment variable `BROWSER_ROUTER_PRIMARY_OUTPUT` (wins over both)
 
-Set the value to empty (`PRIMARY_OUTPUT=""`) to disable the behavior and
-restore a plain hand-off.
+Accepted values:
+
+| Value | Meaning |
+|---|---|
+| `auto` | Resolve Plasma's primary (lowest `priority`) output at run time. The default. |
+| `DP-3` or `DP-3,HDMI-A-1` | Explicit KWin connector name(s). A name that is not currently enabled is skipped; if none match, falls back to `auto`. |
+| *(empty)* | Disable the behaviour entirely, plain hand-off. |
+
+Find connector names with `kscreen-doctor -o`, but prefer `auto`: a connector
+name describes which **port a cable is in**, not which monitor is on your desk,
+so moving a cable renames it and an explicit value goes stale.
+
+### Debugging
+
+The router runs as the desktop's `http`/`https` handler, so nothing it prints is
+normally visible. To see every decision:
+
+```bash
+BROWSER_ROUTER_DEBUG=1 ~/.local/bin/browser-router https://example.com
+browser-router: routing to vivaldi: https://example.com
+browser-router: target output auto rect=0 1120 2560 1440
+browser-router: window {9ff9d859-...} at 0,1120 2560x1440 is on the target output
+browser-router: activated 0_{9ff9d859-...}
+```
+
+### Tests
+
+`tests/test_output_rect.sh` covers the output-rectangle arithmetic (scale,
+rotation, priority, absent and disabled outputs) against a fixture, with no
+compositor needed. Run it directly; no framework required.
 
 ## How It Works
 
@@ -161,6 +188,25 @@ fi
 | `uninstall.sh` | Uninstallation script |
 
 ## Changelog
+
+### v1.4 (2026-09-17)
+- **Fix: primary-window activation had silently stopped working.** Two
+  independent defects, either fatal on its own:
+  - The default `PRIMARY_OUTPUT` was the hardcoded connector `HDMI-A-1`. Moving
+    the monitor to another port renamed it `DP-3`, so the name matched nothing.
+    The default is now `auto`, resolved from kscreen's `priority` at run time,
+    and an explicit name that is not currently enabled falls back to `auto`
+    instead of doing nothing.
+  - Activation used KWin's `Scripting` D-Bus interface. On this machine
+    `loadScript` returns id `3` while `/Scripting/Script3` already exists and
+    creates **no object**, for any plugin name — `run()` then silently addressed
+    another script. Replaced with `WindowsRunner` + `getWindowInfo`, which have
+    no object lifetimes to get wrong.
+- Add `BROWSER_ROUTER_DEBUG=1` tracing. Neither defect was observable before.
+- Fall back to any Vivaldi window when none is on the target output.
+- `install.sh` writes through a symlinked target instead of replacing it, so a
+  stow-deployed live copy no longer diverges from its dotfiles source.
+- Add `tests/test_output_rect.sh`.
 
 ### v1.3 (2026-07-08)
 - Add primary-window activation: on Wayland, activate/raise a Vivaldi window on

@@ -14,9 +14,20 @@ mkdir -p "$BIN_DIR"
 SCRIPT_PATH="$(pwd)/browser-router.sh"
 TARGET_BIN="$BIN_DIR/browser-router"
 
-cp "$SCRIPT_PATH" "$TARGET_BIN"
-chmod +x "$TARGET_BIN"
-echo "Installed script to $TARGET_BIN"
+# The live copy may be a symlink into a dotfiles checkout (stow). A plain cp
+# would replace the link with a regular file, leaving the dotfiles source stale
+# and the two silently diverging. Write through the link instead.
+if [[ -L "$TARGET_BIN" ]]; then
+    RESOLVED="$(readlink -f "$TARGET_BIN")"
+    cp "$SCRIPT_PATH" "$RESOLVED"
+    chmod +x "$RESOLVED"
+    echo "Installed script through symlink $TARGET_BIN -> $RESOLVED"
+    echo "  (commit that file in its own repo -- this checkout is not the live copy)"
+else
+    cp "$SCRIPT_PATH" "$TARGET_BIN"
+    chmod +x "$TARGET_BIN"
+    echo "Installed script to $TARGET_BIN"
+fi
 
 # 2. Install desktop file
 APP_DIR="$HOME/.local/share/applications"
