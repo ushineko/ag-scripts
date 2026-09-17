@@ -207,3 +207,64 @@ if __name__ == "__main__":
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSolidModeOverrides(unittest.TestCase):
+    """032 — Static does not drive the ASUS ARGB headers; Direct does."""
+
+    AURA_MODES = ["Direct", "Off", "Static", "Breathing", "Flashing",
+                  "Spectrum Cycle", "Rainbow", "Chase Fade", "Chase"]
+
+    def test_aura_board_gets_direct_although_it_advertises_static(self):
+        """The fault: Static lights only the onboard LED, headers go dark."""
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(self.AURA_MODES, "solid",
+                                     "ASUS ROG MAXIMUS Z790 HERO"),
+            "Direct")
+
+    def test_override_matches_case_insensitively(self):
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(self.AURA_MODES, "solid",
+                                     "asus rog maximus z790 hero"),
+            "Direct")
+
+    def test_gpu_still_prefers_static_when_it_offers_both(self):
+        """Regression guard: static-first exists because the 4090 rejects it.
+
+        A device outside the override list must not be dragged onto Direct by
+        this change.
+        """
+        both = ["Static", "Direct"]
+        self.assertEqual(rgb_openrgb.resolve_mode(both, "solid",
+                                                  "MSI GeForce RTX 4090"),
+                         "Static")
+
+    def test_no_device_name_keeps_the_default_order(self):
+        self.assertEqual(rgb_openrgb.resolve_mode(["Static", "Direct"], "solid"),
+                         "Static")
+
+    def test_overridden_device_with_only_static_still_gets_static(self):
+        """The override is a preference, not a requirement."""
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(["Static"], "solid",
+                                     "ASUS ROG MAXIMUS Z790 HERO"),
+            "Static")
+
+    def test_overridden_device_with_neither_is_none(self):
+        self.assertIsNone(
+            rgb_openrgb.resolve_mode(["Rainbow"], "solid",
+                                     "ASUS ROG MAXIMUS Z790 HERO"))
+
+    def test_off_intent_is_unchanged_by_the_override(self):
+        self.assertEqual(
+            rgb_openrgb.resolve_mode(self.AURA_MODES, "off",
+                                     "ASUS ROG MAXIMUS Z790 HERO"),
+            "Off")
+
+    def test_solid_modes_for_is_data_driven(self):
+        self.assertEqual(rgb_openrgb.solid_modes_for("ASUS Aura thing"),
+                         ("direct", "static"))
+        self.assertEqual(rgb_openrgb.solid_modes_for("Some Other Device"),
+                         rgb_openrgb.SOLID_MODES)
+        self.assertEqual(rgb_openrgb.solid_modes_for(None),
+                         rgb_openrgb.SOLID_MODES)

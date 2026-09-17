@@ -1066,7 +1066,8 @@ class AioSection(QFrame):
 
         sent = 0
         for device in devices:
-            mode = rgb_openrgb.resolve_mode(device.get("modes", []), intent)
+            mode = rgb_openrgb.resolve_mode(device.get("modes", []), intent,
+                                            device.get("name"))
             if mode is None:
                 _log.warning("lighting_intent_unsupported device=%s intent=%s",
                              device.get("name"), intent)

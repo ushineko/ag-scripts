@@ -62,6 +62,20 @@ DEFAULT_SCOPE = ("kraken", "geforce", "maximus", "mm700")
 SOLID_MODES = ("static", "direct")
 OFF_MODES = ("off", "direct")
 
+# Devices whose *addressable* zones only render in Direct. The ASUS Aura
+# mainboard controller advertises both Static and Direct, but Static drives only
+# the onboard LED - its four Addressable RGB Header zones go dark. Verified by
+# A/B with one colour: static went off, direct lit.
+#
+# This is an override rather than a change to SOLID_MODES because static-first
+# is load-bearing: the RTX 4090 rejects static and goes dark, which is the
+# failure that put static at the front in the first place. Matched on name
+# because OpenRGB indices are unstable, the same reason lighting scope does.
+SOLID_MODE_OVERRIDES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("maximus", ("direct", "static")),
+    ("aura", ("direct", "static")),
+)
+
 _DEVICE_LINE = re.compile(r"^(\d+):\s+(.+?)\s*$")
 
 
@@ -129,14 +143,35 @@ def scoped_devices(devices: list[dict],
     return [d for d in devices if in_scope(d.get("name", ""), scope)]
 
 
-def resolve_mode(supported: list[str], intent: str) -> str | None:
+def solid_modes_for(device_name: str | None) -> tuple[str, ...]:
+    """Preference order for a solid colour on this device.
+
+    Defaults to SOLID_MODES; see SOLID_MODE_OVERRIDES for why some devices differ.
+    """
+    name = (device_name or "").lower()
+    for needle, order in SOLID_MODE_OVERRIDES:
+        if needle in name:
+            return order
+    return SOLID_MODES
+
+
+def resolve_mode(supported: list[str], intent: str,
+                 device_name: str | None = None) -> str | None:
     """Pick a mode expressing `intent` from those a device supports.
 
     Returns None when the device cannot express it, so the caller skips that
     device rather than sending a mode it will reject. The GPU rejecting `static`
     and going dark is the reason this is not optional.
+
+    `device_name` selects the solid-colour preference order, because devices
+    disagree about which mode actually drives their addressable zones.
     """
-    wanted = SOLID_MODES if intent == "solid" else OFF_MODES if intent == "off" else (intent,)
+    if intent == "solid":
+        wanted = solid_modes_for(device_name)
+    elif intent == "off":
+        wanted = OFF_MODES
+    else:
+        wanted = (intent,)
     # Return the device's own spelling ("Direct", not "direct"): OpenRGB is
     # lenient about case today, but echoing what the device reported is what
     # lets a caller compare the result against `active_mode` to confirm the
