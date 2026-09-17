@@ -3,6 +3,7 @@ import sys
 import signal
 import json
 import os
+import tempfile
 import subprocess
 import faulthandler
 import shutil
@@ -44,7 +45,16 @@ import logging
 
 __version__ = "1.16.0"
 
-CONFIG_PATH = os.path.expanduser("~/.config/peripheral-battery-monitor.json")
+# PBM_CONFIG_PATH redirects the settings file. It exists so the test suite can
+# point at a temporary file: tests construct a real PeripheralMonitor with
+# load_settings mocked but save_settings live, and before this they wrote the
+# mock's tiny dict straight over the user's real config. See spec 027.
+CONFIG_PATH = (os.environ.get("PBM_CONFIG_PATH")
+               or os.path.expanduser("~/.config/peripheral-battery-monitor.json"))
+# Previous good settings, written before each atomic replace, and the
+# quarantine path for a file that would not parse (spec 027).
+CONFIG_BACKUP_PATH = CONFIG_PATH + ".bak"
+CONFIG_CORRUPT_PATH = CONFIG_PATH + ".corrupt"
 
 # The top area shows two user-configurable slots. Each slot may be set to any of
 # these device types via the right-click menu. The config value is also the key
@@ -618,6 +628,13 @@ class PeripheralMonitor(QWidget):
         QTimer.singleShot(100, self.update_status)
 
     def load_settings(self):
+        """Read settings, recovering from a corrupt file rather than hiding it.
+
+        A file that exists but will not parse is a damaged file, not a missing
+        one. Silently returning defaults for it — and then saving those defaults
+        over it on the next write — is how a whole config disappears without a
+        word. See spec 027.
+        """
         default_settings = {
             "opacity": 0.95,
             "font_scale": 1.0,
@@ -632,21 +649,82 @@ class PeripheralMonitor(QWidget):
             "slot_left": DEFAULT_SLOT_LEFT,    # device type shown in the left cell
             "slot_right": DEFAULT_SLOT_RIGHT,  # device type shown in the right cell
         }
-        if os.path.exists(CONFIG_PATH):
-            try:
-                with open(CONFIG_PATH, 'r') as f:
-                    return {**default_settings, **json.load(f)}
-            except Exception:
-                pass
+        if not os.path.exists(CONFIG_PATH):
+            return default_settings
+
+        loaded = self._read_settings_file(CONFIG_PATH)
+        if loaded is not None:
+            return {**default_settings, **loaded}
+
+        # The file exists and did not parse. Try the backup before giving up.
+        log = structlog.get_logger()
+        backup = self._read_settings_file(CONFIG_BACKUP_PATH)
+        if backup is not None:
+            log.warning("settings_corrupt_recovered_from_backup",
+                        path=CONFIG_PATH, backup=CONFIG_BACKUP_PATH)
+            return {**default_settings, **backup}
+
+        # No usable backup. Keep the damaged file instead of overwriting it, so
+        # it can be inspected and so the next save does not erase the evidence.
+        try:
+            os.replace(CONFIG_PATH, CONFIG_CORRUPT_PATH)
+            log.warning("settings_corrupt_preserved", path=CONFIG_PATH,
+                        preserved=CONFIG_CORRUPT_PATH)
+        except OSError as e:
+            log.warning("settings_corrupt_preserve_failed", path=CONFIG_PATH, error=str(e))
         return default_settings
 
-    def save_settings(self):
+    @staticmethod
+    def _read_settings_file(path: str):
+        """Parse a settings file, or None when it is absent or unusable."""
         try:
-            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-            with open(CONFIG_PATH, 'w') as f:
+            with open(path, 'r') as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def save_settings(self):
+        """Write settings atomically, keeping the previous file as a backup.
+
+        The old implementation was `open(path, 'w')` followed by `json.dump`.
+        That truncates the target to zero bytes *immediately* and only flushes on
+        close, so any death in between — crash, SIGKILL, power loss — left an
+        empty file and no copy of what was there. Combined with a load path that
+        silently fell back to defaults, a single badly-timed exit erased the
+        whole configuration. See spec 027.
+        """
+        directory = os.path.dirname(CONFIG_PATH)
+        tmp_path = None
+        try:
+            os.makedirs(directory, exist_ok=True)
+            # Same directory: os.replace is only atomic within one filesystem.
+            fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".settings-", suffix=".tmp")
+            with os.fdopen(fd, "w") as f:
                 json.dump(self.settings, f)
-        except Exception:
-            pass
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Keep the last good file. Best-effort: a missing target on first run
+            # is normal, and failing to back up must not block the save.
+            if os.path.exists(CONFIG_PATH):
+                try:
+                    shutil.copy2(CONFIG_PATH, CONFIG_BACKUP_PATH)
+                except OSError:
+                    pass
+
+            os.replace(tmp_path, CONFIG_PATH)
+            tmp_path = None
+        except Exception as e:
+            # The existing file is untouched: the failure happened before replace.
+            structlog.get_logger().warning("settings_save_failed",
+                                           path=CONFIG_PATH, error=str(e))
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def initUI(self):
         # Window flags: Frameless + StaysOnTop. Removed Tool to avoid Wayland coordinate bugs.
