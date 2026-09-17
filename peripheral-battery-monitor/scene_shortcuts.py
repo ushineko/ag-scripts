@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import tempfile
 import time
@@ -144,12 +145,48 @@ def build_js(slots=None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _state_path() -> str:
+    """Where the loaded script's object path is remembered across restarts.
+
+    A fresh process does not know the Script object its predecessor created, so
+    without this the old object survives, keeps its id occupied, and the next
+    loadScript is handed that id back - producing a load that creates no object
+    and a run() that silently does nothing.
+
+    XDG_RUNTIME_DIR and KWin have the same lifetime (both end at logout), so a
+    value found here always refers to the KWin now running.
+    """
+    return os.path.join(_script_dir(), f"{SCRIPT_NAME}.state")
+
+
+def _read_state() -> dict:
+    try:
+        with open(_state_path()) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_state(obj: str | None, path: str | None):
+    try:
+        with open(_state_path(), "w") as f:
+            json.dump({"object": obj, "path": path}, f)
+    except OSError as e:
+        # Losing this costs a leaked object on the next start, not correctness
+        # of this one.
+        _log.warning("scene_shortcuts_state_write_failed err=%s", e)
+
+
 class SceneShortcuts:
     """Loads and owns the KWin script for the life of the app."""
 
     def __init__(self):
         self._bus = QDBusConnection.sessionBus()
         self._path: str | None = None
+        # The /Scripting/ScriptN object our script runs in. Tracked so it can be
+        # stopped - and therefore destroyed - on the next install.
+        self._object: str | None = None
 
     def _call(self, path: str, iface: str, method: str, *args):
         msg = QDBusMessage.createMethodCall(KWIN_SERVICE, path, iface, method)
@@ -162,6 +199,21 @@ class SceneShortcuts:
             return None
         out = reply.arguments()
         return out[0] if out else None
+
+    def _script_objects(self) -> set[str]:
+        """The /Scripting/ScriptN object paths KWin currently holds.
+
+        Used to identify the object a load just created, because the id
+        loadScript returns cannot be trusted: it has been observed returning the
+        id of an unrelated, already-running script. Running that is a silent
+        no-op - it reports success and registers nothing.
+        """
+        xml = self._call(KWIN_SCRIPTING_PATH, "org.freedesktop.DBus.Introspectable",
+                         "Introspect")
+        if not isinstance(xml, str):
+            return set()
+        return {f"{KWIN_SCRIPTING_PATH}/{name}"
+                for name in re.findall(r'<node name="(Script\d+)"', xml)}
 
     def install(self, slots=None) -> bool:
         """Write and load the script. False when KWin is unavailable."""
@@ -177,9 +229,23 @@ class SceneShortcuts:
             _log.warning("scene_shortcuts_write_failed path=%s err=%s", path, e)
             return False
 
-        # Unload the previous copy (by its own path) and drop stale files. A new
-        # unique path is used for this load, so nothing can be served from KWin's
-        # by-path cache.
+        # Destroy the previous copy, then drop stale files. A new unique path is
+        # used for this load, so nothing can be served from KWin's by-path cache.
+        #
+        # unloadScript is NOT enough. It returns true and leaves the Script
+        # object alive, so its id stays occupied; ids then accumulate across
+        # restarts until loadScript hands back a recycled one and run() becomes a
+        # silent no-op. stop() is what actually destroys the object - verified by
+        # introspection, where stop() removed the node and unloadScript did not.
+        # Adopt whatever a previous process left behind, so its object is
+        # stopped rather than left holding an id.
+        if self._object is None:
+            prior = _read_state()
+            self._object = prior.get("object") or None
+            if self._path is None:
+                self._path = prior.get("path") or None
+        if self._object:
+            self._call(self._object, KWIN_SCRIPT_IFACE, "stop")
         if self._path:
             self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE, "unloadScript", self._path)
         for stale in _stale_script_files():
@@ -191,16 +257,24 @@ class SceneShortcuts:
             except OSError:
                 pass
 
+        before = self._script_objects()
         script_id = self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE,
                                "loadScript", path)
         if script_id is None:
             return False
-        try:
-            self._call(f"{KWIN_SCRIPTING_PATH}/Script{int(script_id)}",
-                       KWIN_SCRIPT_IFACE, "run")
-        except (TypeError, ValueError):
-            _log.warning("scene_shortcuts_bad_script_id id=%r", script_id)
+
+        # Find the object this load created rather than trusting the returned
+        # id. A load that produced no new object did not take, whatever it
+        # returned - that is the failure isScriptLoaded cannot see, because the
+        # *path* is loaded even when the object running it is someone else's.
+        created = self._script_objects() - before
+        if len(created) != 1:
+            _log.warning("scene_shortcuts_no_new_object path=%s id=%r created=%s",
+                         path, script_id, sorted(created) or "none")
             return False
+        obj = created.pop()
+
+        self._call(obj, KWIN_SCRIPT_IFACE, "run")
 
         # Verify rather than assume. Reporting success on an unverified load is
         # what let a silently cached no-op look healthy for hours.
@@ -210,7 +284,9 @@ class SceneShortcuts:
             _log.warning("scene_shortcuts_load_unverified path=%s reply=%r", path, loaded)
             return False
 
+        self._object = obj
         self._path = path
+        _write_state(obj, path)
         _log.info("scene_shortcuts_installed path=%s slots=%d", path,
                   len(slots if slots is not None else all_slots()))
         return True
@@ -219,6 +295,10 @@ class SceneShortcuts:
         """Unload the script, dropping the shortcuts with it."""
         if not self._path:
             return
+        # stop() first: unloadScript alone leaves the object alive and its id
+        # occupied, which is what let ids be recycled into silent no-ops.
+        if self._object:
+            self._call(self._object, KWIN_SCRIPT_IFACE, "stop")
         self._call(KWIN_SCRIPTING_PATH, KWIN_SCRIPTING_IFACE,
                    "unloadScript", self._path)
         try:
@@ -226,3 +306,5 @@ class SceneShortcuts:
         except OSError:
             pass
         self._path = None
+        self._object = None
+        _write_state(None, None)

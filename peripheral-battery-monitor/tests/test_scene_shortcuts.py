@@ -119,3 +119,48 @@ class TestGeneratedScript(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScriptObjectIdentification(unittest.TestCase):
+    """034 — the id loadScript returns is not a usable handle."""
+
+    XML = (
+        '<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN">\n'
+        '<node>\n'
+        '  <node name="Script1"/>\n'
+        '  <node name="Script7"/>\n'
+        '</node>\n'
+    )
+
+    def _shortcuts(self, introspect_reply):
+        sc = scene_shortcuts.SceneShortcuts.__new__(scene_shortcuts.SceneShortcuts)
+        sc._calls = []
+
+        def fake_call(path, iface, method, *args):
+            sc._calls.append((path, method, args))
+            if method == "Introspect":
+                return introspect_reply
+            return None
+
+        sc._call = fake_call
+        return sc
+
+    def test_parses_script_object_paths(self):
+        sc = self._shortcuts(self.XML)
+        self.assertEqual(sc._script_objects(),
+                         {"/Scripting/Script1", "/Scripting/Script7"})
+
+    def test_no_scripts_is_empty_not_an_error(self):
+        sc = self._shortcuts('<node>\n</node>\n')
+        self.assertEqual(sc._script_objects(), set())
+
+    def test_non_string_reply_is_empty(self):
+        """A failed Introspect must not look like 'no scripts loaded'."""
+        sc = self._shortcuts(None)
+        self.assertEqual(sc._script_objects(), set())
+
+    def test_ignores_non_script_children(self):
+        xml = ('<node>\n  <node name="Script2"/>\n'
+               '  <node name="Effects"/>\n</node>\n')
+        sc = self._shortcuts(xml)
+        self.assertEqual(sc._script_objects(), {"/Scripting/Script2"})
