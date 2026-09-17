@@ -43,7 +43,15 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.17.0"
+__version__ = "1.17.1"
+
+# Lighting device-list priming. The first read is deferred because OpenRGB's own
+# detection takes ~9 s, and its unit now additionally waits for every RGB device
+# to enumerate — so the server may not exist yet when the monitor starts. Retry
+# until every scope entry is matched rather than guessing a delay.
+LIGHTING_PRIME_FIRST_MS = 5000
+LIGHTING_PRIME_RETRY_MS = 5000
+LIGHTING_PRIME_DEADLINE_S = 150
 
 # PBM_CONFIG_PATH redirects the settings file. It exists so the test suite can
 # point at a temporary file: tests construct a real PeripheralMonitor with
@@ -811,7 +819,8 @@ class PeripheralMonitor(QWidget):
         # Populate the lighting device list up front. It used to be filled only
         # when the menu was first opened, so a scene fired from a hotkey before
         # that found an empty list and silently did nothing. See spec 026.
-        QTimer.singleShot(5000, self._prime_lighting_devices)
+        self._lighting_prime_deadline = time.monotonic() + LIGHTING_PRIME_DEADLINE_S
+        QTimer.singleShot(LIGHTING_PRIME_FIRST_MS, self._prime_lighting_devices)
         # Scenes (spec 025): seed defaults once, then publish the D-Bus endpoint
         # the numpad shortcuts call. A registration failure costs the shortcuts
         # and nothing else.
@@ -826,9 +835,6 @@ class PeripheralMonitor(QWidget):
         self._scene_shortcuts = scene_shortcuts.SceneShortcuts()
         if not self._scene_shortcuts.install():
             structlog.get_logger().warning("scene_shortcuts_unavailable")
-        # Populate the OpenRGB device list now rather than waiting for someone to
-        # open the Lighting menu: a scene fired from a keypress needs it already.
-        QTimer.singleShot(12000, self.aio_section.refresh_lighting_devices)
         self.aio_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -1624,19 +1630,40 @@ class PeripheralMonitor(QWidget):
         lightingMenu.addAction(refreshAct)
 
     def _prime_lighting_devices(self):
-        """Read the OpenRGB device list once at startup and report a bad one.
+        """Read the OpenRGB device list at startup, retrying until it is whole.
 
-        Deferred a few seconds because OpenRGB's own detection takes ~9 s from
-        its service start; priming immediately would just cache the same empty
-        list this is meant to avoid.
+        This used to be two fixed one-shots, at 5 s and 12 s, sized against the
+        ~9 s OpenRGB detection takes from its own service start. That assumed
+        the server was already up, and on 2026-09-17 it was not: the server
+        enumerated 2 of 6 devices, the monitor cached *that* list, and scenes
+        silently skipped the motherboard for the rest of the session. One
+        matched device is enough for `lighting_health` to report OK, so nothing
+        noticed.
+
+        A fixed delay cannot be right when the thing it waits for is now itself
+        gated on hardware enumeration. So retry on a real condition — every
+        scope entry matched — and give up only on a deadline, saying what is
+        still missing.
         """
         def done(devices):
             state, reason = self.aio_section.lighting_health()
+            missing = self.aio_section.unmatched_scope_entries()
             log = structlog.get_logger()
-            if state == self.aio_section.LIGHTING_OK:
+            if state == self.aio_section.LIGHTING_OK and not missing:
                 log.info("lighting_ready", detail=reason)
-            else:
-                log.warning("lighting_degraded", state=state, detail=reason)
+                return
+            if time.monotonic() < self._lighting_prime_deadline:
+                log.info("lighting_prime_retry", state=state,
+                         missing=",".join(missing) or "-", detail=reason)
+                QTimer.singleShot(LIGHTING_PRIME_RETRY_MS,
+                                  self._prime_lighting_devices)
+                return
+            # Deadline reached. A machine may legitimately lack a scoped device,
+            # so this is a warning and not an error - but it names what is
+            # absent, because a partial list is indistinguishable from a whole
+            # one at every layer above this.
+            log.warning("lighting_degraded", state=state, detail=reason,
+                        missing=",".join(missing) or "-")
         self.aio_section.refresh_lighting_devices(on_done=done)
 
     def _on_lighting_changed(self, value: str):

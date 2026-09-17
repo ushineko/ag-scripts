@@ -996,6 +996,20 @@ class AioSection(QFrame):
                 "the RGB hardware was enumerable; restart openrgb-server.service")
         return self.LIGHTING_OK, f"{len(scoped)} device(s) in scope"
 
+    def unmatched_scope_entries(self) -> tuple[str, ...]:
+        """Scope entries with no device in the current list.
+
+        A non-empty result during startup means OpenRGB has not finished
+        enumerating — the list is *partial*, which `lighting_health` cannot see
+        because one matched device already reads as OK. That partial state is
+        what made a scene silently skip the motherboard after a reboot.
+        """
+        return tuple(
+            entry for entry in self._lighting_scope
+            if not any(rgb_openrgb.in_scope(d.get("name", ""), (entry,))
+                       for d in self._lighting_devices)
+        )
+
     def lighting_available(self) -> bool:
         """True when the OpenRGB server is reachable.
 

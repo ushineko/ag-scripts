@@ -737,3 +737,59 @@ class TestNoSpeedWrites:
     def test_rgb_writes_are_permitted_and_present(self):
         source = open(os.path.join(ROOT, "aio_section.py")).read()
         assert "self._nam.post(" in source
+
+
+class TestScopeCompleteness:
+    """033: a PARTIAL device list reads as OK, which is how it hid."""
+
+    @staticmethod
+    def _dev(name):
+        return {"name": name, "modes": ["Direct", "Static"]}
+
+    def test_all_scope_entries_matched_is_empty(self, section):
+        section._lighting_scope = ("kraken", "geforce", "maximus", "mm700")
+        section._lighting_devices = [
+            self._dev("NZXT Kraken 2024 ELITE Series RGB"),
+            self._dev("MSI GeForce RTX 4090 Suprim Liquid X"),
+            self._dev("ASUS ROG MAXIMUS Z790 HERO"),
+            self._dev("Corsair MM700"),
+        ]
+        assert section.unmatched_scope_entries() == ()
+
+    def test_names_the_entries_that_are_missing(self, section):
+        """The real boot failure: only the GPU had enumerated."""
+        section._lighting_scope = ("kraken", "geforce", "maximus", "mm700")
+        section._lighting_devices = [
+            self._dev("MSI GeForce RTX 4090 Suprim Liquid X"),
+        ]
+        assert set(section.unmatched_scope_entries()) == {
+            "kraken", "maximus", "mm700"}
+
+    def test_partial_list_still_reports_lighting_ok(self, section):
+        """Why a health check alone could not catch this.
+
+        One matched device is enough for lighting_health to say OK, so the
+        monitor had no reason to re-query and cached the partial list for the
+        whole session.
+        """
+        section._lighting_scope = ("kraken", "geforce", "maximus", "mm700")
+        section._lighting_devices = [
+            self._dev("MSI GeForce RTX 4090 Suprim Liquid X"),
+        ]
+        # Pin server_alive: lighting_health opens a real socket, so without
+        # this the test only passes on a machine where OpenRGB happens to be
+        # running - it would assert nothing on CI.
+        import rgb_openrgb
+        original = rgb_openrgb.server_alive
+        rgb_openrgb.server_alive = lambda *a, **k: True
+        try:
+            state, _reason = section.lighting_health()
+        finally:
+            rgb_openrgb.server_alive = original
+        assert state == section.LIGHTING_OK
+        assert section.unmatched_scope_entries()    # but this does catch it
+
+    def test_empty_device_list_reports_every_entry(self, section):
+        section._lighting_scope = ("kraken", "geforce")
+        section._lighting_devices = []
+        assert set(section.unmatched_scope_entries()) == {"kraken", "geforce"}
