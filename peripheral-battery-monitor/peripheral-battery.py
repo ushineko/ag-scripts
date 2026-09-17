@@ -1429,8 +1429,45 @@ class PeripheralMonitor(QWidget):
         not supported by the device" — so on this hardware the menu is LCD only.
         Offering buttons that cannot work is worse than offering none.
         """
+        self._build_scenes_menu(parent_menu)
         self._build_lighting_menu(parent_menu)
         self._build_kraken_lcd_menu(parent_menu)
+
+    def _build_scenes_menu(self, parent_menu):
+        """Every scene, labelled with the key that fires it (spec 025).
+
+        The menu exists as much to document the shortcuts as to trigger them:
+        eighteen global bindings are otherwise invisible, and a keyboard with no
+        printed legend for them is hard to learn. Key text comes from
+        `scene_shortcuts._key_for`, the same function that registers the
+        bindings, so the label and the binding cannot drift apart.
+        """
+        scenes = self.aio_section.scenes
+        if not scenes:
+            return
+
+        scenesMenu = parent_menu.addMenu("Scenes")
+
+        def add_section(title, slots):
+            header = QAction(title, self)
+            header.setEnabled(False)
+            scenesMenu.addAction(header)
+            for slot in slots:
+                key = str(slot)
+                scene = scenes.get(key)
+                if scene is None:
+                    continue
+                label = (f"{scene_shortcuts.pretty_key(slot):<26}"
+                         f"{aio_scenes.summarise(scene)}")
+                action = QAction(label, self)
+                action.triggered.connect(
+                    lambda checked=False, n=slot: self.aio_section.apply_scene(n)
+                )
+                scenesMenu.addAction(action)
+
+        add_section("Colours", range(aio_scenes.SLOT_MIN, aio_scenes.SLOT_MAX + 1))
+        scenesMenu.addSeparator()
+        add_section("Animations", range(aio_scenes.ANIM_MIN, aio_scenes.ANIM_MAX + 1))
 
     def _build_lighting_menu(self, parent_menu):
         """Lighting profiles across every in-scope device (spec 023).

@@ -172,3 +172,48 @@ class TestSummarise(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestShortcutLabels(unittest.TestCase):
+    """025: the Scenes menu documents the bindings, so it must not drift.
+
+    The menu label and the registered key come from the same function; these
+    guard that they stay that way.
+    """
+
+    def setUp(self):
+        import scene_shortcuts
+        self.S = scene_shortcuts
+
+    def test_every_slot_has_a_key(self):
+        for slot in self.S.all_slots():
+            with self.subTest(slot=slot):
+                self.assertTrue(self.S.pretty_key(slot))
+
+    def test_colour_bank_is_unshifted(self):
+        for slot in range(aio_scenes.SLOT_MIN, aio_scenes.SLOT_MAX + 1):
+            with self.subTest(slot=slot):
+                self.assertNotIn("Shift", self.S.pretty_key(slot))
+
+    def test_animation_bank_is_shifted(self):
+        for slot in range(aio_scenes.ANIM_MIN, aio_scenes.ANIM_MAX + 1):
+            with self.subTest(slot=slot):
+                self.assertIn("Shift", self.S.pretty_key(slot))
+
+    def test_numpad_digit_matches_the_slot_within_its_bank(self):
+        """Shift+Num 1 must be slot 11, not slot 1 with a stray modifier."""
+        self.assertTrue(self.S.pretty_key(11).endswith("Num 1"))
+        self.assertTrue(self.S.pretty_key(19).endswith("Num 9"))
+        self.assertTrue(self.S.pretty_key(1).endswith("Num 1"))
+
+    def test_pretty_key_matches_the_registered_binding(self):
+        for slot in self.S.all_slots():
+            with self.subTest(slot=slot):
+                self.assertEqual(self.S.pretty_key(slot).replace("Num ", "Num+"),
+                                 self.S._key_for(slot))
+
+    def test_every_slot_appears_in_the_generated_script(self):
+        js = self.S.build_js()
+        for slot in self.S.all_slots():
+            with self.subTest(slot=slot):
+                self.assertIn(self.S._key_for(slot), js)

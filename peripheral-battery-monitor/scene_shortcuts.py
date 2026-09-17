@@ -61,6 +61,15 @@ def _key_for(slot: int) -> str:
     return KEY_TEMPLATE.format(n=slot)
 
 
+def pretty_key(slot: int) -> str:
+    """The binding as a human reads it, e.g. "Ctrl+Alt+Shift+Num 1".
+
+    Derived from the same template that registers the shortcut, so the menu
+    cannot advertise a key that is not actually bound.
+    """
+    return _key_for(slot).replace("Num+", "Num ")
+
+
 def all_slots() -> list[int]:
     return (list(range(aio_scenes.SLOT_MIN, aio_scenes.SLOT_MAX + 1))
             + list(range(aio_scenes.ANIM_MIN, aio_scenes.ANIM_MAX + 1)))
