@@ -117,9 +117,11 @@ class TestCapabilityDetection(unittest.TestCase):
 
     def setUp(self):
         aio_liquid._color_channels_cache = None
+        aio_liquid._color_devices_cache = None
 
     def tearDown(self):
         aio_liquid._color_channels_cache = None
+        aio_liquid._color_devices_cache = None
 
     def test_probe_result_is_cached(self):
         first = aio_liquid.color_channels()
@@ -138,9 +140,24 @@ class TestCapabilityDetection(unittest.TestCase):
         self.assertTrue(aio_liquid.color_supported())
 
     def test_unsupported_channel_is_rejected_when_others_are_known(self):
-        aio_liquid._color_channels_cache = ["ring"]
+        """Validation follows the attached devices' channels (spec 022)."""
+        aio_liquid._color_devices_cache = [{
+            "match": "kraken", "address": None, "ambiguous": False,
+            "description": "NZXT Kraken X73", "channels": ["ring"],
+        }]
         self.assertIsNone(aio_liquid.color_argv("logo", "fixed", [(255, 0, 0)]))
         self.assertIsNotNone(aio_liquid.color_argv("ring", "fixed", [(255, 0, 0)]))
+
+    def test_non_kraken_channels_are_accepted_when_a_controller_reports_them(self):
+        """An RGB controller uses led1/led2, not the Kraken's channel names."""
+        aio_liquid._color_devices_cache = [{
+            "match": "fan", "address": None, "ambiguous": False,
+            "description": "NZXT RGB & Fan Controller",
+            "channels": ["led1", "led2", "sync"],
+        }]
+        argv = aio_liquid.solid_color_argv("led1", "red", match="fan")
+        self.assertIsNotNone(argv)
+        self.assertEqual(argv[:3], ["liquidctl", "--match", "fan"])
 
     def test_empty_probe_does_not_hard_block(self):
         """An empty probe may mean 'probe failed', so the API stays permissive.

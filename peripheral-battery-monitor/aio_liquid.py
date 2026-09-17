@@ -47,8 +47,113 @@ LIQUIDCTL_MATCH = os.environ.get("LIQUIDCTL_MATCH", "kraken")
 COLOR_CHANNELS = ("sync", "ring", "logo", "external")
 DEFAULT_COLOR_CHANNEL = "sync"
 
-# Cache for the per-device capability probe; None means "not yet probed".
+# Caches for the capability probes; None means "not yet probed".
 _color_channels_cache: list[str] | None = None
+_color_devices_cache: list[dict] | None = None
+
+
+def is_animated(path: str) -> bool:
+    """True when `path` holds more than one frame.
+
+    Decided by reading the file, not by its extension: a single-frame `.gif` is
+    better served by the cheaper `static` path, and an animated file that someone
+    named `.png` should still animate. Any failure to read reports False, so an
+    unreadable file falls back to `static` and fails there with liquidctl's own
+    error rather than raising here.
+
+    Pillow is liquidctl's dependency, already installed wherever liquidctl can
+    show an image at all, so importing it costs this project nothing.
+    """
+    if not path or not isinstance(path, str):
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            return getattr(image, "n_frames", 1) > 1
+    except Exception as e:
+        _log.debug("animated_probe_failed path=%s err=%s", path, e)
+        return False
+
+
+def color_devices(refresh: bool = False) -> list[dict]:
+    """Every liquidctl device reporting colour channels.
+
+    Spec 021 only inspected Kraken instances and hardcoded `--match kraken`, so
+    an NZXT RGB controller could never have been found even once attached. This
+    scans every driver and returns each device's own match token, so colour
+    capability appears by itself when colour hardware does.
+
+    Each entry: {"match", "description", "channels"}. The match token is derived
+    from the description and is what `--match` needs to select that device.
+    """
+    global _color_devices_cache
+    if _color_devices_cache is not None and not refresh:
+        return [dict(d) for d in _color_devices_cache]
+
+    devices: list[dict] = []
+    try:
+        from liquidctl.driver import find_liquidctl_devices
+
+        for device in find_liquidctl_devices():
+            channels = [c for c in (getattr(device, "_color_channels", None) or {})]
+            if not channels:
+                continue
+            description = getattr(device, "description", "") or "device"
+            devices.append({
+                "match": None,          # assigned below, once all are known
+                "address": getattr(device, "address", None),
+                "description": description,
+                "channels": channels,
+            })
+        _assign_match_tokens(devices)
+    except Exception as e:
+        _log.debug("color_device_probe_failed err=%s", e)
+        devices = []
+
+    _color_devices_cache = devices
+    return [dict(d) for d in devices]
+
+
+def _assign_match_tokens(devices: list[dict]):
+    """Give each device a `--match` token that selects it and nothing else.
+
+    liquidctl matches a case-insensitive substring of the description, so a
+    token must be checked for uniqueness against *every* device, not just
+    chosen for being distinctive-looking. "rgb" reads like a good token for an
+    RGB controller right up until you notice the cooler is called
+    "NZXT Kraken 2024 Elite RGB" — that token would address both, and the write
+    would land on whichever liquidctl enumerated first.
+
+    Tries single words first, then the full description, which liquidctl always
+    matches exactly one of.
+    """
+    descriptions = [d["description"].lower() for d in devices]
+
+    def unique(token: str, index: int) -> bool:
+        return sum(1 for d in descriptions if token in d) == 1 and \
+            token in descriptions[index]
+
+    for i, device in enumerate(devices):
+        # Only real words: punctuation like "&" can be technically unique while
+        # being useless in a log line and fragile against a renamed product.
+        words = [w for w in
+                 (x.strip("()").lower() for x in device["description"].split())
+                 if len(w) >= 3 and any(c.isalnum() for c in w)]
+        chosen = next((w for w in words if unique(w, i)), None)
+        if chosen is None:
+            # No single word distinguishes it; a two-word run usually does.
+            for a, b in zip(words, words[1:]):
+                pair = f"{a} {b}"
+                if unique(pair, i):
+                    chosen = pair
+                    break
+        device["match"] = chosen or device["description"].lower()
+        # Substring matching cannot always disambiguate: "NZXT HUE 2" is a
+        # substring of "NZXT HUE 2 Ambient", so no token selects the shorter
+        # one. Flag those so the caller addresses them exactly instead.
+        device["ambiguous"] = chosen is None and not unique(
+            device["description"].lower(), i)
 
 
 def color_channels(refresh: bool = False) -> list[str]:
@@ -160,8 +265,23 @@ def is_known_mode(mode: str) -> bool:
     return mode in modes
 
 
-def _base_argv() -> list[str]:
-    return [LIQUIDCTL_BIN, "--match", LIQUIDCTL_MATCH]
+def _base_argv(match: str | None = None, address: str | None = None) -> list[str]:
+    """Base command, optionally targeting a device other than the cooler.
+
+    `--address` selects exactly one device and is used when no substring can
+    distinguish this device from another; `--match` is preferred otherwise
+    because it survives a replug, which an address does not.
+    """
+    if address:
+        return [LIQUIDCTL_BIN, "--address", address]
+    return [LIQUIDCTL_BIN, "--match", match or LIQUIDCTL_MATCH]
+
+
+def device_selector(device: dict) -> dict:
+    """Keyword arguments selecting `device`, from a `color_devices()` entry."""
+    if device.get("ambiguous") and device.get("address"):
+        return {"address": device["address"]}
+    return {"match": device.get("match")}
 
 
 def _hex(rgb: tuple[int, int, int]) -> str:
@@ -172,6 +292,8 @@ def color_argv(
     channel: str,
     mode: str,
     colors: list[tuple[int, int, int]] | None = None,
+    match: str | None = None,
+    address: str | None = None,
 ) -> list[str] | None:
     """`liquidctl set <channel> color <mode> [hex...]`, or None if invalid.
 
@@ -179,19 +301,20 @@ def color_argv(
     selection logs and does nothing instead of propagating into the Qt event
     loop.
     """
-    if channel not in COLOR_CHANNELS:
-        _log.warning("kraken_bad_channel channel=%s", channel)
-        return None
-    supported = color_channels()
-    if supported and channel not in supported:
-        _log.warning("kraken_channel_unsupported channel=%s supported=%s",
-                     channel, supported)
+    # Validate against the channels this device actually reports when we know
+    # them. COLOR_CHANNELS is only the Kraken family's naming — an NZXT RGB
+    # controller uses led1/led2/sync, and rejecting those would make
+    # multi-device support impossible.
+    known = [c for d in color_devices() for c in d["channels"]]
+    allowed = known or list(COLOR_CHANNELS)
+    if channel not in allowed:
+        _log.warning("color_bad_channel channel=%s allowed=%s", channel, allowed)
         return None
     if not is_known_mode(mode):
         _log.warning("kraken_bad_mode mode=%s", mode)
         return None
 
-    argv = _base_argv() + ["set", channel, "color", mode]
+    argv = _base_argv(match, address) + ["set", channel, "color", mode]
     for rgb in colors or []:
         if not _valid_rgb(rgb):
             _log.warning("kraken_bad_color color=%r", rgb)
@@ -208,15 +331,16 @@ def _valid_rgb(rgb) -> bool:
     )
 
 
-def solid_color_argv(channel: str, value: str) -> list[str] | None:
+def solid_color_argv(channel: str, value: str, match: str | None = None,
+                     address: str | None = None) -> list[str] | None:
     """A named colour or `#rrggbb` as a solid fill. `off` blanks the channel."""
     rgb = aio_color.parse_color(value)
     if rgb is None:
         _log.warning("kraken_unparseable_color value=%r", value)
         return None
     if rgb == (0, 0, 0):
-        return color_argv(channel, MODE_OFF)
-    return color_argv(channel, MODE_FIXED, [rgb])
+        return color_argv(channel, MODE_OFF, match=match, address=address)
+    return color_argv(channel, MODE_FIXED, [rgb], match=match, address=address)
 
 
 def lcd_brightness_argv(level: int) -> list[str] | None:

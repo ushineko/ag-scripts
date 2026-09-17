@@ -43,7 +43,8 @@ import logging
 import os
 import tempfile
 
-from PyQt6.QtCore import QElapsedTimer, QPointF, QProcess, Qt, QTimer, QUrl
+from PyQt6.QtCore import (QElapsedTimer, QPointF, QProcess, Qt, QTimer, QUrl,
+                          pyqtSignal)
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -84,6 +85,10 @@ ALERT_REPEAT_MS = 600000  # 10 minutes
 # only happens when the rendered content actually changed, so a machine sitting
 # at a steady idle writes nothing at all.
 LCD_PUSH_INTERVAL_MS = 30000
+# Selectable refresh intervals (spec 022). Nothing below 5 s: that is the poll
+# cadence, so a faster setting could not produce fresher data and would only
+# add hidraw traffic against a path with a known intermittent failure.
+LCD_PUSH_INTERVALS_MS = (5000, 10000, 30000, 60000, 300000)
 # After this many consecutive push failures, give up, fall back to the
 # firmware's own `liquid` readout (which needs no host traffic and cannot blank)
 # and tell the user once.
@@ -292,6 +297,12 @@ class _MetricRow:
 
 
 class AioSection(QFrame):
+    # Emitted whenever the LCD dashboard turns on or off, including indirectly
+    # (showing an image, or surrendering after failures). The menu and settings
+    # both follow this rather than tracking the state separately — two copies of
+    # one fact is exactly the bug spec 022 fixes.
+    dashboardChanged = pyqtSignal(bool)
+
     """AIO section frame. See the module docstring for the public API."""
 
     def __init__(self, initial_settings: dict | None = None, parent=None):
@@ -367,6 +378,7 @@ class AioSection(QFrame):
         self._lcd_last_key = None
         self._lcd_timer = QElapsedTimer()
         self._lcd_failures = 0
+        self._lcd_interval_ms = LCD_PUSH_INTERVAL_MS
         self._last_snapshot: dict = {}
 
         self._timer = QTimer(self)
@@ -895,8 +907,47 @@ class AioSection(QFrame):
         self.set_dashboard_enabled(False)
         return self._submit_write(aio_liquid.lcd_static_argv(path), "lcd static")
 
+    def set_lcd_gif(self, path: str):
+        self.set_dashboard_enabled(False)
+        return self._submit_write(aio_liquid.lcd_gif_argv(path), "lcd gif")
+
+    def set_lcd_image(self, path: str):
+        """Show an image, animating it when it actually has frames.
+
+        Spec 021 routed every picked file to `static`, so an animated GIF showed
+        frame one and nothing else. The choice is made by reading the file, not
+        by its extension.
+        """
+        if aio_liquid.is_animated(path):
+            return self.set_lcd_gif(path)
+        return self.set_lcd_static(path)
+
+    @property
+    def dashboard_enabled(self) -> bool:
+        """Live state of the LCD dashboard. The menu reads this, not settings."""
+        return self._lcd_dashboard_enabled
+
+    @property
+    def dashboard_interval_ms(self) -> int:
+        return self._lcd_interval_ms
+
+    def set_dashboard_interval(self, interval_ms: int) -> bool:
+        """Change the push cadence. Applied immediately, no restart."""
+        if interval_ms not in LCD_PUSH_INTERVALS_MS:
+            _log.warning("aio_lcd_bad_interval ms=%r", interval_ms)
+            return False
+        self._lcd_interval_ms = int(interval_ms)
+        # Let a shortened interval take effect now rather than after the old one.
+        self._lcd_timer.invalidate()
+        return True
+
     def set_dashboard_enabled(self, enabled: bool):
-        """Turn the live LCD dashboard on or off."""
+        """Turn the live LCD dashboard on or off.
+
+        Emits `dashboardChanged` on any real change so callers never have to
+        remember to mirror it — the desync this fixes was caused by exactly that
+        kind of remembering.
+        """
         enabled = bool(enabled)
         if enabled == self._lcd_dashboard_enabled:
             return
@@ -908,6 +959,7 @@ class AioSection(QFrame):
             self._lcd_timer.invalidate()
         else:
             self.queue.clear_idle()
+        self.dashboardChanged.emit(enabled)
 
     def _maybe_push_dashboard(self, snapshot: dict):
         """Render and push the LCD, subject to cadence, change and health gates.
@@ -919,7 +971,7 @@ class AioSection(QFrame):
             return
         if snapshot.get("cooler_source") != "liquidctl":
             return
-        if self._lcd_timer.isValid() and self._lcd_timer.elapsed() < LCD_PUSH_INTERVAL_MS:
+        if self._lcd_timer.isValid() and self._lcd_timer.elapsed() < self._lcd_interval_ms:
             return
 
         key = aio_dashboard.content_key(snapshot)
@@ -959,8 +1011,10 @@ class AioSection(QFrame):
         failure. Cooling telemetry and alerting are unaffected throughout.
         """
         _log.warning("aio_lcd_dashboard_surrendered failures=%d", self._lcd_failures)
-        self._lcd_dashboard_enabled = False
-        self.queue.clear_idle()
+        # Through the setter, not by assignment: it is the only thing that emits
+        # dashboardChanged, and a second place mutating this flag is precisely
+        # the desync spec 022 removes.
+        self.set_dashboard_enabled(False)
         self._submit_write(aio_liquid.lcd_liquid_argv(), "lcd liquid (fallback)")
         self._notify(
             "LCD dashboard disabled",

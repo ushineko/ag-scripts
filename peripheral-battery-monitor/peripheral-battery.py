@@ -24,6 +24,7 @@ import accounts
 import usage_cache
 import aio_color
 import aio_liquid
+import aio_section as aio_section_mod
 from aio_section import AioSection
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
@@ -698,9 +699,14 @@ class PeripheralMonitor(QWidget):
         # can be toggled at runtime; it keeps itself hidden until OpenLinkHub
         # actually reports something, so machines without it see no change.
         self.aio_section = AioSection(initial_settings=self.settings, parent=self)
-        # Restore the LCD dashboard preference; the menu only reflects it.
+        # Restore LCD dashboard preferences, then follow the section's own
+        # signal for any later change.
+        self.aio_section.set_dashboard_interval(
+            int(self.settings.get("aio_lcd_interval_ms",
+                                  aio_section_mod.LCD_PUSH_INTERVAL_MS)))
         self.aio_section.set_dashboard_enabled(
             bool(self.settings.get("aio_lcd_dashboard", False)))
+        self.aio_section.dashboardChanged.connect(self._on_aio_dashboard_changed)
         self.aio_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -1445,10 +1451,25 @@ class PeripheralMonitor(QWidget):
     def _build_kraken_lcd_menu(self, parent_menu):
         lcdMenu = parent_menu.addMenu("LCD")
 
+        # Checked from the section's live state, never from settings. Settings
+        # is durable storage; the section is the truth. Reading settings here is
+        # what let the box show "checked" after an image had silently disabled
+        # the dashboard, so one click appeared to do nothing.
         dashAct = QAction("Live dashboard", self, checkable=True)
-        dashAct.setChecked(bool(self.settings.get("aio_lcd_dashboard", False)))
+        dashAct.setChecked(self.aio_section.dashboard_enabled)
         dashAct.triggered.connect(self._toggle_aio_dashboard)
         lcdMenu.addAction(dashAct)
+
+        intervalMenu = lcdMenu.addMenu("Refresh every")
+        current = self.aio_section.dashboard_interval_ms
+        for ms in aio_section_mod.LCD_PUSH_INTERVALS_MS:
+            label = f"{ms // 1000}s" if ms < 60000 else f"{ms // 60000} min"
+            action = QAction(label, self, checkable=True)
+            action.setChecked(ms == current)
+            action.triggered.connect(
+                lambda checked=False, v=ms: self._set_aio_dashboard_interval(v)
+            )
+            intervalMenu.addAction(action)
 
         liquidAct = QAction("Coolant temperature (built-in)", self)
         liquidAct.triggered.connect(
@@ -1478,8 +1499,7 @@ class PeripheralMonitor(QWidget):
             orientMenu.addAction(action)
 
     def _toggle_aio_dashboard(self, checked: bool):
-        self.settings["aio_lcd_dashboard"] = bool(checked)
-        self.save_settings()
+        # Persistence happens in _on_aio_dashboard_changed, via the signal.
         self.aio_section.set_dashboard_enabled(bool(checked))
 
     def _prompt_kraken_color(self):
@@ -1506,7 +1526,26 @@ class PeripheralMonitor(QWidget):
             self, "LCD image", os.path.expanduser("~"),
             "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
         if path:
-            self.aio_section.set_lcd_static(path)
+            # set_lcd_image animates a multi-frame file and uses the cheaper
+            # static path otherwise.
+            self.aio_section.set_lcd_image(path)
+
+    def _set_aio_dashboard_interval(self, interval_ms: int):
+        if self.aio_section.set_dashboard_interval(interval_ms):
+            self.settings["aio_lcd_interval_ms"] = int(interval_ms)
+            self.save_settings()
+
+    def _on_aio_dashboard_changed(self, enabled: bool):
+        """Persist dashboard state however it changed.
+
+        Driven by the section's signal rather than by each call site, so an
+        indirect disable — showing an image, or surrendering after repeated LCD
+        failures — is remembered just as reliably as a menu click.
+        """
+        if self.settings.get("aio_lcd_dashboard") == bool(enabled):
+            return
+        self.settings["aio_lcd_dashboard"] = bool(enabled)
+        self.save_settings()
 
     def _set_aio_color(self, value: str):
         rgb = aio_color.parse_color(value)
