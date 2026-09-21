@@ -77,6 +77,10 @@ absent.
 entry and the startup path carry no shortcut registration, so the numpad stays
 hotaru's across restarts.
 
+**R4a. The settings those features wrote are removed from the file.** A
+settings file listing a scene bank and an LCD interval describes a program that
+no longer exists.
+
 **R5. `openrgb-server` is not touched.** Its user unit is hotaru's dependency
 now, and removing it would break the program that just took over.
 
@@ -97,6 +101,8 @@ now, and removing it would break the program that just took over.
       and asserts every removed module is absent.
 - [x] AC7. The full suite passes: 266 tests, 36 subtests.
 - [x] AC8. The README says what moved and where it went.
+- [x] AC9a. The retired settings keys are dropped on load, the cleaned file is
+      written at startup, and a file without them triggers no save.
 - [x] AC9. Verified on the development machine: the widget runs, the AIO
       section still shows coolant, CPU, pump and fans, and hotaru's eighteen
       numpad keys still work with this program running.
@@ -114,9 +120,13 @@ now, and removing it would break the program that just took over.
 - **The version in the file had drifted ahead of the changelog.**
   `__version__` was 1.19.0 with no entries for 1.18.0 or 1.19.0. This release
   is 1.20.0 and the gap is recorded rather than reconstructed.
-- **Rollback** is a revert: nothing here is stateful, and the settings keys
-  that are no longer read are left in the user's config file rather than
-  deleted, so a revert finds them where it left them.
+- **The retired settings keys are removed from the file**, dropped on load with
+  the cleaned file written once at startup rather than whenever the user next
+  happens to change something. A widget that is looked at rather than used may
+  not save for weeks. The previous values remain in the `.bak` the atomic save
+  already keeps, so a revert has something to read.
+- **Rollback** is a revert: nothing else here is stateful and no migration
+  runs.
 
 ## Alternatives Considered
 

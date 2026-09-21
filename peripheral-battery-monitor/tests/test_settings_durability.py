@@ -49,6 +49,8 @@ class _Harness:
         self.load_settings = cls.load_settings.__get__(self)
         self.save_settings = cls.save_settings.__get__(self)
         self._read_settings_file = cls._read_settings_file
+        self._drop_retired = cls._drop_retired.__get__(self)
+        self._retired_dropped = False
 
     @property
     def path(self):
@@ -88,6 +90,62 @@ class SettingsDurabilityTest(unittest.TestCase):
         self.h.save_settings()
         leftovers = [f for f in os.listdir(self.tmp.name) if f.endswith(".tmp")]
         self.assertEqual(leftovers, [])
+
+    # -- keys the lighting left behind (spec 039) -------------------------
+
+    def test_retired_keys_are_dropped_on_load(self):
+        """A settings file that still lists a scene bank and an LCD interval
+        describes a program that no longer exists. Nothing reads them."""
+        self.h.settings = {**GOOD, "aio_scenes": {"1": {"color": "red"}},
+                           "aio_lcd_dashboard": True,
+                           "lighting_last_color": "purple",
+                           "keyboard_effect": "splash"}
+        self.h.save_settings()
+
+        loaded = self.h.load_settings()
+        for key in ("aio_scenes", "aio_lcd_dashboard", "lighting_last_color",
+                    "keyboard_effect"):
+            self.assertNotIn(key, loaded)
+
+    def test_dropping_them_keeps_everything_else(self):
+        """The whole risk of a removal like this: taking a live key with it."""
+        self.h.settings = {**GOOD, "aio_scenes": {}, "lighting_scope": ["kraken"]}
+        self.h.save_settings()
+
+        loaded = self.h.load_settings()
+        self.assertEqual(loaded["bandwidth_interfaces"], ["tailscale0", "eno2"])
+        self.assertIn("aio_section_enabled", loaded)
+
+    def test_loading_says_whether_anything_was_dropped(self):
+        """The flag the startup path saves on. Without it the cleaned file is
+        only written when the user happens to change something else, which on
+        a widget that is mostly looked at rather than used is close to never.
+        """
+        self.h.settings = {**GOOD, "aio_scenes": {"1": {"color": "red"}}}
+        self.h.save_settings()
+
+        self.h.load_settings()
+        self.assertTrue(self.h._retired_dropped)
+
+    def test_a_clean_file_triggers_no_save(self):
+        """And a file with none of them left alone: a start that rewrites the
+        settings for no reason is a start that can lose them for no reason."""
+        self.h.settings = dict(GOOD)
+        self.h.save_settings()
+
+        self.h.load_settings()
+        self.assertFalse(self.h._retired_dropped)
+
+    def test_they_leave_the_file_on_the_next_save(self):
+        """Dropped on load, written out on save."""
+        self.h.settings = {**GOOD, "aio_scenes": {"1": {"color": "red"}}}
+        self.h.save_settings()
+
+        self.h.settings = self.h.load_settings()
+        self.h.save_settings()
+
+        with open(self.h.path) as f:
+            self.assertNotIn("aio_scenes", json.load(f))
 
     # -- the actual failure ----------------------------------------------
 

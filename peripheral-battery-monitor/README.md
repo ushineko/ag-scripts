@@ -230,6 +230,11 @@ Logs are automatically saved in JSON format for debugging:
     node is the invariant this area has been most careful about. Concurrent
     *reads* continue and are fine.
   - The `openrgb-server` user unit stays. It is hotaru's dependency now.
+  - The settings those features wrote — the scene bank, the LCD dashboard's
+    state and interval, the lighting scope and last colour, the keyboard
+    effect — are dropped on load and the cleaned file is written once at
+    startup. The previous values stay in the `.bak` the atomic save already
+    keeps.
 
 ### v1.18.0 – v1.19.0
 

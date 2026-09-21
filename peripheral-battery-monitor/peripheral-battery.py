@@ -38,6 +38,20 @@ import logging
 
 __version__ = "1.20.0"
 
+# Settings written by features that moved to hotaru (spec 039). Read by nothing
+# now, and removed from the file on the next save rather than left to puzzle
+# whoever opens it next: the scene bank, the LCD dashboard's state and
+# interval, the lighting scope and last colour, and the keyboard's effect.
+RETIRED_SETTINGS = (
+    "aio_scenes",
+    "aio_lcd_dashboard",
+    "aio_lcd_interval_ms",
+    "aio_lcd_keepalive_ms",
+    "lighting_last_color",
+    "lighting_scope",
+    "keyboard_effect",
+)
+
 # Lighting device-list priming. The first read is deferred because OpenRGB's own
 # detection takes ~9 s, and its unit now additionally waits for every RGB device
 # to enumerate — so the server may not exist yet when the monitor starts. Retry
@@ -602,6 +616,12 @@ class PeripheralMonitor(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = self.load_settings()
+        if getattr(self, "_retired_dropped", False):
+            # Write the cleaned file once, now, rather than waiting for
+            # whatever the user does next to trigger a save. A start that
+            # changes nothing is the common case, so "it goes on the next
+            # save" would leave the dead keys there indefinitely.
+            self.save_settings()
         self.worker = None
         self._force_usage_refresh = False           # next fetch bypasses the cache gate
         self._last_good_usage: dict | None = None  # cached last successful API response
@@ -655,7 +675,7 @@ class PeripheralMonitor(QWidget):
 
         loaded = self._read_settings_file(CONFIG_PATH)
         if loaded is not None:
-            return {**default_settings, **loaded}
+            return self._drop_retired({**default_settings, **loaded})
 
         # The file exists and did not parse. Try the backup before giving up.
         log = structlog.get_logger()
@@ -663,7 +683,7 @@ class PeripheralMonitor(QWidget):
         if backup is not None:
             log.warning("settings_corrupt_recovered_from_backup",
                         path=CONFIG_PATH, backup=CONFIG_BACKUP_PATH)
-            return {**default_settings, **backup}
+            return self._drop_retired({**default_settings, **backup})
 
         # No usable backup. Keep the damaged file instead of overwriting it, so
         # it can be inspected and so the next save does not erase the evidence.
@@ -674,6 +694,29 @@ class PeripheralMonitor(QWidget):
         except OSError as e:
             log.warning("settings_corrupt_preserve_failed", path=CONFIG_PATH, error=str(e))
         return default_settings
+
+    def _drop_retired(self, settings: dict) -> dict:
+        """Forget the keys the lighting left behind (spec 039).
+
+        Dropped on load rather than migrated: nothing reads them, nothing will,
+        and a settings file that still lists a scene bank and an LCD interval
+        describes a program that no longer exists.
+
+        Whether anything was dropped is recorded, because the caller saves the
+        cleaned file immediately when it was. A start that changes nothing is
+        the common case, so leaving it to the next ordinary save would leave
+        the dead keys in the file more or less forever.
+
+        No backup dance: the save path is atomic and keeps the previous file,
+        so the old values are one `.bak` away for as long as that copy lives.
+        """
+        # An attribute rather than a return value: load_settings has three
+        # exits and a caller that has to remember which one told it something
+        # is a caller that will forget.
+        self._retired_dropped = any(key in settings for key in RETIRED_SETTINGS)
+        for key in RETIRED_SETTINGS:
+            settings.pop(key, None)
+        return settings
 
     @staticmethod
     def _read_settings_file(path: str):
