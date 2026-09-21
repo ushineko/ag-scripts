@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import (
     QApplication, QLabel, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QProgressBar, QPushButton, QInputDialog, QSizePolicy, QFileDialog
+    QFrame, QProgressBar, QPushButton, QInputDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QLockFile, QDir
 from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
@@ -23,13 +23,6 @@ from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 import battery_reader
 import accounts
 import usage_cache
-import aio_color
-import aio_liquid
-import aio_scenes
-import scene_service
-import scene_shortcuts
-import rgb_openrgb
-import aio_section as aio_section_mod
 from aio_section import AioSection
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
@@ -43,7 +36,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.19.0"
+__version__ = "1.20.0"
 
 # Lighting device-list priming. The first read is deferred because OpenRGB's own
 # detection takes ~9 s, and its unit now additionally waits for every RGB device
@@ -804,40 +797,6 @@ class PeripheralMonitor(QWidget):
         # can be toggled at runtime; it keeps itself hidden until OpenLinkHub
         # actually reports something, so machines without it see no change.
         self.aio_section = AioSection(initial_settings=self.settings, parent=self)
-        # Restore LCD dashboard preferences, then follow the section's own
-        # signal for any later change.
-        self.aio_section.set_dashboard_interval(
-            int(self.settings.get("aio_lcd_interval_ms",
-                                  aio_section_mod.LCD_PUSH_INTERVAL_MS)))
-        self.aio_section.set_dashboard_enabled(
-            bool(self.settings.get("aio_lcd_dashboard", False)))
-        self.aio_section.dashboardChanged.connect(self._on_aio_dashboard_changed)
-        # Keyboard effect before any lighting is applied, so the first scene of
-        # the session already renders the way the user last chose.
-        rgb_openrgb.set_keyboard_effect(self.settings.get("keyboard_effect"))
-        self.aio_section.restore_lighting_state(
-            self.settings.get("lighting_last_color"),
-            self.settings.get("lighting_scope"))
-        self.aio_section.lightingChanged.connect(self._on_lighting_changed)
-        # Populate the lighting device list up front. It used to be filled only
-        # when the menu was first opened, so a scene fired from a hotkey before
-        # that found an empty list and silently did nothing. See spec 026.
-        self._lighting_prime_deadline = time.monotonic() + LIGHTING_PRIME_DEADLINE_S
-        QTimer.singleShot(LIGHTING_PRIME_FIRST_MS, self._prime_lighting_devices)
-        # Scenes (spec 025): seed defaults once, then publish the D-Bus endpoint
-        # the numpad shortcuts call. A registration failure costs the shortcuts
-        # and nothing else.
-        if aio_scenes.seed(self.settings):
-            self.save_settings()
-        self.aio_section.set_scenes(aio_scenes.load(self.settings))
-        self._scene_service = scene_service.register(self.aio_section, self)
-        # Global numpad shortcuts. Registered through KWin scripting rather than
-        # a .desktop entry, which only takes effect from the next login — see
-        # scene_shortcuts for the evidence. Reloaded every start, so the app and
-        # its shortcuts cannot drift apart.
-        self._scene_shortcuts = scene_shortcuts.SceneShortcuts()
-        if not self._scene_shortcuts.install():
-            structlog.get_logger().warning("scene_shortcuts_unavailable")
         self.aio_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -1390,15 +1349,15 @@ class PeripheralMonitor(QWidget):
                 )
                 ifaceMenu.addAction(resetAct)
 
-        # AIO submenu. Colour and brightness are writable; fan/pump duty is not,
-        # because Commander ST fw 2.x silently discards duty writes, so such a
-        # control would lie about succeeding (specs 017, 019).
+        # AIO submenu. Read-only: the colour, effect, brightness, scene and LCD
+        # controls moved to hotaru with everything else that writes to this
+        # cooler, and fan/pump duty was never here because Commander ST fw 2.x
+        # silently discards duty writes (specs 017, 019, 039).
         aioMenu = contextMenu.addMenu("AIO")
         toggleAioAct = QAction("Show AIO Section", self, checkable=True)
         toggleAioAct.setChecked(self.settings.get("aio_section_enabled", True))
         toggleAioAct.triggered.connect(self.toggle_aio_section)
         aioMenu.addAction(toggleAioAct)
-        self._build_aio_rgb_menu(aioMenu)
 
         contextMenu.addSeparator()
 
@@ -1471,352 +1430,6 @@ class PeripheralMonitor(QWidget):
         self.settings.update(partial)
         self.save_settings()
 
-    def _build_aio_rgb_menu(self, parent_menu):
-        """Colour / Effect / Brightness, when the daemon reports RGB channels.
-
-        Omitted entirely when it does not: an effect name that the device has
-        not implemented is rejected, so the menu never guesses one.
-        """
-        # Spec 021: the Kraken is driven by liquidctl and is not an OpenLinkHub
-        # device, so prefer that backend when it reports a cooler. The
-        # OpenLinkHub path below still serves a future OpenLinkHub RGB device.
-        if self.aio_section.kraken_available():
-            parent_menu.addSeparator()
-            self._build_kraken_menu(parent_menu)
-            return
-
-        device, channels = self.aio_section.rgb_target()
-        if not device or not channels:
-            return
-
-        parent_menu.addSeparator()
-
-        colourMenu = parent_menu.addMenu("Colour")
-        for name in sorted(aio_color.NAMED_COLORS):
-            if name == "off":
-                continue
-            action = QAction(name.capitalize(), self)
-            action.triggered.connect(
-                lambda checked=False, n=name: self._set_aio_color(n)
-            )
-            colourMenu.addAction(action)
-        colourMenu.addSeparator()
-        customAct = QAction("Custom…", self)
-        customAct.triggered.connect(self._prompt_aio_color)
-        colourMenu.addAction(customAct)
-        offAct = QAction("Off", self)
-        offAct.triggered.connect(lambda checked=False: self._set_aio_color("off"))
-        colourMenu.addAction(offAct)
-
-        effects = self.aio_section.effects()
-        if effects:
-            effectMenu = parent_menu.addMenu("Effect")
-            for name in effects:
-                action = QAction(name, self)
-                action.triggered.connect(
-                    lambda checked=False, n=name: self.aio_section.apply_effect(n)
-                )
-                effectMenu.addAction(action)
-
-        brightnessMenu = parent_menu.addMenu("Brightness")
-        for label, level in (("33%", 1), ("66%", 2), ("100%", 3)):
-            action = QAction(label, self)
-            action.triggered.connect(
-                lambda checked=False, v=level: self.aio_section.set_brightness(v)
-            )
-            brightnessMenu.addAction(action)
-
-    def _build_kraken_menu(self, parent_menu):
-        """Colour / Effect / LCD for a liquidctl-driven Kraken (spec 021).
-
-        Colour and Effect appear only when the device actually implements a
-        colour channel. The NZXT Kraken 2024 Elite does not — liquidctl gives it
-        an empty `_color_channels` map and every colour write returns "operation
-        not supported by the device" — so on this hardware the menu is LCD only.
-        Offering buttons that cannot work is worse than offering none.
-        """
-        self._build_scenes_menu(parent_menu)
-        self._build_lighting_menu(parent_menu)
-        self._build_kraken_lcd_menu(parent_menu)
-
-    def _build_scenes_menu(self, parent_menu):
-        """Every scene, labelled with the key that fires it (spec 025).
-
-        The menu exists as much to document the shortcuts as to trigger them:
-        eighteen global bindings are otherwise invisible, and a keyboard with no
-        printed legend for them is hard to learn. Key text comes from
-        `scene_shortcuts._key_for`, the same function that registers the
-        bindings, so the label and the binding cannot drift apart.
-        """
-        scenes = self.aio_section.scenes
-        if not scenes:
-            return
-
-        scenesMenu = parent_menu.addMenu("Scenes")
-
-        def add_section(title, slots):
-            header = QAction(title, self)
-            header.setEnabled(False)
-            scenesMenu.addAction(header)
-            for slot in slots:
-                key = str(slot)
-                scene = scenes.get(key)
-                if scene is None:
-                    continue
-                label = (f"{scene_shortcuts.pretty_key(slot):<26}"
-                         f"{aio_scenes.summarise(scene)}")
-                action = QAction(label, self)
-                action.triggered.connect(
-                    lambda checked=False, n=slot: self.aio_section.apply_scene(n)
-                )
-                scenesMenu.addAction(action)
-
-        add_section("Colours", range(aio_scenes.SLOT_MIN, aio_scenes.SLOT_MAX + 1))
-        scenesMenu.addSeparator()
-        add_section("Animations", range(aio_scenes.ANIM_MIN, aio_scenes.ANIM_MAX + 1))
-
-    def _build_lighting_menu(self, parent_menu):
-        """Lighting profiles across every in-scope device (spec 023).
-
-        Driven by OpenRGB, not liquidctl: liquidctl has no colour channels for
-        this cooler, while OpenRGB reaches the Kraken (and the fans chained into
-        it), the GPU and the motherboard. Default scope is the case interior;
-        peripherals keep their own lighting.
-        """
-        if not self.aio_section.lighting_available():
-            action = QAction("Lighting unavailable (OpenRGB server down)", self)
-            action.setEnabled(False)
-            parent_menu.addAction(action)
-            return
-
-        devices = self.aio_section.lighting_devices
-        if not devices:
-            # First open after start: kick a refresh so the next open is populated.
-            self.aio_section.refresh_lighting_devices()
-            action = QAction("Lighting (detecting…)", self)
-            action.setEnabled(False)
-            parent_menu.addAction(action)
-            return
-
-        lightingMenu = parent_menu.addMenu("Lighting")
-        in_scope = rgb_openrgb.scoped_devices(devices)
-        header = QAction(f"{len(in_scope)} device(s): "
-                         + ", ".join(d["name"].split()[0] for d in in_scope), self)
-        header.setEnabled(False)
-        lightingMenu.addAction(header)
-        lightingMenu.addSeparator()
-
-        for name in sorted(aio_color.NAMED_COLORS):
-            if name == "off":
-                continue
-            action = QAction(name.capitalize(), self)
-            action.triggered.connect(
-                lambda checked=False, n=name: self.aio_section.apply_lighting_color(n)
-            )
-            lightingMenu.addAction(action)
-
-        lightingMenu.addSeparator()
-        customAct = QAction("Custom…", self)
-        customAct.triggered.connect(self._prompt_lighting_color)
-        lightingMenu.addAction(customAct)
-        offAct = QAction("Off", self)
-        offAct.triggered.connect(
-            lambda checked=False: self.aio_section.apply_lighting("off")
-        )
-        lightingMenu.addAction(offAct)
-
-        if any("keychron" in d["name"].lower() for d in in_scope):
-            lightingMenu.addSeparator()
-            kbMenu = lightingMenu.addMenu("Keyboard effect")
-            current = rgb_openrgb.keyboard_effect()
-            for key, label in (("splash", "Splash (reacts to typing)"),
-                               ("solid", "Solid (flat colour)")):
-                act = QAction(label, self)
-                act.setCheckable(True)
-                act.setChecked(key == current)
-                act.triggered.connect(
-                    lambda checked=False, k=key: self._set_keyboard_effect(k))
-                kbMenu.addAction(act)
-
-        lightingMenu.addSeparator()
-        refreshAct = QAction("Re-detect devices", self)
-        refreshAct.triggered.connect(
-            lambda checked=False: self.aio_section.refresh_lighting_devices()
-        )
-        lightingMenu.addAction(refreshAct)
-
-    def _set_keyboard_effect(self, key: str):
-        """Persist the keyboard effect and re-apply so the change shows at once."""
-        value = rgb_openrgb.set_keyboard_effect(key)
-        self.settings["keyboard_effect"] = value
-        self.save_settings()
-        colour = self.aio_section.lighting_last_color
-        if colour:
-            # Re-send to the keyboard only: the effect choice changes nothing
-            # for any other device.
-            self.aio_section.apply_lighting_color(
-                colour, scope=rgb_openrgb.KEYBOARD_MATCH, remember=False)
-
-    def _prime_lighting_devices(self):
-        """Read the OpenRGB device list at startup, retrying until it is whole.
-
-        This used to be two fixed one-shots, at 5 s and 12 s, sized against the
-        ~9 s OpenRGB detection takes from its own service start. That assumed
-        the server was already up, and on 2026-09-17 it was not: the server
-        enumerated 2 of 6 devices, the monitor cached *that* list, and scenes
-        silently skipped the motherboard for the rest of the session. One
-        matched device is enough for `lighting_health` to report OK, so nothing
-        noticed.
-
-        A fixed delay cannot be right when the thing it waits for is now itself
-        gated on hardware enumeration. So retry on a real condition — every
-        scope entry matched — and give up only on a deadline, saying what is
-        still missing.
-        """
-        def done(devices):
-            state, reason = self.aio_section.lighting_health()
-            missing = self.aio_section.unmatched_scope_entries()
-            log = structlog.get_logger()
-            if state == self.aio_section.LIGHTING_OK and not missing:
-                log.info("lighting_ready", detail=reason)
-                return
-            if time.monotonic() < self._lighting_prime_deadline:
-                log.info("lighting_prime_retry", state=state,
-                         missing=",".join(missing) or "-", detail=reason)
-                QTimer.singleShot(LIGHTING_PRIME_RETRY_MS,
-                                  self._prime_lighting_devices)
-                return
-            # Deadline reached. A machine may legitimately lack a scoped device,
-            # so this is a warning and not an error - but it names what is
-            # absent, because a partial list is indistinguishable from a whole
-            # one at every layer above this.
-            log.warning("lighting_degraded", state=state, detail=reason,
-                        missing=",".join(missing) or "-")
-        self.aio_section.refresh_lighting_devices(on_done=done)
-
-    def _on_lighting_changed(self, value: str):
-        """Persist the last applied lighting colour, however it was applied."""
-        if self.settings.get("lighting_last_color") == value:
-            return
-        self.settings["lighting_last_color"] = value
-        self.save_settings()
-
-    def _prompt_lighting_color(self):
-        value, ok = QInputDialog.getText(
-            self, "Lighting Colour", "Colour name or hex (e.g. red, #ff8800):")
-        if not ok or not value.strip():
-            return
-        value = value.strip()
-        if aio_color.parse_color(value) is None:
-            structlog.get_logger().warning("lighting_bad_colour", value=value)
-            return
-        self.aio_section.apply_lighting_color(value)
-
-    def _build_kraken_lcd_menu(self, parent_menu):
-        lcdMenu = parent_menu.addMenu("LCD")
-
-        # Checked from the section's live state, never from settings. Settings
-        # is durable storage; the section is the truth. Reading settings here is
-        # what let the box show "checked" after an image had silently disabled
-        # the dashboard, so one click appeared to do nothing.
-        dashAct = QAction("Live dashboard", self, checkable=True)
-        dashAct.setChecked(self.aio_section.dashboard_enabled)
-        dashAct.triggered.connect(self._toggle_aio_dashboard)
-        lcdMenu.addAction(dashAct)
-
-        intervalMenu = lcdMenu.addMenu("Refresh every")
-        current = self.aio_section.dashboard_interval_ms
-        for ms in aio_section_mod.LCD_PUSH_INTERVALS_MS:
-            label = f"{ms // 1000}s" if ms < 60000 else f"{ms // 60000} min"
-            action = QAction(label, self, checkable=True)
-            action.setChecked(ms == current)
-            action.triggered.connect(
-                lambda checked=False, v=ms: self._set_aio_dashboard_interval(v)
-            )
-            intervalMenu.addAction(action)
-
-        liquidAct = QAction("Coolant temperature (built-in)", self)
-        liquidAct.triggered.connect(
-            lambda checked=False: self.aio_section.set_lcd_liquid()
-        )
-        lcdMenu.addAction(liquidAct)
-
-        # Labelled for what it accepts, not for one of the two modes it picks:
-        # set_lcd_image reads the file and animates it when it has frames.
-        imageAct = QAction("Image or animated GIF…", self)
-        imageAct.triggered.connect(self._prompt_kraken_image)
-        lcdMenu.addAction(imageAct)
-
-        lcdMenu.addSeparator()
-        brightnessMenu = lcdMenu.addMenu("Brightness")
-        for level in (0, 20, 40, 60, 80, 100):
-            action = QAction(f"{level}%", self)
-            action.triggered.connect(
-                lambda checked=False, v=level: self.aio_section.set_lcd_brightness(v)
-            )
-            brightnessMenu.addAction(action)
-
-        orientMenu = lcdMenu.addMenu("Orientation")
-        for degrees in aio_liquid.ORIENTATIONS:
-            action = QAction(f"{degrees}°", self)
-            action.triggered.connect(
-                lambda checked=False, v=degrees: self.aio_section.set_lcd_orientation(v)
-            )
-            orientMenu.addAction(action)
-
-    def _toggle_aio_dashboard(self, checked: bool):
-        # Persistence happens in _on_aio_dashboard_changed, via the signal.
-        self.aio_section.set_dashboard_enabled(bool(checked))
-
-    def _prompt_kraken_image(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "LCD image", os.path.expanduser("~"),
-            "Images and GIFs (*.png *.jpg *.jpeg *.bmp *.gif);;All files (*)")
-        if path:
-            # set_lcd_image animates a multi-frame file and uses the cheaper
-            # static path otherwise.
-            self.aio_section.set_lcd_image(path)
-
-    def _set_aio_dashboard_interval(self, interval_ms: int):
-        if self.aio_section.set_dashboard_interval(interval_ms):
-            self.settings["aio_lcd_interval_ms"] = int(interval_ms)
-            self.save_settings()
-
-    def _on_aio_dashboard_changed(self, enabled: bool):
-        """Persist dashboard state however it changed.
-
-        Driven by the section's signal rather than by each call site, so an
-        indirect disable — showing an image, or surrendering after repeated LCD
-        failures — is remembered just as reliably as a menu click.
-        """
-        if self.settings.get("aio_lcd_dashboard") == bool(enabled):
-            return
-        self.settings["aio_lcd_dashboard"] = bool(enabled)
-        self.save_settings()
-
-    def _set_aio_color(self, value: str):
-        rgb = aio_color.parse_color(value)
-        if rgb is None:
-            return
-        self.aio_section.apply_color(rgb)
-
-    def _prompt_aio_color(self):
-        """Ask for a hex colour, following the Add Interface… pattern."""
-        value, ok = QInputDialog.getText(
-            self,
-            "AIO Colour",
-            "Hex colour (e.g. #ff8800):",
-        )
-        if not ok:
-            return
-        value = value.strip()
-        if not value:
-            return
-        if aio_color.parse_color(value) is None:
-            # Matches this file's convention: the logger is bound locally.
-            structlog.get_logger().warning("aio_rgb_bad_colour", value=value)
-            return
-        self._set_aio_color(value)
 
     def toggle_aio_section(self, checked):
         """Toggle the AIO section visibility from the context menu."""

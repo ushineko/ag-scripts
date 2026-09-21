@@ -503,7 +503,7 @@ class TestNoSpeedWrites(unittest.TestCase):
     )
 
     def test_no_speed_write_path(self):
-        for name in ("aio_reader.py", "aio_section.py", "aio_color.py"):
+        for name in ("aio_reader.py", "aio_section.py"):
             source = open(os.path.join(PROJECT_DIR, name)).read()
             for endpoint in self.SPEED_ENDPOINTS:
                 with self.subTest(module=name, endpoint=endpoint):

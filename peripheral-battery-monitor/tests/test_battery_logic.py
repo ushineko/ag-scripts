@@ -118,8 +118,7 @@ class MockQProgressBar(MockQWidget):
 # objects rather than deleting the entries.
 _SHADOWED = ('PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui',
              'PyQt6.QtDBus', 'PyQt6.QtNetwork', 'kwin_window_position',
-             'bandwidth_section', 'aio_section', 'scene_service',
-             'scene_shortcuts', 'pb')
+             'bandwidth_section', 'aio_section', 'pb')
 _ORIG_MODULES = {name: sys.modules.get(name) for name in _SHADOWED}
 
 mock_qt_widgets = MagicMock()
@@ -149,21 +148,6 @@ sys.modules['PyQt6.QtNetwork'] = MagicMock()
 # QObject and talks to D-Bus. Stub the whole module so the monitor constructs
 # cleanly under the mocked Qt namespace (mirrors the QtWidgets stubbing above).
 sys.modules['kwin_window_position'] = MagicMock()
-# scene_service subclasses QObject, which is a MagicMock here; a class
-# cannot be derived from one, so the module is mocked like the others.
-sys.modules['scene_service'] = MagicMock()
-
-# scene_shortcuts must be stubbed *with* scene_service, not left real.
-#
-# It builds the KWin script with json.dumps(scene_service.SERVICE). Bound to the
-# mock above that is a MagicMock, which json cannot serialise, so constructing
-# the monitor raised TypeError. Whether that happened depended purely on import
-# order: if another test module had already imported scene_shortcuts, its
-# module-level `scene_service` name still pointed at the real module and
-# everything worked. Run alone, it bound the mock and 25 tests failed. Stubbing
-# both together removes the ordering dependency rather than relying on it.
-sys.modules['scene_shortcuts'] = MagicMock()
-
 # If bandwidth_section was already imported by another test file (which imports
 # real PyQt6), drop its cached reference so peripheral-battery.py re-imports it
 # under the mocked Qt namespace below.

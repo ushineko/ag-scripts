@@ -37,12 +37,7 @@ if isinstance(sys.modules.get("PyQt6"), unittest.mock.MagicMock):
 
 import aio_reader  # noqa: E402
 import aio_section  # noqa: E402
-from PyQt6.QtCore import QObject, pyqtSignal  # noqa: E402
 from PyQt6.QtGui import QPixmap  # noqa: E402
-# Bound here, not inside _FakeReply.error(): another test module swaps the
-# PyQt6 namespace for mocks at collection time, and a late import would
-# compare a real enum against a MagicMock.
-from PyQt6.QtNetwork import QNetworkReply  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMenu  # noqa: E402
 
 # peripheral-battery.py is loaded at import time, not inside a fixture: another
@@ -320,199 +315,12 @@ class TestCpuTrace:
         assert section.sparkline.samples("nope") == []
 
 
-class _FakeReply(QObject):
-    """Stands in for QNetworkReply so a test can decide when a request lands."""
-
-    finished = pyqtSignal()
-
-    def __init__(self, ok: bool = True, body: bytes = b'{"status":1}'):
-        super().__init__()
-        self._ok = ok
-        self._body = body
-
-    def error(self):
-        return (
-            QNetworkReply.NetworkError.NoError
-            if self._ok
-            else QNetworkReply.NetworkError.ConnectionRefusedError
-        )
-
-    def errorString(self):
-        return "" if self._ok else "refused"
-
-    def readAll(self):
-        return self._body
-
-    def deleteLater(self):
-        pass
-
-    def land(self):
-        self.finished.emit()
 
 
-class _FakeNam:
-    """Records POSTs and hands back replies the test finishes by hand."""
-
-    def __init__(self, ok: bool = True):
-        self.posts: list[tuple[str, dict]] = []
-        self.pending: list[_FakeReply] = []
-        self._ok = ok
-
-    def post(self, request, data):
-        self.posts.append((request.url().toString(), json.loads(bytes(data).decode())))
-        reply = _FakeReply(ok=self._ok)
-        self.pending.append(reply)
-        return reply
-
-    def get(self, request):
-        reply = _FakeReply()
-        self.pending.append(reply)
-        return reply
-
-    def land_all(self):
-        """Finish every outstanding reply, as the event loop would."""
-        landing, self.pending = self.pending, []
-        for reply in landing:
-            reply.land()
 
 
-class TestRgbWrites:
-    """Spec 019: staged dispatch over the network layer."""
-
-    @pytest.fixture
-    def rgb(self, section):
-        section._rgb_device = "207132833748"
-        section._rgb_channels = [0, 1, 2]
-        section._brightness = 3
-        nam = _FakeNam()
-        section._nam = nam
-        return section, nam
-
-    @staticmethod
-    def _paths(nam):
-        return [url.rsplit("/api/", 1)[-1] for url, _ in nam.posts]
-
-    def test_stage_two_waits_for_stage_one(self, rgb):
-        """AC8: the override must land before the profile select."""
-        section, nam = rgb
-        section.apply_color((255, 0, 0))
-
-        # Stage 1 only: one setOverride per channel, nothing else yet.
-        assert self._paths(nam) == ["color/setOverride"] * 3
-
-        nam.land_all()
-        assert self._paths(nam) == ["color/setOverride"] * 3 + ["color"] * 3
-
-    def test_partial_stage_does_not_advance(self, rgb):
-        section, nam = rgb
-        section.apply_color((255, 0, 0))
-        # Land two of the three stage-1 replies.
-        nam.pending.pop(0).land()
-        nam.pending.pop(0).land()
-        assert self._paths(nam) == ["color/setOverride"] * 3
-
-    def test_payloads(self, rgb):
-        section, nam = rgb
-        section.apply_color((255, 136, 0))
-        nam.land_all()
-        overrides = [p for url, p in nam.posts if url.endswith("setOverride")]
-        assert [p["channelId"] for p in overrides] == [0, 1, 2]
-        assert overrides[0]["startColor"] == {"red": 255, "green": 136, "blue": 0}
-        assert overrides[0]["enabled"] is True
-        profiles = [p for url, p in nam.posts if url.endswith("/api/color")]
-        assert all(p["profile"] == "static" for p in profiles)
-
-    def test_effect_disables_the_override_first(self, rgb):
-        section, nam = rgb
-        section.apply_effect("rainbow")
-        assert all(p["enabled"] is False for _url, p in nam.posts)
-        nam.land_all()
-        assert nam.posts[-1][1]["profile"] == "rainbow"
-
-    def test_failed_stage_still_advances(self, section):
-        """AC9: a half-written device is worse than a fully attempted one."""
-        section._rgb_device = "dev"
-        section._rgb_channels = [0]
-        nam = _FakeNam(ok=False)
-        section._nam = nam
-        section.apply_color((255, 0, 0))
-        nam.land_all()
-        assert self._paths(nam) == ["color/setOverride", "color"]
-        assert section._timer.isActive() or True  # never raised
-
-    def test_brightness_repair_leads(self, rgb):
-        section, nam = rgb
-        section._brightness = 0
-        section.apply_color((255, 0, 0))
-        assert self._paths(nam) == ["brightness"]
-        nam.land_all()
-        assert self._paths(nam)[1:] == ["color/setOverride"] * 3
-
-    def test_set_brightness(self, rgb):
-        section, nam = rgb
-        section.set_brightness(2)
-        assert nam.posts[0][1] == {"deviceId": "207132833748", "brightness": 2}
-        assert section._brightness == 2
-
-    def test_set_brightness_rejects_bad_level(self, rgb):
-        section, nam = rgb
-        section.set_brightness(9)
-        assert nam.posts == []
-
-    def test_no_target_is_a_no_op(self, section):
-        nam = _FakeNam()
-        section._nam = nam
-        section._rgb_device = None
-        section._rgb_channels = []
-        section.apply_color((255, 0, 0))
-        section.apply_effect("rainbow")
-        section.set_brightness(3)
-        assert nam.posts == []
-
-    def test_a_newer_request_supersedes_the_tail_of_an_older_one(self, rgb):
-        """Rapid menu clicks must not interleave two sequences."""
-        section, nam = rgb
-        section.apply_color((255, 0, 0))
-        stale = list(nam.pending)
-        nam.pending.clear()
-
-        section.apply_color((0, 0, 255))
-        blue_stage_one = len(nam.posts)
-
-        # The superseded sequence's replies must not push the new one forward.
-        for reply in stale:
-            reply.land()
-        assert len(nam.posts) == blue_stage_one
 
 
-class TestEffectsCache:
-    """AC10: names come from the device, and are never guessed."""
-
-    def test_empty_until_fetched(self, section):
-        assert section.effects() == []
-
-    def test_populated_from_the_profiles_payload(self, section):
-        section._rgb_device = "dev"
-        section._on_effects_reply(
-            _FakeReply(body=json.dumps({
-                "data": {"dev": {"profiles": {"rainbow": {}, "static": {}, "nebula": {}}}}
-            }).encode()),
-            "dev",
-        )
-        assert section.effects() == ["nebula", "rainbow"]
-
-    def test_a_failed_fetch_is_retried_on_the_next_snapshot(self, section):
-        section._rgb_device = "dev"
-        section._effects_fetched_for = "dev"
-        section._on_effects_reply(_FakeReply(ok=False), "dev")
-        assert section.effects() == []
-        # Cleared, so _maybe_fetch_effects will try again.
-        assert section._effects_fetched_for is None
-
-    def test_rgb_target_accessor(self, section):
-        section._rgb_device = "dev"
-        section._rgb_channels = [0, 1]
-        assert section.rgb_target() == ("dev", [0, 1])
 
 
 class TestUserToggle:
@@ -615,93 +423,14 @@ class TestContextMenu:
         with open(pb.CONFIG_PATH) as f:
             assert json.load(f)["aio_section_enabled"] is False
 
-    def test_rgb_menus_absent_without_a_target(self, monitor):
-        """019 AC11: no channels means no colour menu, not a broken one."""
-        monitor.aio_section._rgb_device = None
-        monitor.aio_section._rgb_channels = []
-        monitor.contextMenuEvent(None)
-        for title in ("Colour", "Effect", "Brightness"):
-            assert self._find_action(monitor, title) is None
 
-    def test_rgb_menus_present_with_a_target(self, monitor):
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0, 1]
-        monitor.aio_section._effects = ["rainbow", "nebula"]
-        monitor.contextMenuEvent(None)
-        for title in ("Colour", "Effect", "Brightness"):
-            assert self._find_action(monitor, title) is not None
-        assert self._find_action(monitor, "Red") is not None
-        assert self._find_action(monitor, "Custom…") is not None
-        assert self._find_action(monitor, "rainbow") is not None
 
-    def test_effect_menu_omitted_when_names_are_unknown(self, monitor):
-        """Guessing a profile name is rejected by the daemon, so do not."""
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0]
-        monitor.aio_section._effects = []
-        monitor.contextMenuEvent(None)
-        assert self._find_action(monitor, "Colour") is not None
-        assert self._find_action(monitor, "Effect") is None
 
-    def test_colour_action_applies_the_right_triple(self, monitor):
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0]
-        applied = []
-        monitor.aio_section.apply_color = applied.append
-        monitor.contextMenuEvent(None)
-        self._find_action(monitor, "Teal").trigger()
-        assert applied == [(0, 255, 128)]
 
-    def test_off_action_applies_black(self, monitor):
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0]
-        applied = []
-        monitor.aio_section.apply_color = applied.append
-        monitor.contextMenuEvent(None)
-        self._find_action(monitor, "Off").trigger()
-        assert applied == [(0, 0, 0)]
 
-    def test_effect_action_applies_the_name(self, monitor):
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0]
-        monitor.aio_section._effects = ["nebula"]
-        applied = []
-        monitor.aio_section.apply_effect = applied.append
-        monitor.contextMenuEvent(None)
-        self._find_action(monitor, "nebula").trigger()
-        assert applied == ["nebula"]
 
-    def test_brightness_action(self, monitor):
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0]
-        applied = []
-        monitor.aio_section.set_brightness = applied.append
-        monitor.contextMenuEvent(None)
-        self._find_action(monitor, "66%").trigger()
-        assert applied == [2]
 
-    def test_custom_hex_prompt(self, monitor, pb, monkeypatch):
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0]
-        applied = []
-        monitor.aio_section.apply_color = applied.append
 
-        monkeypatch.setattr(pb.QInputDialog, "getText",
-                            staticmethod(lambda *a, **k: ("#ff8800", True)))
-        monitor._prompt_aio_color()
-        assert applied == [(255, 136, 0)]
-
-    def test_custom_hex_rejects_junk_without_writing(self, monitor, pb, monkeypatch):
-        monitor.aio_section._rgb_device = "dev"
-        monitor.aio_section._rgb_channels = [0]
-        applied = []
-        monitor.aio_section.apply_color = applied.append
-
-        for value, ok in (("nope", True), ("#12345", True), ("", True), ("#ff8800", False)):
-            monkeypatch.setattr(pb.QInputDialog, "getText",
-                                staticmethod(lambda *a, _v=value, _o=ok, **k: (_v, _o)))
-            monitor._prompt_aio_color()
-        assert applied == []
 
     def test_menu_reflects_a_disabled_section(self, monitor):
         monitor.settings["aio_section_enabled"] = False
@@ -710,13 +439,49 @@ class TestContextMenu:
         assert not action.isChecked()
 
 
-class TestNoSpeedWrites:
-    """019 AC12, superseding 017 AC18.
+class TestSettle:
+    """The poll's own callback, end to end.
 
-    017 forbade every write. That was about fan and pump duty, which Commander
-    ST fw 2.x silently discards. RGB writes do land and are now a feature, so
-    the guard narrows to speed: a duty control would report success and change
-    nothing, which is worse than not having one.
+    It is here because the removal broke it and the suite did not notice: a
+    call to a method that no longer existed sat in `_settle`, every test
+    passed, and the widget logged `liquidctl_callback_failed` twice a poll
+    until somebody ran it. A unit test that never reaches the callback proves
+    nothing about the callback.
+    """
+
+    def test_a_completed_poll_renders_and_alerts(self, section):
+        section._inflight = {"cpu": None, "gpu": None, "devices": None,
+                             "liquid": None, "pending": 1}
+        section._settle("cpu", None)
+
+        assert section._inflight is None
+        assert section._last_snapshot != {}
+
+    def test_a_completed_poll_writes_nothing(self, section, monkeypatch):
+        """Whatever else it does, it must not reach for a write path."""
+        posted = []
+        monkeypatch.setattr(section._nam, "post",
+                            lambda *a, **k: posted.append(a), raising=False)
+
+        section._inflight = {"cpu": None, "gpu": None, "devices": None,
+                             "liquid": None, "pending": 1}
+        section._settle("cpu", None)
+
+        assert posted == []
+
+
+class TestNoWrites:
+    """039, superseding 019 AC12 and 017 AC18.
+
+    017 forbade every write, which was about fan and pump duty: Commander ST
+    fw 2.x silently discards those, so a duty control would report success and
+    change nothing. 019 narrowed the guard to speed when RGB writes became a
+    feature here.
+
+    They are not a feature here any more. Every write to this cooler and to
+    every lit device belongs to hotaru, so the guard widens again -- and this
+    time it covers the RGB path too, because "two processes writing one hidraw
+    node" is the invariant the whole cutover exists to protect.
     """
 
     SPEED_ENDPOINTS = (
@@ -728,138 +493,43 @@ class TestNoSpeedWrites:
         "setSpeed",
     )
 
-    @pytest.mark.parametrize("module", ["aio_reader.py", "aio_section.py", "aio_color.py"])
+    @pytest.mark.parametrize("module", ["aio_reader.py", "aio_section.py"])
     def test_no_speed_write_path(self, module):
         source = open(os.path.join(ROOT, module)).read()
         for endpoint in self.SPEED_ENDPOINTS:
             assert endpoint not in source
 
-    def test_rgb_writes_are_permitted_and_present(self):
-        source = open(os.path.join(ROOT, "aio_section.py")).read()
-        assert "self._nam.post(" in source
+    def test_no_rgb_write_path(self):
+        """The section reads. It does not post, and it does not shell out.
 
-
-class TestScopeCompleteness:
-    """033: a PARTIAL device list reads as OK, which is how it hid."""
-
-    @staticmethod
-    def _dev(name):
-        return {"name": name, "modes": ["Direct", "Static"]}
-
-    def test_all_scope_entries_matched_is_empty(self, section):
-        section._lighting_scope = ("kraken", "geforce", "maximus", "mm700")
-        section._lighting_devices = [
-            self._dev("NZXT Kraken 2024 ELITE Series RGB"),
-            self._dev("MSI GeForce RTX 4090 Suprim Liquid X"),
-            self._dev("ASUS ROG MAXIMUS Z790 HERO"),
-            self._dev("Corsair MM700"),
-        ]
-        assert section.unmatched_scope_entries() == ()
-
-    def test_names_the_entries_that_are_missing(self, section):
-        """The real boot failure: only the GPU had enumerated."""
-        section._lighting_scope = ("kraken", "geforce", "maximus", "mm700")
-        section._lighting_devices = [
-            self._dev("MSI GeForce RTX 4090 Suprim Liquid X"),
-        ]
-        assert set(section.unmatched_scope_entries()) == {
-            "kraken", "maximus", "mm700"}
-
-    def test_partial_list_still_reports_lighting_ok(self, section):
-        """Why a health check alone could not catch this.
-
-        One matched device is enough for lighting_health to say OK, so the
-        monitor had no reason to re-query and cached the partial list for the
-        whole session.
+        Asserted against the source rather than against behaviour on purpose:
+        what matters is that no write path exists to be reached by accident,
+        which is a property of the file rather than of any one call.
         """
-        section._lighting_scope = ("kraken", "geforce", "maximus", "mm700")
-        section._lighting_devices = [
-            self._dev("MSI GeForce RTX 4090 Suprim Liquid X"),
-        ]
-        # Pin server_alive: lighting_health opens a real socket, so without
-        # this the test only passes on a machine where OpenRGB happens to be
-        # running - it would assert nothing on CI.
-        import rgb_openrgb
-        original = rgb_openrgb.server_alive
-        rgb_openrgb.server_alive = lambda *a, **k: True
-        try:
-            state, _reason = section.lighting_health()
-        finally:
-            rgb_openrgb.server_alive = original
-        assert state == section.LIGHTING_OK
-        assert section.unmatched_scope_entries()    # but this does catch it
+        source = open(os.path.join(ROOT, "aio_section.py")).read()
+        assert "self._nam.post(" not in source
+        assert "aio_liquid" not in source
+        assert "rgb_openrgb" not in source
 
-    def test_empty_device_list_reports_every_entry(self, section):
-        section._lighting_scope = ("kraken", "geforce")
-        section._lighting_devices = []
-        assert set(section.unmatched_scope_entries()) == {"kraken", "geforce"}
+    @pytest.mark.parametrize("module", [
+        "aio_liquid.py", "aio_dashboard.py", "aio_scenes.py", "aio_color.py",
+        "rgb_openrgb.py", "scene_service.py", "scene_shortcuts.py",
+    ])
+    def test_the_write_modules_are_gone(self, module):
+        """They moved to hotaru. A file that comes back brings the invariant
+        problem back with it, which is worth one assertion."""
+        assert not os.path.exists(os.path.join(ROOT, module))
 
-
-class TestLightingReassert:
-    """037: the mouse loses a host-set colour when it sleeps."""
-
-    @staticmethod
-    def _dev(name):
-        return {"name": name, "modes": ["Direct", "Static"]}
-
-    def test_reasserts_only_the_scoped_device(self, section):
-        section._lighting_devices = [
-            self._dev("G502 X PLUS"),
-            self._dev("NZXT Kraken 2024 ELITE Series RGB"),
-            self._dev("ASUS ROG MAXIMUS Z790 HERO"),
-        ]
-        section._lighting_last_color = "green"
-        sent = section.reassert_lighting()
-        assert sent == 1, "only the mouse should be re-sent; the rest hold colour"
-
-    def test_no_colour_yet_is_a_no_op(self, section):
-        section._lighting_devices = [self._dev("G502 X PLUS")]
-        section._lighting_last_color = None
-        assert section.reassert_lighting() == 0
-
-    def test_empty_device_list_is_a_silent_no_op(self, section):
-        """Would otherwise warn and refresh once a minute while OpenRGB is down."""
-        section._lighting_devices = []
-        section._lighting_last_color = "green"
-        assert section.reassert_lighting() == 0
-
-    def test_reassert_does_not_re_emit_or_repersist(self, section):
-        """It re-sends a colour already chosen; it is not a new choice."""
-        section._lighting_devices = [self._dev("G502 X PLUS")]
-        section._lighting_last_color = "green"
-        emitted = []
-        section.lightingChanged.connect(emitted.append)
-        section.reassert_lighting()
-        assert emitted == []
-
-    def test_a_real_choice_still_emits(self, section):
-        section._lighting_devices = [self._dev("G502 X PLUS")]
-        emitted = []
-        section.lightingChanged.connect(emitted.append)
-        section.apply_lighting_color("green")
-        assert emitted == ["green"]
+    def test_the_shortcut_installer_is_gone(self):
+        """The eighteen numpad keys are hotaru's. While this file existed, the
+        monitor reinstalled its KWin script on every start and re-registered
+        its claim on those sequences."""
+        source = open(os.path.join(ROOT, "peripheral-battery.py")).read()
+        assert "scene_shortcuts" not in source
+        assert "scene_service" not in source
 
 
-class TestOffExemption:
-    """038: the keyboard takes colours but is never blanked."""
 
-    @staticmethod
-    def _dev(name, modes=("Direct", "Static")):
-        return {"name": name, "modes": list(modes)}
 
-    def _devices(self):
-        return [
-            self._dev("Keychron K4 HE", ("Direct", "Solid Color")),
-            self._dev("NZXT Kraken 2024 ELITE Series RGB"),
-            self._dev("Corsair MM700", ("Direct",)),
-        ]
 
-    def test_off_skips_the_keyboard_but_blanks_the_rest(self, section):
-        section._lighting_devices = self._devices()
-        sent = section.apply_lighting("off")
-        assert sent == 2, "keyboard must not be blanked; the other two must be"
 
-    def test_solid_still_reaches_the_keyboard(self, section):
-        section._lighting_devices = self._devices()
-        sent = section.apply_lighting("solid", (0, 255, 0))
-        assert sent == 3

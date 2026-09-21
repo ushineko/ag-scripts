@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.16.0
+Version 1.20.0
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), liquid-cooler thermals, plus optional Claude Code API usage tracking.
 
@@ -28,7 +28,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
-- **AIO Monitoring**: CPU temperature, coolant temperature with a 5-minute sparkline, and fan/pump speeds, read from a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon. Cooler RGB colour, effects, and brightness can be set from the context menu. The section stays hidden unless OpenLinkHub reports something, so a machine without it is unaffected. See [AIO Monitoring](#aio-monitoring) for details.
+- **AIO Monitoring (read-only)**: CPU temperature, coolant temperature with a 5-minute sparkline, fan/pump speeds and cooling alerts, read from `liquidctl` and a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon. Nothing here writes to the cooler: its RGB, its LCD, the scenes and the numpad shortcuts moved to [hotaru](https://github.com/ushineko/hotaru). The section stays hidden unless a source reports something, so a machine without either is unaffected. See [AIO Monitoring](#aio-monitoring) for details.
 - **Wayland Compatible**: Uses system-native movement for dragging.
 - **KDE Plasma Integration**: Automatically installs KWin window rules for "Always on Top" and "No Titlebar".
 - **Position Restore**: Reappears at its last on-screen position on the next launch. On KDE Wayland this is done via the KWin Scripting D-Bus API (`kwin_window_position.py`), because `move()`, Qt geometry, and KWin "Remember" position rules do not work reliably on Wayland. See the [Changelog](#changelog) for details.
@@ -145,32 +145,32 @@ python3 aio_reader.py --json
 
 Set `OPENLINKHUB_API` to override the default endpoint (`http://127.0.0.1:27003/api`).
 
-### RGB control
+### Lighting, the LCD and the scenes moved to hotaru
 
-Right-click → **AIO** gives three submenus, present only when OpenLinkHub reports RGB channels:
+They are not here any more. [hotaru](https://github.com/ushineko/hotaru) owns
+every write to this cooler and to every lit device: colours and effects per
+device, zone and LED, the 640x640 panel, named scenes, and the eighteen numpad
+shortcuts this widget used to register.
 
-| Menu | Does |
-| ---- | ---- |
-| **Colour** | 12 named colours, `Custom…` for any `#rrggbb`, and `Off` |
-| **Effect** | the effects the device itself implements (26 on this cooler) |
-| **Brightness** | 33% · 66% · 100% |
+**The line is writes.** This program reads the cooler and shows what it finds,
+and it keeps doing that until it is rewritten in Go and becomes a consumer of
+hotaru's API rather than a second reader.
 
-This replaces reaching for `sysadmin/scripts/aio-color.sh` for the common case. Both use the same colour names and values, so "teal" means the same thing in each.
+Why it moved rather than being kept in both places: two processes writing one
+hidraw node is the failure this whole area spent eighteen specs avoiding, and
+a widget is the wrong place for something that has to run before anybody logs
+in and keep running whether or not the widget is open.
 
-Two things are non-obvious enough to be worth stating, because each fails **silently** rather than returning an error:
+	hotaru light set purple          the colours that were in the menu
+	hotaru scene apply evening       the scenes that were on the numpad
+	hotaru screen dashboard          the LCD
 
-- **Colour lives in the device's per-channel `RGBOverride`, not in the `static` profile.** The order that works is: set the override, then select `static`. Reversed, the profile applies cleanly, survives a restart, and changes no LED. Selecting an *effect* is the mirror image: the override must be disabled first, or it masks the animation.
-- **Brightness 0 blacks every LED out**, after which colour commands succeed and nothing lights up. When brightness is 0 and you pick a colour, the monitor raises brightness to 100% first, since a dark LED cannot show the colour you asked for. Levels 1–3 are left alone.
+### Nothing here writes
 
-Effect names are read from the daemon per device (`GET /api/color/`), not from the global `database/rgb.json`. That file lists profiles a given device does not implement, and selecting one is rejected. If the effect list has not loaded, the Effect submenu is omitted rather than guessing a name.
-
-### No speed control
-
-Colour is writable; **fan and pump duty is not**, and no control for it exists. A test asserts that no speed-write endpoint appears in any AIO module.
+**No writes of any kind**, and a test asserts it: no speed-write endpoint, no
+RGB write path, and none of the lighting or LCD modules present in the project.
 
 Historical note: this restriction began as a hardware fact. Commander ST firmware 2.x silently discarded duty writes from both OpenLinkHub and liquidctl — they reported success and changed nothing — so a speed slider would have lied about working. That cooler has since been replaced by an NZXT Kraken Elite V2, whose liquidctl driver does expose working `set_speed_profile` on both the `pump` and `fan` channels. The restriction is now a scope decision rather than a firmware limit, and lifting it would be a new spec.
-
-RGB control in the menu still writes through OpenLinkHub and therefore **does nothing on the current cooler**: the Kraken is not an OpenLinkHub device, so the snapshot reports no RGB channels and the submenus stay hidden. liquidctl exposes `set_color` (channels `external`, `ring`, `logo`, `sync`) and `set_screen` for the LCD; porting the menu to it would be a new spec.
 
 ### Degradation
 
@@ -205,6 +205,39 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.20.0
+
+- **The AIO lighting, LCD, scenes and hotkeys are gone.** They moved to
+  [hotaru](https://github.com/ushineko/hotaru), which drives every lit device
+  on the machine and the cooler's panel, and which reaches the cooler directly
+  over `/dev/hidraw` rather than through a liquidctl subprocess per write. The
+  line is **writes**: this widget still reads the cooler and still raises the
+  cooling alert, because an alert is owned where it is visible.
+  - Removed: `rgb_openrgb.py`, `aio_scenes.py`, `scene_service.py`,
+    `scene_shortcuts.py`, `aio_liquid.py`, `aio_dashboard.py`, `aio_color.py`,
+    `build_reels.py`, the `aio-scene` CLI, and their tests.
+  - `aio_section.py` keeps the poll, the rows, the sparkline and the alert, and
+    loses the Colour, Effect, Brightness, Scenes and LCD menus, the lighting
+    re-assert and the dashboard push loop — from 1450 lines to 750.
+  - The eighteen `AIOScene*` shortcut registrations are gone, so the numpad is
+    hotaru's. KDE keeps its own record of a registered shortcut and rewrites
+    `kglobalshortcutsrc` from memory whenever anything registers, so the stale
+    entries were cleared through `org.kde.KGlobalAccel.unregister` rather than
+    by editing that file; removing `scene_shortcuts.py` is what stops them
+    coming back.
+  - One commit rather than a staged removal: two processes writing one hidraw
+    node is the invariant this area has been most careful about. Concurrent
+    *reads* continue and are fine.
+  - The `openrgb-server` user unit stays. It is hotaru's dependency now.
+
+### v1.18.0 – v1.19.0
+
+No changelog entries were written for these. The version in
+`peripheral-battery.py` was bumped by specs 037 and 038 — the lighting
+re-assert and the keyboard joining scenes — and both of those features have
+since moved to hotaru with the rest of the lighting. Recorded here as a gap
+rather than reconstructed after the fact.
 
 ### v1.17.0
 
