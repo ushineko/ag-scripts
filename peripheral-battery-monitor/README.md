@@ -1,5 +1,5 @@
 # Peripheral Battery Monitor
-Version 1.21.1
+Version 1.21.2
 
 A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), liquid-cooler thermals, plus optional Claude Code and Codex usage tracking.
 
@@ -213,6 +213,12 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.21.2 (2026-09-22)
+
+- The Codex section now uses the same translucent frame, border, margins,
+  terminal icon, typography, refresh button, progress colors, opacity, and
+  font scaling as the Claude section.
 
 ### v1.21.1 (2026-09-22)
 

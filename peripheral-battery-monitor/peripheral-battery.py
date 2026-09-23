@@ -38,7 +38,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.21.1"
+__version__ = "1.21.2"
 
 # Settings written by features that moved to hotaru (spec 039). Read by nothing
 # now, and removed from the file on the next save rather than left to puzzle
@@ -1142,6 +1142,8 @@ class PeripheralMonitor(QWidget):
             )
         if getattr(self, "claude_header_row", None) is not None:
             self.claude_header_row.setSpacing(m["claude_header_spacing"])
+        if getattr(self, "codex_section", None) is not None:
+            self.codex_section.apply_layout_metrics(m)
 
     def update_style(self):
         opacity = self.settings.get("opacity", 0.95)
@@ -1183,18 +1185,18 @@ class PeripheralMonitor(QWidget):
                 color: #888888;
                 font-style: italic;
             }}
-            QFrame#ClaudeSection {{
+            QFrame#ClaudeSection, QFrame#CodexSection {{
                 background-color: rgba(35, 35, 35, {alpha});
                 border: 1px solid rgba(255, 255, 255, 15);
                 border-radius: 8px;
                 margin-top: 4px;
             }}
-            QLabel#ClaudeTitle {{
+            QLabel#ClaudeTitle, QLabel#CodexTitle {{
                 font-size: {name_size}px;
                 color: #aaaaaa;
                 font-weight: bold;
             }}
-            QLabel#ClaudeReset {{
+            QLabel#ClaudeReset, QLabel#CodexReset {{
                 font-size: {int(9 * scale)}px;
                 color: #888888;
             }}
@@ -1203,13 +1205,17 @@ class PeripheralMonitor(QWidget):
                 font-size: {int(11 * scale)}px;
                 font-family: monospace;
             }}
-            QLabel#ClaudeStats {{
+            QLabel#ClaudeStats, QLabel#CodexStats {{
                 font-size: {int(9 * scale)}px;
                 color: #888888;
             }}
             QLabel#ClaudeBackoff {{
                 font-size: {int(8 * scale)}px;
                 color: #ff9800;
+            }}
+            QLabel#CodexStatus {{
+                font-size: {int(9 * scale)}px;
+                color: #6b7280;
             }}
             QProgressBar#ClaudeProgress {{
                 background-color: rgba(255, 255, 255, 0.1);
@@ -1220,7 +1226,7 @@ class PeripheralMonitor(QWidget):
                 background-color: #4caf50;
                 border-radius: 4px;
             }}
-            QPushButton#ClaudeRefreshBtn {{
+            QPushButton#ClaudeRefreshBtn, QPushButton#CodexRefreshBtn {{
                 background-color: transparent;
                 border: 1px solid rgba(255, 255, 255, 30);
                 border-radius: 4px;
@@ -1228,7 +1234,7 @@ class PeripheralMonitor(QWidget):
                 font-size: {int(11 * scale)}px;
                 padding: 0px;
             }}
-            QPushButton#ClaudeRefreshBtn:hover {{
+            QPushButton#ClaudeRefreshBtn:hover, QPushButton#CodexRefreshBtn:hover {{
                 background-color: rgba(255, 255, 255, 20);
                 color: #cccccc;
             }}
