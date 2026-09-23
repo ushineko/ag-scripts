@@ -1,6 +1,6 @@
 # Spec 040: Codex usage provider
 
-**Issue:** No ticket — GitHub CLI authentication was expired when implementation began.
+**Issue:** [#15](https://github.com/ushineko/ag-scripts/issues/15)
 
 ## Context
 
@@ -48,6 +48,5 @@ Claude section's visual language.
 
 ## Status
 
-Complete. GitHub issue linkage remains unavailable until `gh` is
-re-authenticated; implementation, tests, live integration, and security review
-are complete.
+Complete. Implementation, tests, live integration, and security review are
+complete.

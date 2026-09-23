@@ -20,6 +20,7 @@ import os
 import signal
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 import structlog
 from rich.console import Console, Group
@@ -278,10 +279,20 @@ def _individual_text(individual: dict) -> str:
     limit = individual.get("limit")
     percent = individual.get("utilization")
     if used is not None and limit is not None and percent is not None:
-        return f"individual {used}/{limit} ({format_percentage(percent)})"
+        return (f"individual {_reported_amount(used)}/{_reported_amount(limit)} "
+                f"({format_percentage(percent)})")
     if percent is not None:
         return f"individual {format_percentage(percent)}"
     return ""
+
+
+def _reported_amount(value) -> str:
+    """Format app-server's decimal strings compactly without adding a unit."""
+    try:
+        rendered = f"{Decimal(str(value)):.2f}"
+    except (InvalidOperation, ValueError):
+        return str(value)
+    return rendered.rstrip("0").rstrip(".")
 
 
 def build_codex_line(data: dict, *, width=None, note=None, label="Codex") -> Text:

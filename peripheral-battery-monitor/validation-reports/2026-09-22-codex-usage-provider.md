@@ -2,7 +2,7 @@
 
 **Date**: 2026-09-22
 **Spec**: `specs/040-codex-usage-provider.md`
-**Issue**: unavailable — local `gh` authentication is expired
+**Issue**: [#15](https://github.com/ushineko/ag-scripts/issues/15)
 **Version**: 1.20.0 → 1.21.0 (approved by the user)
 
 ## Result

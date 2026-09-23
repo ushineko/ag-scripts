@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from decimal import Decimal, InvalidOperation
 
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy,
@@ -42,6 +43,15 @@ def usage_color(percent) -> str:
     if percent >= 50:
         return "#eab308"
     return "#22c55e"
+
+
+def reported_amount(value) -> str:
+    """Format app-server's decimal strings compactly without adding a unit."""
+    try:
+        rendered = f"{Decimal(str(value)):.2f}"
+    except (InvalidOperation, ValueError):
+        return str(value)
+    return rendered.rstrip("0").rstrip(".")
 
 
 class CodexSection(QFrame):
@@ -134,7 +144,8 @@ class CodexSection(QFrame):
         raw_used = individual.get("used")
         raw_limit = individual.get("limit")
         if used is not None and raw_used is not None and raw_limit is not None:
-            text = f"Individual: {raw_used}/{raw_limit} ({used:.0f}%)"
+            text = (f"Individual: {reported_amount(raw_used)}/"
+                    f"{reported_amount(raw_limit)} ({used:.0f}%)")
         elif used is not None:
             text = f"Individual: {used:.0f}%"
         else:
