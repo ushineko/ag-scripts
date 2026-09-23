@@ -72,7 +72,7 @@ def get_cache_dir() -> Path:
     return base / "claude-usage-widget"
 
 
-def _slug(account: str | None) -> str:
+def _slug(account: str | None, provider: str = "claude") -> str:
     """Filesystem-safe suffix for an account name.
 
     Cache files are per account (spec 011) so two accounts cannot serve each
@@ -80,37 +80,42 @@ def _slug(account: str | None) -> str:
     keep the original unsuffixed filenames; named accounts get their own, so
     the pre-upgrade ``usage.json`` is simply left unused.
     """
+    safe_provider = "".join(
+        c if c.isalnum() or c in "-_" else "_" for c in provider
+    )
+    provider_suffix = "" if safe_provider == "claude" else f"-{safe_provider}"
     if not account:
-        return ""
+        return provider_suffix
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in account)
-    return f"-{safe}" if safe else ""
+    account_suffix = f"-{safe}" if safe else ""
+    return f"{provider_suffix}{account_suffix}"
 
 
-def get_cache_path(account: str | None = None):
+def get_cache_path(account: str | None = None, provider: str = "claude"):
     """Path to the shared usage cache file for an account."""
-    return get_cache_dir() / f"usage{_slug(account)}.json"
+    return get_cache_dir() / f"usage{_slug(account, provider)}.json"
 
 
-def _lock_path(account: str | None = None):
-    return get_cache_dir() / f"usage{_slug(account)}.lock"
+def _lock_path(account: str | None = None, provider: str = "claude"):
+    return get_cache_dir() / f"usage{_slug(account, provider)}.lock"
 
 
-def read_cache(account: str | None = None) -> dict | None:
+def read_cache(account: str | None = None, provider: str = "claude") -> dict | None:
     """Return the parsed cache entry, or None if missing/corrupt/partial."""
     try:
-        with open(get_cache_path(account), "r", encoding="utf-8") as f:
+        with open(get_cache_path(account, provider), "r", encoding="utf-8") as f:
             entry = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
         return None
     return entry if isinstance(entry, dict) else None
 
 
-def _write_cache(entry: dict, account: str | None = None) -> None:
+def _write_cache(entry: dict, account: str | None = None, provider: str = "claude") -> None:
     """Atomically write the cache entry (tmp + os.replace). Best-effort."""
     try:
         cache_dir = get_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
-        path = get_cache_path(account)
+        path = get_cache_path(account, provider)
         tmp = path.parent / f"{path.name}.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(entry, f)
@@ -120,7 +125,7 @@ def _write_cache(entry: dict, account: str | None = None) -> None:
 
 
 @contextmanager
-def _locked(account: str | None = None):
+def _locked(account: str | None = None, provider: str = "claude"):
     """Yield True if the cache lock was acquired (or locking is unavailable),
     False if another process holds it.
 
@@ -136,7 +141,7 @@ def _locked(account: str | None = None):
 
     try:
         get_cache_dir().mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(_lock_path(account)), os.O_CREAT | os.O_RDWR, 0o644)
+        fd = os.open(str(_lock_path(account, provider)), os.O_CREAT | os.O_RDWR, 0o644)
     except OSError:
         # Can't even open the lock file — degrade to gate-only coordination.
         yield True
@@ -170,6 +175,7 @@ def fetch_usage_cached(
     store_dir: str | None = None,
     fetch=None,
     force: bool = False,
+    provider: str = "claude",
 ) -> tuple[dict | None, float | None]:
     """Return ``(data, fetched_at)`` for the usage reading, coordinating fetches
     across processes so only ~1 API call happens per ``ttl`` window.
@@ -185,6 +191,10 @@ def fetch_usage_cached(
     coordination stays per account: a rate-limited account backs off on its own
     without gating a healthy one.
 
+    ``provider`` namespaces the file and lock. The default preserves every
+    existing Claude filename; Codex callers use ``provider="codex"`` and share
+    one separate gate across both applications.
+
     ``fetch`` overrides the fetch function, for callers that implement it
     elsewhere (the mirrored copy in ``peripheral-battery-monitor``).
 
@@ -198,20 +208,20 @@ def fetch_usage_cached(
         raise TypeError("fetch_usage_cached requires a fetch function")
 
     now = time.time()
-    cache = read_cache(account)
+    cache = read_cache(account, provider)
     if not force and cache is not None and _within_gate(cache, now):
         return cache.get("data"), cache.get("fetched_at")
 
-    with _locked(account) as acquired:
+    with _locked(account, provider) as acquired:
         if not acquired:
             # Another instance is fetching right now — use what we have.
-            cache = read_cache(account)
+            cache = read_cache(account, provider)
             if cache is not None:
                 return cache.get("data"), cache.get("fetched_at")
             return None, None
 
         # Hold the lock: re-read in case another instance just refreshed.
-        cache = read_cache(account)
+        cache = read_cache(account, provider)
         if not force and cache is not None and _within_gate(cache, now):
             return cache.get("data"), cache.get("fetched_at")
 
@@ -219,7 +229,7 @@ def fetch_usage_cached(
         if isinstance(result, dict) and not result.get("error"):
             _write_cache(
                 {"next_attempt_at": now + ttl, "fetched_at": now, "data": result},
-                account,
+                account, provider,
             )
             log.debug("usage_cache_refreshed", account=account)
             return result, now
@@ -232,7 +242,7 @@ def fetch_usage_cached(
             "next_attempt_at": now + max(ttl, retry or 0),
             "fetched_at": prev_fetched,
             "data": prev_data,
-        }, account)
+        }, account, provider)
         log.debug("usage_cache_fetch_failed", account=account,
                   error=(result or {}).get("error")
                   if isinstance(result, dict) else None)

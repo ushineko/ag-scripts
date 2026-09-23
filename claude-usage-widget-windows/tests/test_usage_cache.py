@@ -224,3 +224,11 @@ class TestSharedCacheDir:
         from src import config
 
         assert config.get_cache_dir() == uc.get_cache_dir()
+
+    def test_provider_namespaces_do_not_collide(self, cache_dir):
+        claude = uc.get_cache_path(account="work", provider="claude")
+        codex = uc.get_cache_path(account="work", provider="codex")
+
+        assert claude.name == "usage-work.json"
+        assert codex.name == "usage-codex-work.json"
+        assert claude != codex

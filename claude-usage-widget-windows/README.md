@@ -1,6 +1,8 @@
-# Claude Usage Widget
+# Claude and Codex Usage Widget
 
-A floating desktop widget that displays Claude Code API usage metrics via the Anthropic OAuth API. Runs on **macOS** (menu-bar agent `.app`) and **Windows** (run-from-source / `install.bat`).
+A cross-platform usage monitor for Claude Code, with Codex allowance tracking in
+its terminal modes. The desktop widget displays Claude through the Anthropic
+OAuth API; `--tui` and `--line` add Codex through the supported Codex app-server.
 
 > The directory is named `claude-usage-widget-windows` for historical reasons; the project is now cross-platform. Renaming the directory is deferred to avoid breaking paths/history.
 
@@ -32,6 +34,10 @@ A floating desktop widget that displays Claude Code API usage metrics via the An
 - Minimize to tray / restore from tray via left-click
 - Single-instance enforcement
 - Terminal modes for tmux/herd helper panes: live self-refreshing `--tui` line and one-shot `--line` (Qt-free, no PySide6 required)
+- Codex terminal row with its real allowance-window duration, reset countdown,
+  and Business individual-limit usage as reported units plus percentage
+- One cooperative cache per provider, shared with the peripheral monitor, so
+  many active viewers still cause only one upstream read per freshness window
 - Structured logging with `--debug` and `--no-gui` modes
 
 ## Platform Support
@@ -47,6 +53,7 @@ A floating desktop widget that displays Claude Code API usage metrics via the An
 - **macOS**: macOS 11+, a **framework** Python 3 build (the system `/usr/bin/python3` qualifies); `pip3 install -r requirements.txt -r requirements-dev.txt` for building
 - **Windows**: Windows 10/11, Python 3.10+
 - Claude Code CLI installed and logged in (`claude login`)
+- Codex CLI installed and signed in to show the optional Codex terminal row
 
 ## Installation
 
@@ -116,6 +123,7 @@ countdown floated to the far right (color-coded by 5-hour utilization):
 
 ```
 Claude  5h ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  47%  ·  7d 31%  ·  sonnet 12%        resets 2h 15m
+Codex  7d ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   4%  ·  individual 403.51/1200 (34%)             resets 6d 4h
 ```
 
 **`--line`** — one compact line, then exit, for status bars / `watch` loops. It
@@ -124,6 +132,7 @@ then reset, then 7d) are dropped so the 5-hour reading always shows.
 
 ```
 Claude 5h 47% · 7d 31% · reset 2h 15m · sonnet 12%
+Codex 7d 4% · reset 6d 4h · individual 403.51/1200 (34%)
 ```
 
 Color is enabled automatically only on a TTY with `NO_COLOR` unset.
@@ -134,7 +143,7 @@ Color is enabled automatically only on a TTY with `NO_COLOR` unset.
 
 #### Shared cache across panes
 
-`--tui`/`--line` coordinate through a small shared cache file (a daemonless
+`--tui`/`--line` coordinate through small provider-specific cache files (a daemonless
 "cooperative cache"), so **running one strip per project does not multiply API
 calls** — across all instances only ~1 request is made per interval. Whichever
 instance first finds the cache stale fetches once (under a non-blocking lock to
@@ -145,7 +154,10 @@ fetch/429 never clobbers the last-good reading — panes keep showing it (marked
 The cache lives at `~/Library/Caches/claude-usage-widget/usage.json` (macOS),
 `%LOCALAPPDATA%\claude-usage-widget\cache\` (Windows), or
 `${XDG_CACHE_HOME:-~/.cache}/claude-usage-widget/` (Linux), and holds only usage
-percentages and reset timestamps — **no credentials**. Pass `--no-cache` to
+percentages and reset timestamps — **no credentials or account IDs**. Claude
+keeps the existing `usage[-account].json` names; Codex uses
+`usage-codex.json`. The peripheral monitor reads the same files and locks.
+Pass `--no-cache` to
 bypass it and fetch directly per process. The GUI widget polls independently.
 
 **tmux** — run `--tui` in a dedicated pane, or call `--line` from the status bar:
@@ -198,6 +210,7 @@ src/
   main.py              # Entry point, QTimer, single-instance, --fetch-json child path
   fetcher.py           # QProcess-based async usage fetch (event loop, no threads)
   oauth.py             # OAuth credentials, token refresh, usage API, backoff
+  codex_usage.py       # Codex app-server JSON-RPC client and safe normalization
   usage_cache.py       # Qt-free cooperative cross-process cache (shared by --tui/--line)
   tui.py               # Qt-free terminal rendering via rich (--tui full-width dashboard, --line one-shot)
   widget.py            # PySide6 floating widget (frameless, translucent)
@@ -216,6 +229,16 @@ pytest tests/
 ```
 
 ## Changelog
+
+### v3.5.0 (2026-09-22)
+
+- Added Codex as a terminal usage provider. Its row uses the duration reported
+  by app-server, includes the reset countdown, and shows the Business
+  individual-limit percent when supplied.
+- Namespaced the cooperative cache by provider. All TUI/line panes and the
+  peripheral monitor share one Codex gate, lock, and last-good reading.
+- Codex credentials and account identifiers are never read or cached; the
+  provider communicates only through `codex app-server`.
 
 ### v3.4.0 (2026-08-26)
 

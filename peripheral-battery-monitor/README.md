@@ -1,7 +1,7 @@
 # Peripheral Battery Monitor
-Version 1.20.0
+Version 1.21.0
 
-A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), liquid-cooler thermals, plus optional Claude Code API usage tracking.
+A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) that shows two configurable device cells (Logitech mouse, Keychron keyboard, or connected Bluetooth headphones), real-time and cumulative bandwidth for arbitrary network interfaces (with Tailscale exit-node awareness), liquid-cooler thermals, plus optional Claude Code and Codex usage tracking.
 
 ![Peripheral Battery Monitor](assets/screenshot.png)
 
@@ -27,6 +27,13 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
   - **AirPods**: live Left/Right/Case battery is read directly over Apple's Accessory Protocol (AAP) on an L2CAP channel (PSM 0x1001) — the same mechanism [LibrePods](https://github.com/librepods-org/librepods) uses — so a real percentage shows even though BlueZ does not expose one. Requires the AirPods to be paired and connected; no root or BlueZ experimental mode needed. Falls back to a BLE advertisement scan, then to presence-only ("Connected") if neither yields data.
   - **Arctis Headsets**: `headsetcontrol` for the USB dongle (not a BlueZ device).
 - **Claude Code Integration**: Displays rate-limit utilization (5-hour and 7-day windows) with progress bar and countdown to reset, fetched directly from Anthropic's OAuth usage API. Auto-hides if Claude Code is not installed. Requires `claude login` for authentication.
+- **Codex Integration**: Displays the app-server-reported allowance window as a
+  progress bar with its reset countdown and, for Business accounts, the
+  individual limit's reported used/limit values and percentage. The app-server
+  schema does not declare those units as currency, so the UI does not add a
+  dollar sign. It shares one cache gate and lock with every
+  standalone TUI/line viewer, so additional monitors do not multiply upstream
+  reads. Toggle it from the **Codex** context menu.
 - **Bandwidth Monitoring**: Configurable real-time and cumulative bandwidth for arbitrary network interfaces (e.g., `tailscale0`, `eno2`, `wg0`). Tailscale interfaces show the currently selected exit node in the row subtitle. Cumulative totals persist across restarts and can be reset per-interface from the context menu. See [Bandwidth Monitoring](#bandwidth-monitoring) for details.
 - **AIO Monitoring (read-only)**: CPU temperature, coolant temperature with a 5-minute sparkline, fan/pump speeds and cooling alerts, read from `liquidctl` and a running [OpenLinkHub](https://github.com/jurkovic-nikola/OpenLinkHub) daemon. Nothing here writes to the cooler: its RGB, its LCD, the scenes and the numpad shortcuts moved to [hotaru](https://github.com/ushineko/hotaru). The section stays hidden unless a source reports something, so a machine without either is unaffected. See [AIO Monitoring](#aio-monitoring) for details.
 - **Wayland Compatible**: Uses system-native movement for dragging.
@@ -44,6 +51,7 @@ A small, always-on-top, frameless window for Linux (optimized for KDE Wayland) t
 - `python-dbus` (BlueZ D-Bus interface)
 - `python-bleak` (for AirPods BLE scanning)
 - `python-structlog` (for structured logging)
+- Codex CLI (optional, signed in; required only for the Codex usage section)
 - `openlinkhub` (optional, for the AIO section)
 
 ## Quick Start
@@ -205,6 +213,14 @@ Logs are automatically saved in JSON format for debugging:
 - **Rotation**: Keeps 1 backup file (Max 5MB).
 
 ## Changelog
+
+### v1.21.0 (2026-09-22)
+
+- Added a separately toggleable Codex allowance section using the supported
+  app-server rate-limit API.
+- Codex and Claude now use separate namespaces in the same cooperative cache;
+  the peripheral widget and all standalone terminal viewers share one Codex
+  refresh gate and last-good reading.
 
 ### v1.20.0
 

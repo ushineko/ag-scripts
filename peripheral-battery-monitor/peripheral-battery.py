@@ -23,6 +23,8 @@ from PyQt6.QtGui import QAction, QIcon, QActionGroup, QCursor
 import battery_reader
 import accounts
 import usage_cache
+from codex_section import CodexSection
+from codex_usage import fetch_codex_usage, is_codex_installed
 from aio_section import AioSection
 from bandwidth_section import BandwidthSection
 from kwin_window_position import KWinWindowPosition
@@ -36,7 +38,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.20.0"
+__version__ = "1.21.0"
 
 # Settings written by features that moved to hotaru (spec 039). Read by nothing
 # now, and removed from the file on the next save rather than left to puzzle
@@ -545,12 +547,14 @@ def setup_logging(debug_mode=False):
 class UpdateThread(QThread):
     data_ready = pyqtSignal(dict)
 
-    def __init__(self, usage_ttl: int = 120, force_usage: bool = False, parent=None):
+    def __init__(self, usage_ttl: int = 120, force_usage: bool = False,
+                 fetch_codex: bool = True, parent=None):
         super().__init__(parent)
         # Freshness window for the shared usage cache, matched to the widget's
         # own poll cadence. `force_usage` is set for a user-initiated refresh.
         self.usage_ttl = usage_ttl
         self.force_usage = force_usage
+        self.fetch_codex = fetch_codex
 
     def run(self):
         results = {}
@@ -609,6 +613,22 @@ class UpdateThread(QThread):
             log = structlog.get_logger()
             log.error("claude_usage_discovery_failed", error=str(e))
 
+        # Codex shares one provider-specific cache gate across this widget and
+        # every standalone terminal viewer. At most one app-server process is
+        # started per freshness window regardless of viewer count.
+        if self.fetch_codex and is_codex_installed():
+            try:
+                data, _ = usage_cache.fetch_usage_cached(
+                    self.usage_ttl,
+                    provider="codex",
+                    fetch=fetch_codex_usage,
+                    force=self.force_usage,
+                )
+                results["codex_usage"] = data
+            except Exception as e:
+                structlog.get_logger().error("codex_usage_fetch_failed", error=str(e))
+                results["codex_usage"] = {"provider": "codex", "error": "api_error"}
+
         self.data_ready.emit(results)
 
 
@@ -660,6 +680,7 @@ class PeripheralMonitor(QWidget):
             "opacity": 0.95,
             "font_scale": 1.0,
             "claude_section_enabled": True,
+            "codex_section_enabled": True,
             "claude_activity_interval": 2,  # minutes (1-5)
             "bandwidth_section_enabled": True,
             "bandwidth_interfaces": [],
@@ -853,6 +874,13 @@ class PeripheralMonitor(QWidget):
             self.create_claude_section()
             main_layout.addWidget(self.claude_frame)
             self.claude_section_visible = True
+
+        self.codex_section = None
+        if is_codex_installed() and self.settings.get("codex_section_enabled", True):
+            # Let the layout adopt the section. This also keeps the section
+            # usable in the monitor's lightweight Qt test harness.
+            self.codex_section = CodexSection(on_refresh=self._manual_refresh)
+            main_layout.addWidget(self.codex_section)
 
         self.setMinimumWidth(260)  # Keeps the two slot cells wide enough to avoid cutoff names
         self.update_style()
@@ -1363,6 +1391,13 @@ class PeripheralMonitor(QWidget):
                 activity_group.addAction(action)
                 activityMenu.addAction(action)
 
+        if is_codex_installed():
+            codexMenu = contextMenu.addMenu("Codex")
+            toggleCodex = QAction("Show Usage Stats", self, checkable=True)
+            toggleCodex.setChecked(self.settings.get("codex_section_enabled", True))
+            toggleCodex.triggered.connect(self.toggle_codex_section)
+            codexMenu.addAction(toggleCodex)
+
         contextMenu.addSeparator()
 
         # Bandwidth submenu
@@ -1499,6 +1534,19 @@ class PeripheralMonitor(QWidget):
 
         self.adjustSize()
 
+    def toggle_codex_section(self, checked):
+        """Toggle the Codex rate-limit section."""
+        self.settings["codex_section_enabled"] = checked
+        self.save_settings()
+        if checked and is_codex_installed():
+            if self.codex_section is None:
+                self.codex_section = CodexSection(on_refresh=self._manual_refresh)
+                self.layout().addWidget(self.codex_section)
+            self.codex_section.show()
+        elif self.codex_section is not None:
+            self.codex_section.hide()
+        self.adjustSize()
+
     def setup_timer(self):
         # Full refresh every 15 seconds so the configurable slots pick up device
         # connect/disconnect (e.g. plugging in headphones) promptly. A poll takes
@@ -1586,6 +1634,7 @@ class PeripheralMonitor(QWidget):
         self.worker = UpdateThread(
             usage_ttl=max(30, int(interval_min) * 60),
             force_usage=self._force_usage_refresh,
+            fetch_codex=self.settings.get("codex_section_enabled", True),
         )
         self._force_usage_refresh = False
         self.worker.data_ready.connect(self.on_data_ready)
@@ -1934,6 +1983,8 @@ class PeripheralMonitor(QWidget):
 
         # Update Claude Code section
         self.update_claude_section(results.get('claude_usage'))
+        if self.codex_section is not None:
+            self.codex_section.update_usage(results.get("codex_usage"))
 
         self.setToolTip(f"Last updated: {self.format_time()}")
         self.adjustSize()

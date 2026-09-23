@@ -10,6 +10,8 @@ import io
 import time
 from unittest import mock
 
+import pytest
+
 from rich.console import Console
 
 import src.tui as tui
@@ -17,6 +19,12 @@ from src.tui import build_line, build_tui_view
 
 # A future timestamp keeps the reset countdown deterministic (always positive).
 FUTURE = "2099-01-01T00:00:00+00:00"
+
+
+@pytest.fixture(autouse=True)
+def _no_host_codex(monkeypatch):
+    """Existing Claude tests must not depend on whether Codex is installed."""
+    monkeypatch.setattr(tui, "is_codex_installed", lambda: False)
 
 
 def _data(util5=47, util7=31, resets=False, opus=0, sonnet=0):
@@ -80,6 +88,48 @@ class TestBuildLine:
     def test_note_appended(self):
         line = build_line(_data(), note="rate limited · 3m ago")
         assert "(rate limited · 3m ago)" in line.plain
+
+
+class TestCodexRendering:
+
+    @staticmethod
+    def data():
+        return {
+            "provider": "codex",
+            "primary": {"utilization": 23, "window_minutes": 10080,
+                        "resets_at": 4070908800},
+            "secondary": None,
+            "individual_limit": {"utilization": 34, "remaining_percent": 66,
+                                 "used": "403.51", "limit": "1200"},
+        }
+
+    def test_line_uses_real_window_and_individual_limit(self):
+        line = build_line(self.data(), label="Codex")
+        assert "Codex 7d 23%" in line.plain
+        assert "individual 403.51/1200 (34%)" in line.plain
+
+    def test_tui_has_progress_bar_and_reset(self):
+        out = _render_plain(build_tui_view(self.data(), label="Codex"))
+        assert "Codex  7d" in out
+        assert "━" in out
+        assert "individual 403.51/1200 (34%)" in out
+        assert "resets" in out
+
+    def test_provider_uses_shared_cache_namespace(self, monkeypatch):
+        monkeypatch.setattr(tui, "is_codex_installed", lambda: True)
+        seen = []
+
+        def cached(*args, **kwargs):
+            seen.append(kwargs)
+            if kwargs.get("provider") == "codex":
+                return self.data(), 1.0
+            return _data(), 1.0
+
+        monkeypatch.setattr(tui, "fetch_usage_cached", cached)
+        readings = tui.read_accounts(use_cache=True, ttl=60)
+
+        assert readings[-1][0] == "Codex"
+        assert seen[-1]["provider"] == "codex"
 
 
 class TestColorEmission:

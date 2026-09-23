@@ -22,6 +22,7 @@ PURE_MODULES = [
     "src.config",
     "src.oauth",
     "src.usage_cache",
+    "src.codex_usage",
 ]
 
 

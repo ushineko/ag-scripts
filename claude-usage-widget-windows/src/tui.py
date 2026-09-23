@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import signal
 import time
+from datetime import datetime, timezone
 
 import structlog
 from rich.console import Console, Group
@@ -28,6 +29,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .accounts import discover_or_default
+from .codex_usage import fetch_codex_usage, is_codex_installed
 from .display import format_percentage
 from .oauth import fetch_claude_usage, get_time_until_reset
 from .usage_cache import fetch_usage_cached
@@ -53,6 +55,9 @@ _ERR_TEXT = {
     "api_error": "API error",
     "offline": "offline",
     "invalid_response": "bad response",
+    "not_logged_in": "not logged in",
+    "not_installed": "not installed",
+    "timeout": "timed out",
     # The shared cache has no reading for this account yet (cold start, or a
     # gate still closed after a failure). Distinct from "not logged in": the
     # credentials are present and fine, there is simply nothing to show yet.
@@ -82,7 +87,9 @@ def _staleness_note(data, fetched_at: float | None, interval: int) -> str | None
     The age comes from the shared cache's ``fetched_at`` (wall clock), so every
     pane shows a consistent staleness regardless of when it started.
     """
-    if not isinstance(data, dict) or "five_hour" not in data or fetched_at is None:
+    if (not isinstance(data, dict)
+            or ("five_hour" not in data and data.get("provider") != "codex")
+            or fetched_at is None):
         return None
     age = time.time() - fetched_at
     if age > interval * 1.5:
@@ -149,6 +156,9 @@ def build_line(
     an error dict (no ``five_hour``), which render as a short status line. Color
     is carried as styles; the ``Console`` decides whether to emit it.
     """
+    if isinstance(data, dict) and data.get("provider") == "codex":
+        return build_codex_line(data, width=width, note=note, label=label)
+
     # No usable reading -> short status line.
     if not isinstance(data, dict) or "five_hour" not in data:
         text = "not logged in" if data is None else _err_text((data or {}).get("error"))
@@ -239,6 +249,78 @@ def build_line(
     return line
 
 
+def _window_label(minutes) -> str:
+    if not isinstance(minutes, (int, float)):
+        return "limit"
+    if minutes % 1440 == 0:
+        return f"{int(minutes // 1440)}d"
+    if minutes % 60 == 0:
+        return f"{int(minutes // 60)}h"
+    return f"{int(minutes)}m"
+
+
+def _epoch_countdown(value) -> str:
+    if not isinstance(value, (int, float)):
+        return ""
+    seconds = max(0, int(value - datetime.now(timezone.utc).timestamp()))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes = seconds // 60
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _individual_text(individual: dict) -> str:
+    used = individual.get("used")
+    limit = individual.get("limit")
+    percent = individual.get("utilization")
+    if used is not None and limit is not None and percent is not None:
+        return f"individual {used}/{limit} ({format_percentage(percent)})"
+    if percent is not None:
+        return f"individual {format_percentage(percent)}"
+    return ""
+
+
+def build_codex_line(data: dict, *, width=None, note=None, label="Codex") -> Text:
+    primary = data.get("primary")
+    if not isinstance(primary, dict):
+        status = _err_text(data.get("error")) if data.get("error") else "no usage data"
+        line = Text(f"{label} — {status}", style="dim", no_wrap=True, overflow="crop")
+        if width:
+            line.truncate(width)
+        return line
+
+    util = primary.get("utilization")
+    window = _window_label(primary.get("window_minutes"))
+    core = Text(f"{label} {window} ")
+    core.append(format_percentage(util), style=_usage_style(util))
+    opt = []
+    countdown = _epoch_countdown(primary.get("resets_at"))
+    if countdown:
+        opt.append(("reset", Text(f"reset {countdown}")))
+    individual = data.get("individual_limit") or {}
+    if individual.get("utilization") is not None:
+        seg = Text(_individual_text(individual),
+                   style=_usage_style(individual["utilization"]))
+        opt.append(("individual", seg))
+    if note:
+        opt.append(("note", Text(f"({note})", style="dim")))
+    present = [name for name, _ in opt]
+    line = _assemble(core, opt, present)
+    for name in ("note", "individual", "reset"):
+        if width and line.cell_len > width and name in present:
+            present.remove(name)
+            line = _assemble(core, opt, present)
+    if width and line.cell_len > width:
+        line.truncate(width)
+    line.no_wrap = True
+    line.overflow = "crop"
+    return line
+
+
 def _credits_segment(data: dict) -> Text | None:
     """Spend figure for the `limits` shape, or None when there is nothing to show.
 
@@ -296,6 +378,27 @@ def build_tui_view(data: dict | None, *, note: str | None = None, label: str = "
     Returns a `rich` renderable (a `Table.grid`), or the compact `build_line`
     `Text` for the not-logged-in / error states (no `five_hour` to chart).
     """
+    if isinstance(data, dict) and data.get("provider") == "codex":
+        primary = data.get("primary")
+        if not isinstance(primary, dict):
+            return build_codex_line(data, note=note, label=label)
+        util = primary.get("utilization")
+        stats = Text(" ")
+        stats.append(format_percentage(util), style=_usage_style(util))
+        individual = data.get("individual_limit") or {}
+        if individual.get("utilization") is not None:
+            stats.append("  ·  ", style="dim")
+            stats.append(_individual_text(individual),
+                         style=_usage_style(individual["utilization"]))
+        countdown = _epoch_countdown(primary.get("resets_at"))
+        right = Text(f" ({note})", style="dim") if note else Text(
+            f" resets {countdown}" if countdown else "", style="dim")
+        return _build_bar_grid(
+            label=Text(f"{label}  {_window_label(primary.get('window_minutes'))} "),
+            completed=min(100, max(0, util or 0)),
+            style=_usage_style(util), stats=stats, right=right,
+        )
+
     if not isinstance(data, dict) or "five_hour" not in data:
         return build_line(data, note=note, label=label)
 
@@ -409,6 +512,16 @@ def read_accounts(*, use_cache: bool, ttl: int) -> list[tuple]:
         if data is None and _has_credentials(account):
             data = {"error": "no_data"}
         readings.append((label, data, fetched_at))
+    if is_codex_installed():
+        if use_cache:
+            data, fetched_at = fetch_usage_cached(
+                ttl, provider="codex", fetch=fetch_codex_usage
+            )
+        else:
+            data, fetched_at = fetch_codex_usage(), time.time()
+        if data is None:
+            data = {"provider": "codex", "error": "not_logged_in"}
+        readings.append(("Codex", data, fetched_at))
     return readings
 
 
