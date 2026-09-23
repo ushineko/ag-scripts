@@ -38,7 +38,7 @@ import structlog
 import logging.config
 import logging
 
-__version__ = "1.21.0"
+__version__ = "1.21.1"
 
 # Settings written by features that moved to hotaru (spec 039). Read by nothing
 # now, and removed from the file on the next save rather than left to puzzle

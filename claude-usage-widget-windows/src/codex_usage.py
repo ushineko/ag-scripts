@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -18,8 +20,36 @@ _INITIALIZE_ID = 1
 _RATE_LIMITS_ID = 2
 
 
+def find_codex_executable() -> str | None:
+    """Resolve Codex even when a desktop launcher supplies a minimal PATH."""
+    override = os.environ.get("CODEX_PATH")
+    if override:
+        resolved = shutil.which(override)
+        if resolved:
+            return resolved
+
+    resolved = shutil.which("codex")
+    if resolved:
+        return resolved
+
+    home = Path.home()
+    candidates = (
+        home / "miniforge3" / "bin" / "codex",
+        home / "miniconda3" / "bin" / "codex",
+        home / ".local" / "bin" / "codex",
+        home / ".npm-global" / "bin" / "codex",
+        home / "AppData" / "Roaming" / "npm" / "codex.cmd",
+        Path("/opt/homebrew/bin/codex"),
+        Path("/usr/local/bin/codex"),
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 def is_codex_installed() -> bool:
-    return shutil.which("codex") is not None
+    return find_codex_executable() is not None
 
 
 def _reader(stream, output: queue.Queue) -> None:
@@ -111,12 +141,13 @@ def normalize_rate_limits(result: dict) -> dict:
 
 def fetch_codex_usage(_store_dir=None, timeout: float = 12.0) -> dict | None:
     """Fetch and normalize Codex usage, returning a compact error on failure."""
-    if not is_codex_installed():
+    executable = find_codex_executable()
+    if executable is None:
         return None
     proc = None
     try:
         proc = subprocess.Popen(
-            ["codex", "app-server", "--stdio"],
+            [executable, "app-server", "--stdio"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

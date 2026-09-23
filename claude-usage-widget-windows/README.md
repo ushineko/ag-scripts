@@ -230,6 +230,12 @@ pytest tests/
 
 ## Changelog
 
+### v3.5.1 (2026-09-22)
+
+- Codex discovery now works from desktop launchers with restricted PATH values.
+  The provider checks `CODEX_PATH`, PATH, and common per-user install locations
+  such as `~/miniforge3/bin` before deciding the CLI is unavailable.
+
 ### v3.5.0 (2026-09-22)
 
 - Added Codex as a terminal usage provider. Its row uses the duration reported
