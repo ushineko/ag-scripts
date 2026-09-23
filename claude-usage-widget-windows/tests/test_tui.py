@@ -449,7 +449,33 @@ class TestMultiAccountLines:
 
         view = tui.build_multi_tui_view(readings, interval=60)
 
-        assert len(view.renderables) == 2
+        assert len(view.rows) == 2
+
+    def test_mixed_provider_columns_align(self):
+        credits = {
+            "five_hour": None,
+            "seven_day": None,
+            "spend": _spend(10000, severity="critical"),
+        }
+        codex = TestCodexRendering.data()
+        readings = [
+            ("max  M", _data(), time.time()),
+            ("work E", credits, time.time()),
+            ("Codex", codex, time.time()),
+        ]
+
+        lines = _render_plain(
+            tui.build_multi_tui_view(readings, interval=60), width=180
+        ).splitlines()
+
+        assert len(lines) == 3
+        assert len({line.index("━") for line in lines}) == 1
+        stats_at = [
+            lines[0].index("47%"),
+            lines[1].index("$100.00"),
+            lines[2].index("23%"),
+        ]
+        assert len(set(stats_at)) == 1
 
 
 class TestNoDataIsNotLoggedOut:

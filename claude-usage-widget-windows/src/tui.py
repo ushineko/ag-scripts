@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import structlog
-from rich.console import Console, Group
+from rich.console import Console
 from rich.live import Live
 from rich.progress_bar import ProgressBar
 from rich.table import Table
@@ -389,10 +389,17 @@ def build_tui_view(data: dict | None, *, note: str | None = None, label: str = "
     Returns a `rich` renderable (a `Table.grid`), or the compact `build_line`
     `Text` for the not-logged-in / error states (no `five_hour` to chart).
     """
+    parts = _tui_row_parts(data, note=note, label=label)
+    return _build_bar_grid(**parts)
+
+
+def _tui_row_parts(data: dict | None, *, note: str | None, label: str) -> dict:
+    """Normalize every provider shape into the shared TUI table columns."""
     if isinstance(data, dict) and data.get("provider") == "codex":
         primary = data.get("primary")
         if not isinstance(primary, dict):
-            return build_codex_line(data, note=note, label=label)
+            status = _err_text(data.get("error")) if data.get("error") else "no usage data"
+            return _error_row_parts(label, status)
         util = primary.get("utilization")
         stats = Text(" ")
         stats.append(format_percentage(util), style=_usage_style(util))
@@ -404,25 +411,28 @@ def build_tui_view(data: dict | None, *, note: str | None = None, label: str = "
         countdown = _epoch_countdown(primary.get("resets_at"))
         right = Text(f" ({note})", style="dim") if note else Text(
             f" resets {countdown}" if countdown else "", style="dim")
-        return _build_bar_grid(
-            label=Text(f"{label}  {_window_label(primary.get('window_minutes'))} "),
+        return dict(
+            label=Text(f"{label}  "),
+            window=Text(f"{_window_label(primary.get('window_minutes'))} "),
             completed=min(100, max(0, util or 0)),
             style=_usage_style(util), stats=stats, right=right,
         )
 
     if not isinstance(data, dict) or "five_hour" not in data:
-        return build_line(data, note=note, label=label)
+        status = "not logged in" if data is None else _err_text((data or {}).get("error"))
+        return _error_row_parts(label, status)
 
     shape = detect_shape(data)
 
     if shape == SHAPE_UNAVAILABLE:
-        return build_line(data, note=note, label=label)
+        return _error_row_parts(label, "no usage data")
 
     if shape == SHAPE_CREDITS:
         # Chart spend against the cap — the same bar Claude Code's /usage shows.
         view = credits_view(data)
-        return _build_bar_grid(
+        return dict(
             label=Text(f"{label}  "),
+            window=Text(""),
             completed=min(100, max(0, view["percent"] or 0)),
             style=_severity_style(view["severity"]),
             stats=_stat_segments(data),
@@ -442,8 +452,9 @@ def build_tui_view(data: dict | None, *, note: str | None = None, label: str = "
     else:
         right = Text("")
 
-    return _build_bar_grid(
-        label=Text(f"{label}  5h "),
+    return dict(
+        label=Text(f"{label}  "),
+        window=Text("5h "),
         completed=min(100, max(0, util5 or 0)),
         style=_usage_style(util5),
         stats=_stat_segments(data),
@@ -451,31 +462,52 @@ def build_tui_view(data: dict | None, *, note: str | None = None, label: str = "
     )
 
 
-def _build_bar_grid(*, label: Text, completed: float, style: str, stats: Text, right: Text):
+def _error_row_parts(label: str, status: str) -> dict:
+    return dict(
+        label=Text(f"{label}  "), window=Text(""), completed=None,
+        style="dim", stats=Text(f"— {status}", style="dim"), right=Text(""),
+    )
+
+
+def _new_bar_grid() -> Table:
+    """Create the shared column layout used by one or many TUI rows."""
+    grid = Table.grid(expand=True, padding=0)
+    grid.add_column(no_wrap=True)                        # account / provider
+    grid.add_column(no_wrap=True)                        # allowance window
+    grid.add_column(ratio=3)                             # the bar (stretches)
+    grid.add_column(no_wrap=True)                        # usage stats
+    grid.add_column(ratio=1)                             # spacer / gap
+    grid.add_column(no_wrap=True, justify="right")       # reset / stale note
+    return grid
+
+
+def _add_bar_row(grid: Table, *, label: Text, window: Text,
+                 completed: float | None, style: str, stats: Text, right: Text) -> None:
+    bar = Text("") if completed is None else ProgressBar(
+        total=100,
+        completed=completed,
+        width=None,
+        complete_style=style,
+        finished_style=style,
+        style="grey30",
+        pulse=False,
+    )
+    grid.add_row(label, window, bar, stats, Text(""), right)
+
+
+def _build_bar_grid(*, label: Text, window: Text, completed: float | None,
+                    style: str, stats: Text, right: Text):
     """Assemble the --tui row: label, stretching bar, stats, right-aligned note.
 
     Slack is split between the bar (3) and a spacer before the right column (1):
     the bar stretches to use most of the width, while the right note floats to
     the far right with a clean gap. Fixed columns size to their content.
     """
-    grid = Table.grid(expand=True, padding=0)
-    grid.add_column(no_wrap=True)                        # label
-    grid.add_column(ratio=3)                             # the bar (stretches)
-    grid.add_column(no_wrap=True)                        # stats
-    grid.add_column(ratio=1)                             # spacer / gap
-    grid.add_column(no_wrap=True, justify="right")       # reset / stale note
-
-    bar = ProgressBar(
-        total=100,
-        completed=completed,
-        width=None,                                       # fill the ratio column
-        complete_style=style,
-        finished_style=style,
-        style="grey30",                                   # unfilled track
-        pulse=False,
+    grid = _new_bar_grid()
+    _add_bar_row(
+        grid, label=label, window=window, completed=completed,
+        style=style, stats=stats, right=right,
     )
-
-    grid.add_row(label, bar, stats, Text(""), right)
     return grid
 
 
@@ -552,13 +584,16 @@ def build_multi_line(readings: list[tuple], *, width: int | None = None) -> list
 
 
 def build_multi_tui_view(readings: list[tuple], *, interval: int):
-    """One bar row per account, stacked."""
-    return Group(*[
-        build_tui_view(
-            data, note=_staleness_note(data, fetched_at, interval), label=label
+    """Render all accounts/providers in one grid so every column aligns."""
+    grid = _new_bar_grid()
+    for label, data, fetched_at in readings:
+        parts = _tui_row_parts(
+            data,
+            note=_staleness_note(data, fetched_at, interval),
+            label=label,
         )
-        for label, data, fetched_at in readings
-    ])
+        _add_bar_row(grid, **parts)
+    return grid
 
 
 def run_line(color: bool, *, use_cache: bool = True, ttl: int = 60) -> int:

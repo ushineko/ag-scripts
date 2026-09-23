@@ -230,6 +230,12 @@ pytest tests/
 
 ## Changelog
 
+### v3.5.2 (2026-09-22)
+
+- Multi-provider TUI rows now share one column grid. Account/provider names,
+  window labels, progress bars, usage figures, and reset text align across
+  Claude rate-limit, Claude credit, and Codex rows.
+
 ### v3.5.1 (2026-09-22)
 
 - Codex discovery now works from desktop launchers with restricted PATH values.
