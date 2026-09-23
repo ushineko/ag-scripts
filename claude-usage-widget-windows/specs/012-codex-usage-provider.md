@@ -1,6 +1,6 @@
 # Spec 012: Codex usage provider
 
-**Issue:** No ticket — GitHub CLI authentication was expired when implementation began.
+**Issue:** [#15](https://github.com/ushineko/ag-scripts/issues/15)
 
 ## Context
 
@@ -60,6 +60,5 @@ experience as Claude while retaining the actual Codex window semantics.
 
 ## Status
 
-Complete. GitHub issue linkage remains unavailable until `gh` is
-re-authenticated; implementation, tests, live integration, and security review
-are complete.
+Complete. Implementation, tests, live integration, and security review are
+complete.
