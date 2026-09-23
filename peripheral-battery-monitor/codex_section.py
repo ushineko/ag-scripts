@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from decimal import Decimal, InvalidOperation
 
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy,
     QVBoxLayout,
@@ -39,10 +40,10 @@ def usage_color(percent) -> str:
     if percent is None:
         return "#6b7280"
     if percent > 80:
-        return "#ef4444"
+        return "#f44336"
     if percent >= 50:
-        return "#eab308"
-    return "#22c55e"
+        return "#ff9800"
+    return "#4caf50"
 
 
 def reported_amount(value) -> str:
@@ -65,16 +66,24 @@ class CodexSection(QFrame):
     def _build(self, on_refresh):
         layout = QVBoxLayout(self)
         layout.setSpacing(4)
+        self.section_layout = layout
 
         header = QHBoxLayout()
+        self.header_layout = header
+        icon_label = QLabel(self)
+        icon = QIcon.fromTheme("dialog-scripts", QIcon.fromTheme("utilities-terminal"))
+        icon_label.setPixmap(icon.pixmap(16, 16))
+        header.addWidget(icon_label)
+
         title = QLabel("Codex", self)
-        title.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        title.setObjectName("CodexTitle")
         header.addWidget(title)
         header.addStretch()
         self.reset_label = QLabel("--", self)
-        self.reset_label.setStyleSheet("color: #888888;")
+        self.reset_label.setObjectName("CodexReset")
         header.addWidget(self.reset_label)
         refresh = QPushButton("↻", self)
+        refresh.setObjectName("CodexRefreshBtn")
         refresh.setFixedSize(18, 18)
         refresh.setToolTip("Refresh usage stats")
         if on_refresh:
@@ -83,6 +92,7 @@ class CodexSection(QFrame):
         layout.addLayout(header)
 
         self.progress = QProgressBar(self)
+        self.progress.setObjectName("CodexProgress")
         self.progress.setRange(0, 100)
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(8)
@@ -90,27 +100,40 @@ class CodexSection(QFrame):
 
         stats = QHBoxLayout()
         self.primary_label = QLabel("Limit: --", self)
-        self.primary_label.setStyleSheet("color: #888888;")
+        self.primary_label.setObjectName("CodexStats")
         stats.addWidget(self.primary_label)
         stats.addStretch()
         self.individual_label = QLabel("", self)
-        self.individual_label.setStyleSheet("color: #888888;")
+        self.individual_label.setObjectName("CodexStats")
         stats.addWidget(self.individual_label)
         layout.addLayout(stats)
 
         self.status_label = QLabel("", self)
-        self.status_label.setStyleSheet("color: #6b7280;")
+        self.status_label.setObjectName("CodexStatus")
         self.status_label.hide()
         layout.addWidget(self.status_label)
         self._set_progress(None)
 
+    def apply_layout_metrics(self, metrics):
+        """Use the same scaled geometry as the adjacent Claude section."""
+        self.section_layout.setContentsMargins(
+            metrics["claude_margin_h"], metrics["claude_margin_top"],
+            metrics["claude_margin_h"], metrics["claude_margin_bottom"],
+        )
+        self.header_layout.setSpacing(metrics["claude_header_spacing"])
+
     def _set_progress(self, percent):
         self.progress.setValue(min(100, max(0, int(percent or 0))))
         self.progress.setStyleSheet(f"""
-            QProgressBar {{ background-color: rgba(255,255,255,25); border: none;
-                            border-radius: 4px; }}
-            QProgressBar::chunk {{ background-color: {usage_color(percent)};
-                                   border-radius: 4px; }}
+            QProgressBar#CodexProgress {{
+                background-color: rgba(255, 255, 255, 0.1);
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar#CodexProgress::chunk {{
+                background-color: {usage_color(percent)};
+                border-radius: 4px;
+            }}
         """)
 
     def update_usage(self, data):

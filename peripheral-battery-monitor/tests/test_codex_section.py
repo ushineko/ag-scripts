@@ -10,9 +10,9 @@ def test_window_label_preserves_server_duration():
 
 
 def test_usage_color_matches_existing_usage_thresholds():
-    assert usage_color(49) == "#22c55e"
-    assert usage_color(50) == "#eab308"
-    assert usage_color(81) == "#ef4444"
+    assert usage_color(49) == "#4caf50"
+    assert usage_color(50) == "#ff9800"
+    assert usage_color(81) == "#f44336"
 
 
 def test_reset_countdown_is_non_negative():
