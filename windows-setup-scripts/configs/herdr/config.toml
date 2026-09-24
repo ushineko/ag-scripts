@@ -2,6 +2,16 @@ onboarding = false
 
 [update]
 channel = "preview"
+# Stop the background agent-detection manifest poll. herdr shells out to
+# curl.exe (one process per manifest, ~14 every 30 min at :27:57/:57:57), and on
+# Windows each spawn flashes a console window. Trade-off: detection rules freeze
+# at the versions cached in %LOCALAPPDATA%\herdr\agent-detection\remote\.
+manifest_check = false
+# This host runs a custom build (horizontal spaces bar) installed over the stock
+# binary. `herdr update` would silently replace it with stock, so suppress the
+# "update ready" prompt that invites running it. Update by rebuilding the patch;
+# see sysadmin/runbooks/herdr-custom-horizontal-spaces-bar.md.
+version_check = false
 
 [terminal]
 # Use PowerShell 7 (pwsh) for new panes, not legacy Windows PowerShell 5.1.
