@@ -1,5 +1,11 @@
 # Audio Source Switcher
 
+> **Superseded.** This tool has been replaced by [ototo](https://github.com/ushineko/ototo),
+> a port to Go with the same features and a few more: one binary with no Python or Qt to
+> install, the volume-key bindings and the KWin rule installed and removed by the program,
+> a sound on a switch, and the switch shown in the volume indicator. It is kept here as it
+> was, unmaintained. New users should install ototo.
+
 A powerful PyQt6-based utility for Linux (specifically KDE Plasma/Wayland) to manage audio output devices and Bluetooth connections.
 
 ## Table of Contents
