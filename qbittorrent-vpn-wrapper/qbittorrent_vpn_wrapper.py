@@ -12,10 +12,14 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QIcon, QFont
 
 # --- configuration ---
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 VPN_CONNECTION_NAME = "us_las_vegas-aes-128-cbc-udp-dns"
-EXPECTED_CITY = "Las Vegas"
-EXPECTED_REGION = "Nevada"
+# GeoIP city/region data is unreliable for PIA's address blocks: PIA's own
+# serverlist puts every us_las_vegas endpoint in 134.195.10.0/24, while ip-api
+# reports that block as Oxnard, CA and ipinfo reports Los Angeles, CA. Asserting
+# on the exit ASN instead still catches a tunnel drop (the home ISP has a
+# different ASN) without depending on a stale third-party city database.
+EXPECTED_ASN = "M247"
 QBITTORRENT_CMD = ["qbittorrent"]
 WEBUI_API_URL = "http://localhost:8080/api/v2"
 POLL_INTERVAL_SECONDS = 30
@@ -243,17 +247,18 @@ class MonitorWorker(QThread):
             try:
                 resp = requests.get("http://ip-api.com/json", timeout=15)
                 data = resp.json()
+                asn = data.get("as", "Unknown")
                 city = data.get("city", "Unknown")
                 region = data.get("regionName", "Unknown")
                 query_ip = data.get("query", "Unknown")
                 
-                self.log_signal.emit(f"Detected IP: {query_ip} | Location: {city}, {region}")
+                self.log_signal.emit(f"Detected IP: {query_ip} | ASN: {asn} | Location: {city}, {region}")
                 
-                if EXPECTED_CITY in city or EXPECTED_REGION in region:
-                    self.log_signal.emit("Location verification PASSED.")
+                if EXPECTED_ASN.lower() in asn.lower():
+                    self.log_signal.emit("Exit ASN verification PASSED.")
                     return True
                 else:
-                    self.log_signal.emit(f"Location verification FAILED. Expected {EXPECTED_CITY}/{EXPECTED_REGION}.")
+                    self.log_signal.emit(f"Exit ASN verification FAILED. Expected {EXPECTED_ASN}, got '{asn}'.")
             except Exception as e:
                 self.log_signal.emit(f"Error during IP verification: {e}")
         
