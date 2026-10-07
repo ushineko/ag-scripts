@@ -79,7 +79,7 @@ Preview what would be installed without making changes:
 .\install.ps1 -Components msys2,neovim,fonts
 ```
 
-Available components: `prerequisites`, `powershell7`, `git`, `ssh-agent`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `eza`, `miniforge`, `claude-code`, `clockwork-orange`, `herdr`, `yazi`, `glow`, `lazygit`, `terminal`, `drag-translucency`
+Available components: `prerequisites`, `powershell7`, `git`, `ssh-agent`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `eza`, `miniforge`, `claude-code`, `clockwork-orange`, `fzf`, `herdr`, `yazi`, `glow`, `lazygit`, `terminal`, `drag-translucency`
 
 ### Force Reinstallation
 
