@@ -287,6 +287,8 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ### 1.5.1
 - Removed Antigravity component (no longer used)
+- Fixed winget installs failing when the msstore source is broken (e.g. after a debloat): pin `--source winget`
+- Prerequisites now set Windows PowerShell 5.1 execution policy to RemoteSigned (CurrentUser) when none is defined, so the 5.1 profile loads
 
 ### 1.5.0
 - Added drag-translucency: fades a window while it is being dragged/resized via an AutoHotkey v2 WinEvent hook. Installs the AutoHotkey v2 runtime, deploys the script to `%LOCALAPPDATA%\drag-translucency\`, and autostarts it via a user Startup-folder shortcut. Migrated from the dotfiles repo (`setup/win11-kvm/`), which now references it here.
