@@ -200,7 +200,7 @@ function Test-WingetPackage {
 
     try {
         # Use Start-Process with Hidden window to avoid output buffering issues
-        $process = Start-Process -FilePath "winget" -ArgumentList "list --id $PackageId --disable-interactivity" -Wait -PassThru -WindowStyle Hidden
+        $process = Start-Process -FilePath "winget" -ArgumentList "list --id $PackageId --source winget --disable-interactivity" -Wait -PassThru -WindowStyle Hidden
         return $process.ExitCode -eq 0
     } catch {
         return $false
@@ -228,7 +228,9 @@ function Install-WingetPackage {
 
     try {
         # Use Start-Process to avoid output buffering issues when run via irm | iex
-        $wingetArgs = "install --id $PackageId --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
+        # Pin the community source: a broken msstore source (e.g. cert pinning failure 0x8A15005E)
+        # otherwise fails the whole search even though every package here comes from winget
+        $wingetArgs = "install --id $PackageId --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
 
         $process = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -Wait -PassThru -WindowStyle Hidden
 
