@@ -8,7 +8,7 @@
 # Stateless: panels are identified by pane label (panel:lazygit / panel:yazi /
 # panel:usage) via `herdr pane list`, so there is nothing to track between runs.
 # Splitting the main pane RIGHT first then DOWN makes lazygit full-height and
-# yazi sit under the main column only. A thin Claude-usage strip (--tui) is
+# yazi sit under the main column only. A thin Claude-usage strip (hayami-tui) is
 # carved off the bottom of the yazi pane.
 #
 # Not yet ported from Linux: the yazi --client-id / yazi-here addressing.
@@ -31,12 +31,19 @@ $LAZY_MAIN_KEEP  = '0.76'   # main keeps 76% width  -> lazygit ~24% on the right
 $YAZI_MAIN_KEEP  = '0.70'   # main keeps 70% height -> yazi ~30% underneath
 $USAGE_YAZI_KEEP = '0.80'   # yazi keeps 80% height -> usage strip ~20% at bottom
 
-# Claude usage --tui strip (Qt-free, rich-rendered single line). Run from the
-# widget repo with the miniforge interpreter that has rich/structlog installed
-# (pinned by full path so PATH order in the pane does not matter).
+# Claude usage strip: hayami-tui (github.com/ushineko/hayami, scripts\install_windows.ps1),
+# which replaced claude-usage-widget-windows --tui. Falls back to the old widget,
+# run from its repo with the miniforge interpreter, when hayami is not installed.
+$HAYAMI_TUI = "$env:LOCALAPPDATA\Programs\hayami\hayami-tui.exe"
 $WIDGET_DIR = "$env:USERPROFILE\git\ag-scripts\claude-usage-widget-windows"
-$PYTHON     = if (Test-Path 'C:\miniforge3\python.exe') { 'C:\miniforge3\python.exe' } else { 'python' }
-$USAGE_CMD  = "$PYTHON -m src.main --tui"
+if (Test-Path $HAYAMI_TUI) {
+    $USAGE_DIR = $env:USERPROFILE
+    $USAGE_CMD = "& '$HAYAMI_TUI' --sections usage --arrangement row"
+} else {
+    $PYTHON    = if (Test-Path 'C:\miniforge3\python.exe') { 'C:\miniforge3\python.exe' } else { 'python' }
+    $USAGE_DIR = $WIDGET_DIR
+    $USAGE_CMD = "$PYTHON -m src.main --tui"
+}
 
 $cur     = HerdrJson pane current
 $tab     = $cur.result.pane.tab_id
@@ -75,7 +82,7 @@ function Open-Lazygit($m, $dir) {
 
 # Carve a thin usage strip off the bottom of the yazi pane; returns its pane_id.
 function Open-Usage($y) {
-    $id = (HerdrJson pane split $y --direction down --ratio $USAGE_YAZI_KEEP --cwd $WIDGET_DIR --no-focus).result.pane.pane_id
+    $id = (HerdrJson pane split $y --direction down --ratio $USAGE_YAZI_KEEP --cwd $USAGE_DIR --no-focus).result.pane.pane_id
     & $herdr pane rename $id $USAGE_LABEL | Out-Null
     & $herdr pane run $id "$USAGE_CMD; & '$herdr' pane close $id" | Out-Null
     return $id
