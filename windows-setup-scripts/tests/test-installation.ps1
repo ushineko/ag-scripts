@@ -107,10 +107,6 @@ function Main {
             Test = { Test-Command -Command "claude" }
         },
         @{
-            Name = "Antigravity"
-            Test = { Test-Command -Command "antigravity" }
-        },
-        @{
             Name = "clockwork-orange"
             Test = { Test-Path-Exists -Path "$env:LOCALAPPDATA\Programs\clockwork-orange" -Type "Directory" }
         },

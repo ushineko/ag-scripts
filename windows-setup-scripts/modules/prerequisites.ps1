@@ -21,6 +21,40 @@ function Test-NodeJs {
     }
 }
 
+function Set-WindowsPowerShellExecutionPolicy {
+    <#
+    .SYNOPSIS
+        Lets Windows PowerShell 5.1 load profiles and scripts
+    .DESCRIPTION
+        5.1 defaults to Restricted on Windows client when no policy is set, so its
+        profile fails to load. pwsh 7 defaults to RemoteSigned; match that for the
+        current user. Scopes are checked explicitly because the effective policy is
+        masked when this installer runs under -ExecutionPolicy Bypass.
+    #>
+    param(
+        [switch]$DryRun
+    )
+
+    # EncodedCommand avoids native-argument quote stripping when called from 5.1
+    $check = '@("MachinePolicy","UserPolicy","CurrentUser","LocalMachine") | ForEach-Object { Get-ExecutionPolicy -Scope $_ }'
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($check))
+    $policies = @(powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded 2>$null | ForEach-Object { "$_" })
+    $defined = $policies | Where-Object { $_ -ne "Undefined" }
+
+    if ($defined) {
+        Write-SetupLog "Windows PowerShell execution policy already set ($($defined[0]))" "SUCCESS"
+        return
+    }
+
+    if ($DryRun) {
+        Write-SetupLog "[DRY RUN] Would set Windows PowerShell execution policy to RemoteSigned (CurrentUser)" "INFO"
+        return
+    }
+
+    powershell.exe -NoProfile -NonInteractive -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force" 2>$null
+    Write-SetupLog "Set Windows PowerShell execution policy to RemoteSigned (CurrentUser)" "SUCCESS"
+}
+
 function Install-Prerequisites {
     <#
     .SYNOPSIS
@@ -45,6 +79,8 @@ function Install-Prerequisites {
         Write-SetupLog "PowerShell 5.0 or higher is required" "ERROR"
         return $false
     }
+
+    Set-WindowsPowerShellExecutionPolicy -DryRun:$DryRun
 
     # Check/install winget
     if (-not (Test-Winget)) {
