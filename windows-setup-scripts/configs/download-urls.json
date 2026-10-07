@@ -9,11 +9,6 @@
     "pattern": "Miniforge3-Windows-x86_64.exe",
     "description": "Miniforge3 installer from GitHub releases"
   },
-  "antigravity": {
-    "source": "https://antigravity.google",
-    "note": "Follow download link on page to get installer",
-    "description": "Antigravity app"
-  },
   "clockwork-orange": {
     "source": "https://api.github.com/repos/ushineko/clockwork-orange/releases",
     "pattern": "clockwork-orange.exe",

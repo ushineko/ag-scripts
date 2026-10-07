@@ -14,7 +14,6 @@
     - eza (modern ls replacement)
     - Miniforge3 (Conda)
     - Claude Code CLI
-    - Antigravity
     - clockwork-orange
     - herdr (terminal workspace manager)
     - yazi (terminal file manager)
@@ -27,7 +26,7 @@
     Show what would be installed without making changes
 .PARAMETER Components
     Specific components to install (comma-separated).
-    Options: prerequisites, powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, antigravity, clockwork-orange, herdr, yazi, glow, lazygit, terminal, drag-translucency, all
+    Options: prerequisites, powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, clockwork-orange, herdr, yazi, glow, lazygit, terminal, drag-translucency, all
 .PARAMETER Force
     Overwrite existing installations/configs
 .PARAMETER SkipBackup
@@ -67,7 +66,6 @@ $ScriptRoot = $PSScriptRoot
 . "$ScriptRoot\modules\golang.ps1"
 . "$ScriptRoot\modules\miniforge.ps1"
 . "$ScriptRoot\modules\claude-code.ps1"
-. "$ScriptRoot\modules\antigravity.ps1"
 . "$ScriptRoot\modules\clockwork-orange.ps1"
 . "$ScriptRoot\modules\eza.ps1"
 . "$ScriptRoot\modules\herdr.ps1"
@@ -112,7 +110,6 @@ function Main {
         @{ Name = "neovim";        Func = { Install-Neovim -DryRun:$DryRun -Force:$Force } }
         @{ Name = "miniforge";     Func = { Install-Miniforge -DryRun:$DryRun -Force:$Force } }
         @{ Name = "claude-code";   Func = { Install-ClaudeCode -DryRun:$DryRun -Force:$Force } }
-        @{ Name = "antigravity";   Func = { Install-Antigravity -DryRun:$DryRun -Force:$Force } }
         @{ Name = "clockwork-orange"; Func = { Install-ClockworkOrange -DryRun:$DryRun -Force:$Force } }
         @{ Name = "herdr";         Func = { Install-Herdr -DryRun:$DryRun -Force:$Force } }
         @{ Name = "yazi";          Func = { Install-Yazi -DryRun:$DryRun -Force:$Force } }

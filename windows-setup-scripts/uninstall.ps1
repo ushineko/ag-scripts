@@ -9,7 +9,7 @@
     Also remove configuration files (backups will be preserved)
 .PARAMETER Components
     Specific components to uninstall (comma-separated).
-    Options: powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, antigravity, clockwork-orange, terminal, all
+    Options: powershell7, git, ssh-agent, fonts, msys2, oh-my-posh, atuin, neovim, golang, eza, miniforge, claude-code, clockwork-orange, terminal, all
 .PARAMETER Force
     Skip confirmation prompts
 .EXAMPLE
@@ -46,7 +46,6 @@ $ScriptRoot = $PSScriptRoot
 . "$ScriptRoot\modules\golang.ps1"
 . "$ScriptRoot\modules\miniforge.ps1"
 . "$ScriptRoot\modules\claude-code.ps1"
-. "$ScriptRoot\modules\antigravity.ps1"
 . "$ScriptRoot\modules\clockwork-orange.ps1"
 . "$ScriptRoot\modules\eza.ps1"
 . "$ScriptRoot\modules\terminal.ps1"
@@ -73,7 +72,7 @@ function Main {
         Write-Host ""
 
         $uninstallOrder = @(
-            "terminal", "clockwork-orange", "antigravity", "claude-code",
+            "terminal", "clockwork-orange", "claude-code",
             "miniforge", "neovim", "eza", "golang", "atuin", "oh-my-posh",
             "msys2", "fonts", "ssh-agent", "git", "powershell7"
         )
@@ -104,7 +103,6 @@ function Main {
     $uninstallOrder = @(
         @{ Name = "terminal";        Func = { Uninstall-TerminalProfiles -RemoveAll:$RemoveConfigs } }
         @{ Name = "clockwork-orange"; Func = { Uninstall-ClockworkOrange } }
-        @{ Name = "antigravity";     Func = { Uninstall-Antigravity } }
         @{ Name = "claude-code";     Func = { Uninstall-ClaudeCode -RemoveConfig:$RemoveConfigs } }
         @{ Name = "miniforge";       Func = { Uninstall-Miniforge -RemoveEnvs:$RemoveConfigs } }
         @{ Name = "neovim";          Func = { Uninstall-Neovim -RemoveConfig:$RemoveConfigs } }

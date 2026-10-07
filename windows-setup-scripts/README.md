@@ -60,7 +60,6 @@ Preview what would be installed without making changes:
 | eza | Modern ls replacement | winget |
 | Miniforge3 | Conda distribution (conda-forge) | GitHub releases |
 | Claude Code | AI coding assistant CLI | npm |
-| Antigravity | Application | antigravity.google |
 | clockwork-orange | Application | GitHub releases |
 | Hack Nerd Font | Terminal font with icons | GitHub releases |
 | Windows Terminal | Terminal profiles | Config merge |
@@ -80,7 +79,7 @@ Preview what would be installed without making changes:
 .\install.ps1 -Components msys2,neovim,fonts
 ```
 
-Available components: `prerequisites`, `powershell7`, `git`, `ssh-agent`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `eza`, `miniforge`, `claude-code`, `antigravity`, `clockwork-orange`, `herdr`, `yazi`, `glow`, `lazygit`, `terminal`, `drag-translucency`
+Available components: `prerequisites`, `powershell7`, `git`, `ssh-agent`, `fonts`, `msys2`, `oh-my-posh`, `atuin`, `neovim`, `golang`, `eza`, `miniforge`, `claude-code`, `clockwork-orange`, `herdr`, `yazi`, `glow`, `lazygit`, `terminal`, `drag-translucency`
 
 ### Force Reinstallation
 
@@ -206,7 +205,6 @@ windows-setup-scripts/
 │   ├── eza.ps1               # eza (ls replacement)
 │   ├── miniforge.ps1         # Miniforge3
 │   ├── claude-code.ps1       # Claude Code CLI
-│   ├── antigravity.ps1       # Antigravity app
 │   ├── clockwork-orange.ps1  # clockwork-orange
 │   ├── terminal.ps1          # Windows Terminal profiles
 │   └── drag-translucency.ps1 # Fade windows while dragging (AutoHotkey v2)
@@ -287,6 +285,9 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
 
+### 1.5.1
+- Removed Antigravity component (no longer used)
+
 ### 1.5.0
 - Added drag-translucency: fades a window while it is being dragged/resized via an AutoHotkey v2 WinEvent hook. Installs the AutoHotkey v2 runtime, deploys the script to `%LOCALAPPDATA%\drag-translucency\`, and autostarts it via a user Startup-folder shortcut. Migrated from the dotfiles repo (`setup/win11-kvm/`), which now references it here.
 
@@ -337,7 +338,7 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Version
 
-1.5.0
+1.5.1
 
 ## License
 
