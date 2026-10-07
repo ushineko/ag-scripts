@@ -51,6 +51,14 @@ key = "prefix+y"
 type = "shell"
 command = 'C:\Users\nvere\AppData\Local\Microsoft\WindowsApps\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nvere\AppData\Roaming\herdr\scripts\herdr-panel-toggle.ps1 both'
 
+# Project tab picker: fzf over ~\git, opens the pick as a new tab in the current
+# space. prefix+c is new_tab, so shift is "new *project* tab". Windows port of
+# herdr-project-tab.sh; see sysadmin/runbooks/herdr-project-tab-picker.md.
+[[keys.command]]
+key = "prefix+shift+c"
+type = "shell"
+command = 'C:\Users\nvere\AppData\Local\Microsoft\WindowsApps\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nvere\AppData\Roaming\herdr\scripts\herdr-project-tab.ps1 -Launch'
+
 # Relaunch the programs that were running in panes before a restart
 # (herdr-resurrect). prefix+R / prefix+r are herdr's reload-config / resize, so
 # ctrl+r. On Windows keybound commands run through cmd.exe /d /c; the launcher
