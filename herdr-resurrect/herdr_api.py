@@ -46,6 +46,9 @@ def _run(args: list[str], *, timeout: float = 8.0) -> str:
         proc = subprocess.run(
             [HERDR_BIN, *args],
             capture_output=True, text=True, timeout=timeout, check=False,
+            # herdr emits UTF-8; the Windows locale default (cp1252) chokes on
+            # non-ASCII pane titles and leaves stdout as None.
+            encoding="utf-8", errors="replace",
         )
     except FileNotFoundError as exc:
         raise HerdrError(f"herdr binary not found at {HERDR_BIN!r}") from exc
