@@ -295,7 +295,8 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
 
-### Unreleased
+### 1.5.2
+- Added fzf module (winget `junegunn.fzf`), installed before herdr for its project tab picker
 - PowerShell profile: append MSYS2 (or Git for Windows) POSIX tool dirs to PATH so `bash`, `grep`, `sed`, etc. resolve from PowerShell
 - PowerShell profile: synced with the live profile (`%USERPROFILE%\bin` on PATH; `ls`/`dir` mapped to `eza -la --icons`, `lsps` for `Get-ChildItem`)
 
@@ -354,7 +355,7 @@ Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Version
 
-1.5.1
+1.5.2
 
 ## License
 
