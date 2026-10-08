@@ -109,6 +109,16 @@ The installer copies shell configuration files to `%USERPROFILE%`:
 - `.profile` - Login shell settings
 - `.bash-preexec.sh` - Bash preexec hooks for Atuin
 
+### PowerShell Profile
+
+`configs/powershell/Microsoft.PowerShell_profile.ps1` is installed for PS5 and PS7 by the oh-my-posh module. Besides Oh My Posh, Atuin and the nvim aliases, it:
+
+- Prepends `%USERPROFILE%\bin` to PATH
+- Appends POSIX tooling (bash, grep, sed, awk, make, gcc, ...) to PATH: `C:\msys64\ucrt64\bin` and `C:\msys64\usr\bin` when MSYS2 is installed, otherwise Git for Windows' `mingw64\bin` and `usr\bin`. They are appended so Windows `find`/`curl`, OpenSSH, and Git for Windows' `git` keep precedence; only one msys runtime goes on PATH
+- Maps `ls`/`dir` to `eza -la --icons`; the original `Get-ChildItem` stays available as `lsps`
+
+The herdr-resurrect autostart block is not part of this file; `herdr-resurrect/install.ps1` appends it to the installed profile.
+
 ### Oh My Posh Theme
 
 Custom PowerLevel10k-style theme at `~/.config/oh-my-posh/powerlevel10k_rainbow.omp.json`
@@ -284,6 +294,10 @@ https://www.microsoft.com/store/productId/9NBLGGH4NNS1
 Run `:Lazy sync` in Neovim to manually trigger plugin installation.
 
 ## Changelog
+
+### Unreleased
+- PowerShell profile: append MSYS2 (or Git for Windows) POSIX tool dirs to PATH so `bash`, `grep`, `sed`, etc. resolve from PowerShell
+- PowerShell profile: synced with the live profile (`%USERPROFILE%\bin` on PATH; `ls`/`dir` mapped to `eza -la --icons`, `lsps` for `Get-ChildItem`)
 
 ### 1.5.1
 - Removed Antigravity component (no longer used)
