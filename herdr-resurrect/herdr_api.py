@@ -49,6 +49,9 @@ def _run(args: list[str], *, timeout: float = 8.0) -> str:
             # herdr emits UTF-8; the Windows locale default (cp1252) chokes on
             # non-ASCII pane titles and leaves stdout as None.
             encoding="utf-8", errors="replace",
+            # Under pythonw (Task Scheduler) there is no console to inherit, so
+            # Windows would open a visible one for herdr.exe on every poll.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except FileNotFoundError as exc:
         raise HerdrError(f"herdr binary not found at {HERDR_BIN!r}") from exc
