@@ -2,8 +2,7 @@
 **Date**: 2026-11-21
 **Spec**: `specs/003-restore-after-server-restart.md`
 **Commit**: (this commit)
-**Status**: PASSED (automated gates). The one manual acceptance criterion, a
-real `herdr server stop` on njv-mbp-m1, is still pending; see Phase 3.
+**Status**: PASSED
 
 ### Problem
 On njv-mbp-m1 the herdr server restarted at 12:38 (SIGTERM, not a reboot) and
@@ -39,9 +38,14 @@ disabled there.
   `server restarted; restoring`, relaunched the 4 idle panes (2 yazi, 2
   lazygit), and saved all 6 programs. `state.json` then held the live socket's
   birth time. A second `save` did not restore anything.
-- **Not done**: a real `herdr server stop` and restart. Stopping the server
-  would have killed the herdr pane running the Claude session doing this work.
-- Status: ✓ PASSED (automated); manual restart check pending
+- Real restart on njv-mbp-m1 (2026-11-22): the user ran `herdr server stop`
+  and relaunched herdr, and the server came back at 15:54:22. The next periodic
+  save logged `[restart] session 'default': server restarted; restoring` and
+  relaunched all 5 saved programs (3 yazi, 2 lazygit). No keypress was needed.
+  `state.json` then recorded the new socket (1795391662.84), and
+  `restore --dry-run` showed 5 already running. Restore came up to one save
+  interval after the restart, as the spec allows.
+- Status: ✓ PASSED
 
 ### Phase 3: Test contract quality
 The tests check behaviour: programs relaunched into idle panes, which entries
@@ -81,5 +85,5 @@ don't depend on how the code is structured internally. `TestUptime` is macOS-onl
   release (the pwsh-profile trigger still covers server start).
 
 ### Overall
-- Automated gates passed: YES
-- Spec 003 remains INCOMPLETE until the manual restart check is done
+- All gates passed: YES
+- Spec 003: COMPLETE

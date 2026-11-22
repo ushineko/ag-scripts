@@ -1,6 +1,6 @@
 # Spec 003: Restore pane programs after a herdr server restart
 
-## Status: INCOMPLETE
+## Status: COMPLETE
 
 > **Note**: This work has no associated issue tracker ticket. Consider creating
 > one (a GitHub issue on this repository, per `.claude/CLAUDE.md`) for
@@ -110,7 +110,7 @@ server started. A server restart days after boot gets no grace.
 - [x] `restore()` takes an exclusive lock; a concurrent second call does not
       run `pane run`
 - [x] A restart-triggered restore logs the session and each restored program
-- [ ] Manually verified on njv-mbp-m1: after `herdr server stop` and a restart,
+- [x] Manually verified on njv-mbp-m1: after `herdr server stop` and a restart,
       the yazi and lazygit panels come back within one save interval with no
       keypress
 - [x] README documents restart-triggered restore and `state.json`
