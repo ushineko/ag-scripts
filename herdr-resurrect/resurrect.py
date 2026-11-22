@@ -7,12 +7,17 @@ already restored the layout), via `herdr pane run`.
 
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field, replace
+from typing import Callable
 
 import config
 import herdr_api
 import pane_busy
+import restart
 import snapshot
 import whitelist
 from snapshot import PaneSnap
@@ -25,20 +30,39 @@ from snapshot import PaneSnap
 # instead of dropped.
 BOOT_GRACE_SEC = 1800          # within 30 min of boot, bare == "not yet restored"
 RESTART_DROP_RATIO = 0.5       # >=50% of captured panes idling at once == restart
+# After a restart-triggered restore, how long save() waits before re-scanning
+# so the relaunched programs show up as pane foregrounds and get captured.
+RESTART_SETTLE_SEC = 2.0
 
 
 def _uptime_sec() -> float:
     """Seconds since system boot, or +inf if it can't be determined (so the
     boot-grace guard simply never triggers rather than misfiring)."""
     try:
-        return time.clock_gettime(time.CLOCK_BOOTTIME)  # POSIX
+        return time.clock_gettime(time.CLOCK_BOOTTIME)  # Linux
     except (AttributeError, OSError):
         pass
+    if sys.platform == "darwin":
+        boot = _darwin_boot_time()
+        return time.time() - boot if boot is not None else float("inf")
     try:
         import ctypes  # Windows: kernel tick count (ms since boot)
         return ctypes.windll.kernel32.GetTickCount64() / 1000.0
     except (AttributeError, OSError):
         return float("inf")
+
+
+def _darwin_boot_time() -> float | None:
+    """Epoch seconds of the last boot from `sysctl kern.boottime`, which prints
+    `{ sec = 1795147917, usec = 719635 } ...`. macOS has no CLOCK_BOOTTIME."""
+    try:
+        out = subprocess.run(["/usr/sbin/sysctl", "-n", "kern.boottime"],
+                             capture_output=True, text=True, timeout=5,
+                             check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"sec\s*=\s*(\d+)", out)
+    return float(m.group(1)) if m else None
 
 
 def _annotated_live_panes() -> tuple[list[dict], set[str]]:
@@ -77,6 +101,7 @@ def _annotated_live_panes() -> tuple[list[dict], set[str]]:
 def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
                       live: list[dict], *, uptime_sec: float,
                       scanned_sessions: set[str] | None = None,
+                      server_age_sec: dict[str, float] | None = None,
                       boot_grace_sec: float = BOOT_GRACE_SEC,
                       restart_drop_ratio: float = RESTART_DROP_RATIO,
                       ) -> list[PaneSnap]:
@@ -110,7 +135,12 @@ def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
     session's programs from the snapshot once the boot grace expired, leaving both
     autorestore and `prefix+ctrl+r` with nothing to restore. Absence of evidence
     is not evidence of closure. Passing None keeps the old all-sessions-scanned
-    behaviour."""
+    behaviour.
+
+    `server_age_sec` maps a session to seconds since its herdr server started.
+    The grace window is measured from that, per session, because a server
+    restart days after boot leaves the same bare shells a reboot does. A session
+    missing from the map falls back to `uptime_sec`."""
     new_by_pane = {(s.session, s.pane_id) for s in new_snaps}
     absent = [s for s in prev_snaps
               if (s.session, s.pane_id) not in new_by_pane]
@@ -128,9 +158,10 @@ def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
     preserved: list[PaneSnap] = list(unscanned)
     mass_drop = (len(considered_prev) > 0
                  and len(absent_scanned) / len(considered_prev) >= restart_drop_ratio)
-    if not (mass_drop or uptime_sec < boot_grace_sec):
-        return new_snaps + preserved
+    ages = server_age_sec or {}
     for s in absent_scanned:
+        if not (mass_drop or ages.get(s.session, uptime_sec) < boot_grace_sec):
+            continue
         pane = snapshot.match_live_pane(s, live)
         if pane is not None and pane.get("_fg") is not None:
             continue  # pane already runs a different program; don't shadow it
@@ -146,11 +177,14 @@ def _merge_preserving(new_snaps: list[PaneSnap], prev_snaps: list[PaneSnap],
     return new_snaps + preserved
 
 
-def save() -> list[PaneSnap]:
-    cfg = config.load()
+def _quiet(_msg: str) -> None:
+    pass
+
+
+def _capture(live: list[dict], cfg: dict) -> list[PaneSnap]:
+    """Snapshot entries for every whitelisted foreground program in `live`."""
     wl = whitelist.effective_whitelist(cfg)
     patterns = whitelist.cmdline_patterns(cfg)
-    live, scanned = _annotated_live_panes()
     new_snaps: list[PaneSnap] = []
     for p in live:
         if whitelist.is_agent_pane(p.get("agent_status", "")):
@@ -171,10 +205,85 @@ def save() -> list[PaneSnap]:
             name=name,
             argv=argv,
         ))
+    return new_snaps
+
+
+def _running_server_identities() -> dict[str, float]:
+    """session -> start time of its running herdr server (see restart.py)."""
+    identities: dict[str, float] = {}
+    for sess in herdr_api.list_sessions():
+        if not sess.running:
+            continue
+        ident = restart.server_identity(sess.socket_path)
+        if ident is not None:
+            identities[sess.name] = ident
+    return identities
+
+
+def _restore_restarted_session(name: str, snaps: list[PaneSnap],
+                               live: list[dict], log: Callable[[str], None],
+                               ) -> tuple[bool, bool]:
+    """Handle one session whose server restarted. Returns (restored_any,
+    settled); an unsettled session keeps its old record so the next save
+    looks at it again."""
+    session_snaps = [s for s in snaps if s.session == name]
+    session_live = [p for p in live if p["_session"] == name]
+    verdict = restart.restart_verdict(session_snaps, session_live,
+                                      RESTART_DROP_RATIO)
+    if verdict == restart.LAYOUT_PENDING:
+        log(f"[restart] session {name!r}: new server, layout not rebuilt yet; "
+            "will retry next save")
+        return False, False
+    if verdict == restart.NOT_CORROBORATED:
+        log(f"[restart] session {name!r}: new server, programs still running "
+            "or none saved; not restoring")
+        return False, True
+    log(f"[restart] session {name!r}: server restarted; restoring")
+    r = restore(sessions={name})
+    if r.lock_busy:
+        log(f"[restart] session {name!r}: another restore is running; skipped")
+    for snap, pid in r.restored:
+        log(f"[restart] {name:8} {pid:8} {snap.cmdline}")
+    for label, pid, cmd in r.labels_restored:
+        log(f"[restart] {name:8} {pid:8} {label} -> {cmd}")
+    return bool(r.restored or r.labels_restored), True
+
+
+def _restore_restarted(identities: dict[str, float], snaps: list[PaneSnap],
+                       live: list[dict], log: Callable[[str], None]) -> bool:
+    """Restore every session whose herdr server started since the last save,
+    and record the servers seen. Returns whether anything was relaunched."""
+    recorded = restart.load_state()
+    updated = dict(recorded)
+    restored_any = False
+    for name, ident in sorted(identities.items()):
+        settled = True
+        if restart.classify(recorded.get(name), ident) == restart.RESTARTED:
+            restored, settled = _restore_restarted_session(name, snaps, live, log)
+            restored_any = restored_any or restored
+        if settled:
+            updated[name] = ident
+    if updated != recorded:
+        restart.save_state(updated)
+    return restored_any
+
+
+def save(*, log: Callable[[str], None] = _quiet) -> list[PaneSnap]:
+    """Snapshot running programs. First, restore any session whose herdr
+    server restarted since the last save (spec 003): the periodic save is the
+    one thing guaranteed to run after a restart that no hook announces."""
+    cfg = config.load()
+    live, scanned = _annotated_live_panes()
+    identities = _running_server_identities()
     prev_snaps, _ = snapshot.load_snaps()
-    snaps = _merge_preserving(new_snaps, prev_snaps, live,
-                              uptime_sec=_uptime_sec(),
-                              scanned_sessions=scanned)
+    if _restore_restarted(identities, prev_snaps, live, log):
+        time.sleep(RESTART_SETTLE_SEC)
+        live, scanned = _annotated_live_panes()
+    now = time.time()
+    snaps = _merge_preserving(
+        _capture(live, cfg), prev_snaps, live,
+        uptime_sec=_uptime_sec(), scanned_sessions=scanned,
+        server_age_sec={n: now - t for n, t in identities.items()})
     snapshot.write_snapshot(snaps, history=int(cfg.get("history", 3)))
     return snaps
 
@@ -225,6 +334,8 @@ class RestoreResult:
     labels_already: list[tuple[str, str]] = field(default_factory=list)
     labels_failed: list[tuple[str, str]] = field(default_factory=list)
     dry_run: bool = False
+    # Another restore held the lock throughout; this one did nothing.
+    lock_busy: bool = False
 
 
 def _restore_from_snapshot(snaps: list[PaneSnap], live: list[dict],
@@ -276,7 +387,11 @@ def restore(*, dry_run: bool = False,
 
     `sessions` limits the pass to the named herdr sessions; None means all of
     them. Scoping matters for autorestore, which restores each session once, as
-    that session's server comes up -- they do not come up together."""
+    that session's server comes up -- they do not come up together.
+
+    Runs under restart.restore_lock: the login autorestore, the keybind and a
+    restart-triggered save can overlap, and two of them typing the same command
+    into one idle pane would launch the program twice. A dry run needs no lock."""
     cfg = config.load()
     label_commands = cfg.get("label_commands", {}) or {}
     snaps, _saved_at = snapshot.load_snaps()
@@ -285,10 +400,23 @@ def restore(*, dry_run: bool = False,
         snaps = [s for s in snaps if s.session in sessions]
     if not snaps and not label_commands:
         return result
+    if dry_run:
+        _restore_pass(snaps, label_commands, sessions, result, dry_run=True)
+        return result
+    with restart.restore_lock() as held:
+        if not held:
+            result.lock_busy = True
+            return result
+        _restore_pass(snaps, label_commands, sessions, result, dry_run=False)
+    return result
+
+
+def _restore_pass(snaps: list[PaneSnap], label_commands: dict[str, str],
+                  sessions: set[str] | None, result: RestoreResult, *,
+                  dry_run: bool) -> None:
     live, _scanned = _annotated_live_panes()
     if sessions is not None:
         live = [p for p in live if p["_session"] in sessions]
     _restore_from_snapshot(snaps, live, result, dry_run=dry_run)
     if label_commands:
         _restore_from_labels(label_commands, live, result, dry_run=dry_run)
-    return result
