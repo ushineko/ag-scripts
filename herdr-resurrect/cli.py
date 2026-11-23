@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """herdr-resurrect — save/restore the programs running in herdr panes.
 
-  herdr-resurrect save              # snapshot running programs (all sessions)
+  herdr-resurrect save              # snapshot running programs (all sessions),
+                                    # first restoring any session whose herdr
+                                    # server restarted since the last save
   herdr-resurrect restore [--dry-run]
   herdr-resurrect autorestore [--window S] [--interval S] [--settle S]
   herdr-resurrect status            # last snapshot age + contents
@@ -36,7 +38,7 @@ def _age(saved_at: float | None) -> str:
 
 def _cmd_save(_a) -> int:
     try:
-        snaps = resurrect.save()
+        snaps = resurrect.save(log=lambda msg: print(msg, flush=True))
     except herdr_api.HerdrError as exc:
         # Timer-friendly: herdr may not be running. Don't fail the unit.
         print(f"herdr-resurrect: skipped save ({exc})", file=sys.stderr)
@@ -53,6 +55,10 @@ def _cmd_restore(a) -> int:
     except herdr_api.HerdrError as exc:
         print(f"herdr-resurrect: cannot restore ({exc})", file=sys.stderr)
         return 1
+    if r.lock_busy:
+        print("herdr-resurrect: another restore is running; skipped",
+              file=sys.stderr)
+        return 0
     tag = "would restore" if a.dry_run else "restored"
     print(f"{tag}: {len(r.restored)}   already-running: {len(r.already)}   "
           f"busy: {len(r.busy)}   unmatched: {len(r.unmatched)}")

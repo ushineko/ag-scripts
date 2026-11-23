@@ -9,6 +9,10 @@ CONFIG_DIR = os.path.expanduser("~/.config/herdr-resurrect")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 SNAPSHOT_PATH = os.path.join(CONFIG_DIR, "snapshot.json")
 HISTORY_DIR = os.path.join(CONFIG_DIR, "history")
+# Last-seen herdr server per session, for restart detection (spec 003). Kept
+# apart from the snapshot so the snapshot format is unchanged.
+STATE_PATH = os.path.join(CONFIG_DIR, "state.json")
+LOCK_PATH = os.path.join(CONFIG_DIR, "restore.lock")
 
 CONFIG_VERSION = 1
 

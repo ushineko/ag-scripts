@@ -22,14 +22,29 @@ into those panes.
   - **Clobber guard** — a save right after a restart would otherwise capture the
     bare shells and overwrite the snapshot restore depends on. So when a pane
     goes idle because its program vanished (pane still present, program gone) and
-    that looks like a restart — within 30 min of boot, or a large fraction of
-    captured panes idling at once — save **carries the last-known program
+    that looks like a restart — within 30 min of that session's herdr server
+    starting (system boot if the server start is unknown), or a large fraction
+    of captured panes idling at once — save **carries the last-known program
     forward** instead of dropping it. A one-off pane close during steady state is
     dropped normally, so intentionally-closed panels don't get relaunched.
+  - **Restart restore** — herdr announces nothing when its server restarts, so
+    every save first checks whether any session's server is new since the last
+    save, and if so restores that session before capturing. A server instance is
+    identified by its API socket's creation time; the last one seen per session
+    is kept in `~/.config/herdr-resurrect/state.json`. The restore only runs
+    when the restart is corroborated — at least half of the session's saved
+    programs sit on panes that are back but idle — so a herdr live handoff that
+    kept pane processes is left alone. A session seen for the first time is
+    only recorded. Covers a server restart without a reboot on every platform,
+    and is the only automatic restore on macOS. Lag: up to one save interval;
+    `prefix+ctrl+r` is the instant path. Log lines carry a `[restart]` prefix.
 - **restore** — after a reboot, once herdr has restored the layout, matches each
   saved program to its live pane (by `pane_id`, falling back to
   session+workspace+cwd) and, if that pane is an **idle shell**, relaunches the
   program with `herdr pane run`. Never double-launches; never touches a busy pane.
+  Holds an exclusive lock (`~/.config/herdr-resurrect/restore.lock`) so the login
+  autorestore, the keybind and a restart-triggered save cannot overlap; a restore
+  that finds it held for 10 s skips.
 - **autorestore** — what the login timer runs. herdr has no post-restore hook and
   each session's server is spawned lazily, so this polls for herdr readiness and
   retries `restore` across a window (default 15 min), covering sessions attached
@@ -153,7 +168,8 @@ stacks duplicates. Set labels on panes with `herdr pane rename <pane> <label>`.
 | `whitelist.py` | foreground-program extraction, idle/agent classification, whitelist |
 | `snapshot.py` | `PaneSnap` model, atomic write + history, live-pane matching |
 | `pane_busy.py` | OS process-table check: a shell's child image names (label-restore idle test) |
-| `resurrect.py` | `save()` (with clobber guard) / `restore()` (snapshot + label) orchestration |
+| `resurrect.py` | `save()` (with clobber guard + restart restore) / `restore()` (snapshot + label) orchestration |
+| `restart.py` | server-restart detection (socket identity, `state.json`), restart corroboration, restore lock |
 | `config.py` | config + paths |
 | `cli.py` | `save` / `restore` / `autorestore` / `status` / `list` |
 

@@ -39,6 +39,7 @@ class Session:
     name: str
     default: bool
     running: bool
+    socket_path: str = ""
 
 
 def _run(args: list[str], *, timeout: float = 8.0) -> str:
@@ -80,7 +81,8 @@ def list_sessions() -> list[Session]:
     data = _loads(_run(["session", "list", "--json"]), "session list")
     return [
         Session(name=s["name"], default=bool(s.get("default")),
-                running=bool(s.get("running")))
+                running=bool(s.get("running")),
+                socket_path=s.get("socket_path", "") or "")
         for s in data.get("sessions", [])
     ]
 
